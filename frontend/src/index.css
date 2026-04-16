@@ -1,0 +1,25 @@
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: rgba(51, 51, 255, 0.22);
+}
+
+/* Optional “Reduce motion” setting (html.pt-reduced-motion) */
+@media (prefers-reduced-motion: no-preference) {
+  html.pt-reduced-motion *,
+  html.pt-reduced-motion *::before,
+  html.pt-reduced-motion *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

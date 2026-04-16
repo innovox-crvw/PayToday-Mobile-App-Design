@@ -1,0 +1,15 @@
+import type { ProductDto } from '../types/catalogue'
+
+/** Sum of stock across every variant (can exceed what the default PDP line shows). */
+export function totalListedStock(product: ProductDto): number {
+  return product.variants.reduce((sum, v) => sum + Math.max(0, v.stockQuantity ?? 0), 0)
+}
+
+/**
+ * Stock for the first variant — same row the storefront product page uses for price, SKU, and quantity.
+ * Use this on shop tiles so the number matches the detail page when a product has multiple SKUs.
+ */
+export function storefrontPrimaryVariantStock(product: ProductDto): number {
+  const v0 = product.variants[0]
+  return Math.max(0, v0?.stockQuantity ?? 0)
+}
