@@ -116,25 +116,25 @@ export function WalletVouchersFlowPage() {
       append('Validating voucher request…')
       await new Promise((r) => setTimeout(r, 450))
 
-      append('Creating voucher session (demo)…')
+      append('Creating voucher session…')
       await new Promise((r) => setTimeout(r, 500))
 
       let correlationId = ''
       const pending = await startOutbox('pending', '', reference, cents)
       if (pending.ok) {
         correlationId = pending.correlationId || ''
-        append('Queued outbox: hub_demo_pending_payment')
+        append('Queued pending payment notification')
       } else {
         append(pending.msg ?? 'Outbox pending skipped.')
       }
 
-      append('Confirming payment (demo)…')
+      append('Confirming payment…')
       await new Promise((r) => setTimeout(r, 650))
 
       if (correlationId) {
         const done = await startOutbox('complete', correlationId, reference, cents)
         if (done.ok) {
-          append('Wallet debited. Queued outbox: hub_demo_payment_completed')
+          append('Wallet debited. Payment completed notification queued.')
           setResultOk(true)
         } else {
           append(done.msg ?? 'Payment completion failed.')

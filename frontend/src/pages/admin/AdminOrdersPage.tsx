@@ -82,7 +82,11 @@ export function AdminOrdersPage() {
               </Button>
               {o.status} · {(o.total_cents / 100).toFixed(2)} {o.currency}
             </Typography>
-            <Button size="small" onClick={() => void cancelOrder(o.orderId)} disabled={['shipped', 'delivered', 'cancelled'].includes(o.status)}>
+            <Button
+              size="small"
+              onClick={() => void cancelOrder(o.orderId)}
+              disabled={['shipped', 'delivered', 'cancelled', 'refunded'].includes(o.status)}
+            >
               Cancel
             </Button>
             <Button size="small" onClick={() => void refundOrder(o.orderId)}>

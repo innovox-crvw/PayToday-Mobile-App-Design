@@ -73,7 +73,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
   const [amountCents, setAmountCents] = useState<number | null>(null)
   const [customNad, setCustomNad] = useState('')
   const [payMethod, setPayMethod] = useState<PayRail>('wallet')
-  const [demoRef, setDemoRef] = useState('')
+  const [paymentRef, setPaymentRef] = useState('')
   const [processingLog, setProcessingLog] = useState<string[]>([])
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState<string | null>(null)
@@ -197,8 +197,8 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
     if (!payee || amountCents == null || pipelineLock.current) return
     pipelineLock.current = true
     setLoadError(null)
-    const ref = `PT-DEMO-${Date.now().toString(36).toUpperCase()}`
-    setDemoRef(ref)
+    const ref = `PT-${Date.now().toString(36).toUpperCase()}`
+    setPaymentRef(ref)
     setProcessingLog([])
     setStep('processing')
 
@@ -233,7 +233,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             body: JSON.stringify(pendingBody),
           })
           if (res.status === 503) {
-            append('Database unavailable — skipped writing to notification_outbox (UI demo continues).')
+            append('Database unavailable — could not write to notification_outbox. The payment flow continues in the app.')
           } else if (!res.ok) {
             const t = await readApiError(res)
             append(`Pending notification: ${t.slice(0, 140)}`)
@@ -241,9 +241,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             const j = (await res.json()) as { correlationId?: string }
             correlationId = (j.correlationId ?? '').trim()
             if (correlationId) {
-              append(
-                `Inserted “hub_demo_pending_payment” into dbo.notification_outbox (same pipeline as store checkout).`,
-              )
+              append('Recorded pending payment notification (same pipeline as store checkout).')
             } else {
               append('Pending API returned no session id — completion step skipped.')
             }
@@ -252,7 +250,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
           append(`Pending step failed: ${e instanceof Error ? e.message : String(e)}`)
         }
       } else {
-        append('Not signed in — skipped outbox. Use Account → sign in to mirror production email + in-app toasts.')
+        append('Not signed in — skipped notification outbox. Sign in under Account to receive email and in-app notifications.')
       }
 
       await sleep(300)
@@ -313,9 +311,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
           if (payMethod === 'wallet') {
             walletOutcomeSet = true
             if (res.ok) {
-              append(
-                `Wallet debited. Inserted “hub_demo_payment_completed” (email + in-app when the worker runs).`,
-              )
+              append('Wallet debited. Payment completed notification queued (email and in-app when the worker runs).')
               setPaymentOk(true)
             } else {
               setPaymentOk(false)
@@ -323,7 +319,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
               if (j.code === 'insufficient_wallet') {
                 append(`Wallet: ${msg}`)
               } else if (res.status === 503 && j.code === 'wallet_demo_unavailable') {
-                append(`Wallet demo unavailable: ${msg}`)
+                append(`Wallet unavailable: ${msg}`)
               } else {
                 append(`Complete step: ${msg || `HTTP ${res.status}`}`)
               }
@@ -334,9 +330,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             const t = (j.error ?? raw).trim().slice(0, 140) || `HTTP ${res.status}`
             append(`Completed notification: ${t}`)
           } else {
-            append(
-              `Inserted “hub_demo_payment_completed”. Background worker sends email + user_notifications (≤30s tick in dev).`,
-            )
+            append('Payment completed notification queued. The background worker delivers email and in-app messages.')
           }
         } catch (e) {
           append(`Complete step failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -354,7 +348,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
 
       await sleep(400)
       if (!(payMethod === 'wallet' && correlationId)) {
-        /* Demo outcome for non-wallet rails: mostly success. */
+        /* Simulated outcome for non-wallet rails: mostly success. */
         const ok = Math.random() > 0.12
         setPaymentOk(ok)
       }
@@ -410,7 +404,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             <ArrowBackIosNewIcon sx={{ fontSize: 18 }} />
           </IconButton>
           <Typography variant="h6" fontWeight={800}>
-            Demo payment
+            Payment
           </Typography>
         </Stack>
         <Alert severity="warning">{loadError}</Alert>
@@ -515,7 +509,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                 </Button>
                 {session === 'out' ? (
                   <Alert severity="info">
-                    Sign in on <strong>Account</strong> to mirror production email + in-app notifications for this flow.
+                    Sign in on <strong>Account</strong> to receive email and in-app notifications for this flow.
                   </Alert>
                 ) : null}
               </Stack>
@@ -771,7 +765,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                   Reference
                 </Typography>
                 <Typography sx={{ fontFamily: 'monospace', fontWeight: 850, fontSize: '0.95rem' }}>
-                  {demoRef}
+                  {paymentRef}
                 </Typography>
 
                 {session === 'in' ? (

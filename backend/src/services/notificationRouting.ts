@@ -5,9 +5,13 @@ const EMAIL_WORTHY_TEMPLATE_KEYS = new Set([
   'checkout_pending_payment',
   'payment_confirmed',
   'pickup_code_ready',
+  /** Fulfillment desk moved the order (admin / ops / fulfillment). */
+  'fulfillment_stage_updated',
   /** Hub Payments / Services client demo — mirrors store “pending gateway” + “confirmed” notifications. */
   'hub_demo_pending_payment',
   'hub_demo_payment_completed',
+  /** Post-delivery return workflow status updates. */
+  'return_case_status',
 ])
 
 export function isEmailWorthyTemplate(templateKey: string): boolean {

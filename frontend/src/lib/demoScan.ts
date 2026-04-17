@@ -1,5 +1,5 @@
 /**
- * Demo-only payloads for in-app scan / QR (no PayToday backend).
+ * Client-side payloads for in-app scan / QR (no PayToday backend).
  * Payer flow: Scan "Pay by Code" reads these strings from QR or manual entry.
  */
 
@@ -11,17 +11,17 @@ const KNOWN: Record<
 > = {
   'PT-RETAIL-MAERUA': {
     merchantName: 'Maerua Quickshop',
-    detail: 'Checkout lane 4 (demo)',
+    detail: 'Checkout lane 4',
     suggestedAmountCents: 4_500,
   },
   'PT-PARKING-001': {
     merchantName: 'City Parking Windhoek',
-    detail: 'Exit gate · Zone A (demo)',
+    detail: 'Exit gate · Zone A',
     suggestedAmountCents: 1_200,
   },
   'PT-FUEL-SHELL-KH': {
     merchantName: 'Shell Klein Windhoek',
-    detail: 'Pump pre-auth (demo)',
+    detail: 'Pump pre-auth',
     suggestedAmountCents: 8_000,
   },
 }
@@ -53,7 +53,7 @@ export function interpretDemoScan(raw: string): DemoScanInterpretation {
     const cents = parts[1] && /^\d+$/u.test(parts[1]) ? Number.parseInt(parts[1], 10) : null
     return {
       merchantName: handle.includes('@') ? `Pay ${handle}` : `Pay to: ${handle}`,
-      detail: 'Receive-money request (demo)',
+      detail: 'Receive-money request',
       suggestedAmountCents: cents != null && cents > 0 ? cents : null,
       reference: ref,
     }
@@ -74,7 +74,7 @@ export function interpretDemoScan(raw: string): DemoScanInterpretation {
     const u = new URL(t)
     if (u.protocol === 'http:' || u.protocol === 'https:') {
       return {
-        merchantName: 'Web payment link (demo)',
+        merchantName: 'Web payment link',
         detail: `${u.hostname}${u.pathname}`.slice(0, 80),
         suggestedAmountCents: 5_000,
         reference: ref,
@@ -85,7 +85,7 @@ export function interpretDemoScan(raw: string): DemoScanInterpretation {
   }
 
   return {
-    merchantName: 'Scanned merchant (demo)',
+    merchantName: 'Scanned merchant',
     detail: t.length > 72 ? `${t.slice(0, 69)}…` : t,
     suggestedAmountCents: 5_000,
     reference: ref,
@@ -93,7 +93,7 @@ export function interpretDemoScan(raw: string): DemoScanInterpretation {
 }
 
 export function buildReceiveDemoPayload(email: string, amountCents: number | null): string {
-  const e = email.trim() || 'guest@paytoday.demo'
+  const e = email.trim() || 'guest@example.com'
   if (amountCents != null && amountCents > 0) {
     return `${DEMO_PAYTO_PREFIX}${e}|${amountCents}`
   }

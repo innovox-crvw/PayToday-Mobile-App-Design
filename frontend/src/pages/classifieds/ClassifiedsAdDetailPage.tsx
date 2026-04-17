@@ -165,7 +165,7 @@ export function ClassifiedsAdDetailPage() {
         <DialogTitle sx={{ fontWeight: 800 }}>Message sent</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            In a live app the seller would be notified. This demo only confirms your action.
+            The seller would normally be notified. Here we only confirm your action in this session.
           </Typography>
         </DialogContent>
         <DialogActions>

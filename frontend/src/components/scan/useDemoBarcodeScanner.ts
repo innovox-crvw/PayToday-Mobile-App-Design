@@ -60,7 +60,7 @@ export function useDemoBarcodeScanner(
         setError(
           msg.toLowerCase().includes('permission') || msg.includes('NotAllowed')
             ? 'Camera permission was denied. Use “Enter code” or allow the camera in browser settings.'
-            : 'Could not open the camera. Use “Enter code” for the demo, or try HTTPS / another browser.',
+            : 'Could not open the camera. Use “Enter code”, or try HTTPS / another browser.',
         )
         return
       }

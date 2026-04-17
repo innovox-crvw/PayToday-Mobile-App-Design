@@ -1,5 +1,6 @@
 import { env, loadDotenvFiles } from '../config/env.js'
 import { mergeNotifyRuntime, notifyTransactionalEmailUrl, type NotifyRuntimeConfig } from './integrationRuntimeConfig.js'
+import { wrapStoreTransactionalEmail } from './transactionalEmailLayout.js'
 
 export interface NotifySendInput {
   to: string
@@ -57,7 +58,8 @@ function variablesForTemplate(payload: Record<string, unknown>, storeUrl: string
   return out
 }
 
-function buildFallbackEmail(
+/** Shared HTML/text for outbox templates (notify API fallback and optional SMTP). */
+export function buildFallbackEmail(
   templateKey: string,
   payload: Record<string, unknown>,
   storeUrl: string,
@@ -66,29 +68,167 @@ function buildFallbackEmail(
   if (templateKey === 'checkout_pending_payment') {
     const orderId = String(payload.orderId ?? '')
     const total = moneyLine(payload.totalCents, payload.currency)
-    const subject = 'Complete your PayToday order payment'
-    const html = `<p>Thanks for your order.</p>
-<p>Order: <strong>${escapeHtml(orderId)}</strong><br/>Total: <strong>${escapeHtml(total)}</strong></p>
-<p><a href="${escapeHtml(store)}">Open store</a> to finish payment if you did not complete checkout.</p>`
-    const text = `Thanks for your order.\nOrder: ${orderId}\nTotal: ${total}\nStore: ${store}`
+    const subject = 'Complete your order payment — PayToday Store'
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Order ${orderId} — ${total} — payment pending`,
+        title: 'Complete your payment',
+        intro:
+          'Thank you for your purchase. Your order is reserved. Please complete payment to confirm — use the button below to return to the store checkout.',
+        details: [
+          { label: 'Order reference', value: orderId || '—' },
+          { label: 'Amount due', value: total },
+        ],
+        cta: { label: 'Continue to payment', href: store },
+        footnote: 'If you have already paid, you can disregard this message once your confirmation email arrives.',
+      },
+      store,
+    )
+    const text = `PayToday Store — complete your payment\n\nOrder: ${orderId}\nTotal: ${total}\n\nOpen: ${store}`
     return { subject, html, text }
   }
   if (templateKey === 'payment_confirmed') {
     const orderId = String(payload.orderId ?? '')
-    const subject = 'Payment received — PayToday order'
-    const html = `<p>We received your payment for order <strong>${escapeHtml(orderId)}</strong>.</p>
-<p><a href="${escapeHtml(store)}">View your orders</a> in the store.</p>`
-    const text = `Payment received for order ${orderId}.\nStore: ${store}`
+    const subject = 'Payment received — PayToday Store'
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Payment confirmed for order ${orderId}`,
+        title: 'Payment received',
+        intro:
+          'We have successfully received your payment. Your order is confirmed and will be processed according to the delivery method you selected.',
+        details: [{ label: 'Order reference', value: orderId || '—' }],
+        cta: { label: 'Open store', href: store },
+        footnote: 'Thank you for shopping with PayToday Store.',
+      },
+      store,
+    )
+    const text = `PayToday Store — payment received\n\nOrder: ${orderId}\n\nView store: ${store}`
     return { subject, html, text }
   }
   if (templateKey === 'pickup_code_ready') {
     const orderId = String(payload.orderId ?? '')
     const code = String(payload.code ?? '')
-    const subject = 'Your pickup code is ready'
-    const html = `<p>Your order <strong>${escapeHtml(orderId)}</strong> is ready for collection.</p>
-<p>Pickup code: <strong style="font-size:1.25em;letter-spacing:0.08em">${escapeHtml(code)}</strong></p>
-<p>Show this code at the deposit location.</p>`
-    const text = `Order ${orderId} is ready.\nPickup code: ${code}`
+    const expiresAtRaw = String(payload.expiresAt ?? '').trim()
+    let expiryLine = ''
+    if (expiresAtRaw) {
+      try {
+        const d = new Date(expiresAtRaw)
+        if (!Number.isNaN(d.getTime())) {
+          expiryLine = `<p style="margin:12px 0 0;font-size:13px;color:#b45309;">This code expires at <strong>${escapeHtml(d.toISOString().replace('T', ' ').slice(0, 19))}</strong> UTC. Generate a new one from your order page after it expires.</p>`
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const subject = 'Your pickup code is ready — PayToday Store'
+    const codeBox = `<p style="margin:0 0 6px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#71717a;">Pickup code</p>
+<p style="margin:0;padding:16px 20px;background:#faf5ff;border:1px solid #e9d5ff;border-radius:10px;font-size:24px;font-weight:700;letter-spacing:0.18em;font-family:Consolas,'Courier New',monospace;color:#5b21b6;text-align:center;">${escapeHtml(code)}</p>
+<p style="margin:12px 0 0;font-size:13px;color:#52525b;">Show this code at the deposit location when you collect your order.</p>${expiryLine}`
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Pickup code for order ${orderId}`,
+        title: 'Ready for collection',
+        intro: 'Your order is ready. Use the pickup code below when you arrive at the deposit location.',
+        details: [{ label: 'Order reference', value: orderId || '—' }],
+        extraHtml: [codeBox],
+        cta: { label: 'Open store', href: store },
+        footnote: 'Keep this code private — it may be required to release your parcel.',
+      },
+      store,
+    )
+    const text = `PayToday Store — pickup ready\n\nOrder: ${orderId}\nPickup code: ${code}${expiresAtRaw ? `\nExpires (UTC): ${expiresAtRaw}` : ''}\n\nStore: ${store}`
+    return { subject, html, text }
+  }
+  if (templateKey === 'fulfillment_stage_updated') {
+    const orderId = String(payload.orderId ?? '')
+    const stage = String(payload.stage ?? '').trim()
+    const previousStage = String(payload.previousStage ?? '').trim()
+    const stageLabel = (s: string) => {
+      const m: Record<string, string> = {
+        pending: 'Pending',
+        picking: 'Picking',
+        packing: 'Packing',
+        packed: 'Packed',
+        shipped: 'Shipped',
+        delivered: 'Delivered',
+      }
+      return m[s.toLowerCase()] || s || '—'
+    }
+    const cur = stageLabel(stage)
+    const prev = previousStage ? stageLabel(previousStage) : ''
+    const subject = `Order fulfillment: ${cur} — PayToday Store`
+    const changed = prev && cur !== prev
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: changed ? `Order ${orderId}: ${prev} → ${cur}` : `Order ${orderId} is now ${cur}`,
+        title: 'Fulfillment update',
+        intro: changed
+          ? `Our fulfillment team updated your order. The fulfillment stage moved from ${escapeHtml(prev)} to ${escapeHtml(cur)}.`
+          : `Your order fulfillment status is now ${escapeHtml(cur)}.`,
+        details: [
+          { label: 'Order reference', value: orderId || '—' },
+          { label: 'Current stage', value: cur },
+          ...(changed ? [{ label: 'Previous stage', value: prev }] : []),
+        ],
+        cta: { label: 'View order', href: store },
+        footnote: 'You can track progress in the store under My orders when signed in.',
+      },
+      store,
+    )
+    const textLines = [
+      'PayToday Store — fulfillment update',
+      '',
+      `Order: ${orderId}`,
+      `Stage: ${cur}`,
+      ...(changed ? [`Previous: ${prev}`] : []),
+      '',
+      `Store: ${store}`,
+    ]
+    return { subject, html, text: textLines.join('\n') }
+  }
+  if (templateKey === 'return_case_status') {
+    const orderId = String(payload.orderId ?? '')
+    const returnCaseId = String(payload.returnCaseId ?? '')
+    const status = String(payload.status ?? '').toLowerCase()
+    const message = String(payload.message ?? '').trim()
+    const statusLabel =
+      status === 'pending'
+        ? 'Received'
+        : status === 'approved'
+          ? 'Approved'
+          : status === 'rejected'
+            ? 'Rejected'
+            : status === 'received'
+              ? 'Items received'
+              : status === 'completed'
+                ? 'Completed'
+                : status || 'Updated'
+    const subject = `Return update: ${statusLabel} — PayToday Store`
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Return ${returnCaseId.slice(0, 8)}… · ${statusLabel}`,
+        title: 'Return request update',
+        intro: message || `Your return request for order ${orderId || '—'} is now ${statusLabel.toLowerCase()}.`,
+        details: [
+          { label: 'Order reference', value: orderId || '—' },
+          { label: 'Return reference', value: returnCaseId || '—' },
+          { label: 'Status', value: statusLabel },
+        ],
+        cta: { label: 'Open store', href: store },
+        footnote: 'Ship approved returns only to the address provided by support.',
+      },
+      store,
+    )
+    const text = [
+      'PayToday Store — return update',
+      '',
+      `Order: ${orderId}`,
+      `Return case: ${returnCaseId}`,
+      `Status: ${statusLabel}`,
+      message ? `\n${message}` : '',
+      '',
+      `Store: ${store}`,
+    ].join('\n')
     return { subject, html, text }
   }
   if (templateKey === 'hub_demo_pending_payment') {
@@ -97,9 +237,21 @@ function buildFallbackEmail(
     const total = moneyLine(payload.amountCents, payload.currency)
     const hub = payload.variant === 'services' ? 'service' : 'hub'
     const subject = `Demo ${hub} payment — action required`
-    const html = `<p>This is a <strong>client demo</strong> payment (no real charge).</p>
-<p>Payee: <strong>${escapeHtml(payee)}</strong><br/>Amount: <strong>${escapeHtml(total)}</strong><br/>Reference: <code>${escapeHtml(ref)}</code></p>
-<p>In production the customer would finish on the PayToday hosted page; here the app simulates that step.</p>`
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Demo ${hub} — ${total} — reference ${ref}`,
+        title: `Demo ${hub} payment`,
+        intro:
+          'This is a sandbox / client demonstration. No real funds are moved. In production the customer would complete checkout on the PayToday hosted flow.',
+        details: [
+          { label: 'Payee', value: payee || '—' },
+          { label: 'Amount', value: total },
+          { label: 'Reference', value: ref || '—' },
+        ],
+        cta: { label: 'Open store', href: store },
+      },
+      store,
+    )
     const text = `Demo ${hub} payment pending.\nPayee: ${payee}\nTotal: ${total}\nRef: ${ref}`
     return { subject, html, text }
   }
@@ -109,21 +261,46 @@ function buildFallbackEmail(
     const total = moneyLine(payload.amountCents, payload.currency)
     const hub = payload.variant === 'services' ? 'Service demo' : 'Hub demo'
     const subject = `Demo payment received — ${hub}`
-    const html = `<p>We simulated a successful <strong>${escapeHtml(hub)}</strong> payment.</p>
-<p>Payee: <strong>${escapeHtml(payee)}</strong><br/>Amount: <strong>${escapeHtml(total)}</strong><br/>Reference: <code>${escapeHtml(ref)}</code></p>`
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Demo payment confirmed — ${ref}`,
+        title: 'Demo payment received',
+        intro: `We simulated a successful ${hub} payment in the demo environment.`,
+        details: [
+          { label: 'Payee', value: payee || '—' },
+          { label: 'Amount', value: total },
+          { label: 'Reference', value: ref || '—' },
+        ],
+        cta: { label: 'Open store', href: store },
+      },
+      store,
+    )
     const text = `Demo payment confirmed.\nPayee: ${payee}\nTotal: ${total}\nRef: ${ref}`
     return { subject, html, text }
   }
-  const subject = `PayToday notification (${templateKey})`
+  const subject = `PayToday Store — ${templateKey}`
   const blob = escapeHtml(JSON.stringify(payload, null, 2))
-  const html = `<p>Notification: <code>${escapeHtml(templateKey)}</code></p><pre>${blob}</pre>`
+  const html = wrapStoreTransactionalEmail(
+    {
+      preheader: subject,
+      title: 'Store notification',
+      intro: `You have a new notification (${templateKey}).`,
+      extraHtml: [
+        `<pre style="margin:0;padding:14px;background:#fafafa;border:1px solid #e4e4e7;border-radius:8px;font-size:12px;overflow:auto;">${blob}</pre>`,
+      ],
+      cta: { label: 'Open store', href: store },
+    },
+    store,
+  )
   const text = `${templateKey}\n${JSON.stringify(payload)}`
   return { subject, html, text }
 }
 
 /**
- * POST `…/email` or `…/{portal}/email` on the Today notify service (JSON, `x-api-key` header).
- * When portal template IDs are configured in env, sends with `templateId` + `variables`; otherwise HTML/text fallback.
+ * POST PayToday Notifications transactional mail:
+ * - Flat path: `{NOTIFY_SERVICE_BASE_URL}/email` (“Send custom email” in Postman) — `to`, `subject`, `html`, `text`, optional `from`.
+ * - Portal path: `{base}/{portal}/email` when `NOTIFY_SERVICE_PORTAL` is set and flat mode is off.
+ * Auth: `X-API-Key` (Postman). Portal `templateId` payloads are skipped when `NOTIFY_SERVICE_USE_FLAT_EMAIL_PATH=true`.
  */
 export async function sendNotifyTransactionalEmail(
   input: NotifySendInput,
@@ -137,11 +314,11 @@ export async function sendNotifyTransactionalEmail(
     return {
       ok: false,
       error:
-        'Notify service not configured (NOTIFY_SERVICE_API_KEY / NOTIFY_SERVICE_BASE_URL; optional NOTIFY_SERVICE_PORTAL)',
+        'Notify service not configured (NOTIFY_SERVICE_API_KEY / NOTIFY_SERVICE_BASE_URL; optional NOTIFY_SERVICE_PORTAL or NOTIFY_SERVICE_USE_FLAT_EMAIL_PATH)',
     }
   }
 
-  const templateId = templateIdForKey(input.templateKey, n)
+  const templateId = n.useFlatEmailPath ? undefined : templateIdForKey(input.templateKey, n)
   const from = n.notificationEmailFrom.trim()
   const storeUrl = n.publicStoreUrl.trim() || env.publicStoreUrl.replace(/\/$/u, '')
   const vars = variablesForTemplate(input.payload, storeUrl)
@@ -167,7 +344,8 @@ export async function sendNotifyTransactionalEmail(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': key,
+        Accept: 'application/json',
+        'X-API-Key': key,
       },
       body: JSON.stringify(body),
     })
@@ -177,13 +355,20 @@ export async function sendNotifyTransactionalEmail(
 
   let parsed: { success?: boolean; error?: string; message?: string } = {}
   try {
-    parsed = (await res.json()) as typeof parsed
+    const ct = res.headers.get('content-type') ?? ''
+    if (ct.includes('application/json')) {
+      parsed = (await res.json()) as typeof parsed
+    }
   } catch {
     /* ignore */
   }
 
-  if (!res.ok || parsed.success === false) {
+  if (!res.ok) {
     const msg = parsed.error || parsed.message || res.statusText || `HTTP ${res.status}`
+    return { ok: false, error: msg }
+  }
+  if (parsed.success === false) {
+    const msg = parsed.error || parsed.message || 'Notify service returned success: false'
     return { ok: false, error: msg }
   }
 

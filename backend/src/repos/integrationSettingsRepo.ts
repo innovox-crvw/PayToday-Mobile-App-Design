@@ -21,6 +21,11 @@ export async function fetchIntegrationSettingsMap(pool: ConnectionPool): Promise
     if (sqlErrorMentionsMissingObject(e, 'integration_settings')) {
       return m
     }
+    const msg = formatSqlDriverError(e).toLowerCase()
+    /* Some drivers/locales omit the exact phrase `invalid object name`. */
+    if (msg.includes('integration_settings') && (msg.includes('invalid object') || msg.includes('could not find'))) {
+      return m
+    }
     console.warn('[integration_settings] load failed:', formatSqlDriverError(e))
   }
   return m

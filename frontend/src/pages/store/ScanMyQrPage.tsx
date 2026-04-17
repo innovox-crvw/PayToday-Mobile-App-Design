@@ -15,7 +15,7 @@ export function ScanMyQrPage() {
   const walletUrl = useMemo(() => `${window.location.origin}${pathPrefix}/wallet`, [pathPrefix])
 
   const staticPayString = useMemo(
-    () => buildReceiveDemoPayload(user?.email?.trim() || 'guest@paytoday.demo', null),
+    () => buildReceiveDemoPayload(user?.email?.trim() || 'guest@example.com', null),
     [user?.email],
   )
 
@@ -23,7 +23,7 @@ export function ScanMyQrPage() {
     <Stack spacing={2} sx={{ maxWidth: 520, mx: 'auto', pb: 4 }}>
       <WalletSubheader title="My QR Code" />
       <Typography variant="body2" color="text.secondary">
-        Two demo patterns: open your <strong>Wallet</strong> in the browser, or share a static <strong>PT-PAYTO</strong> handle
+        Two ways to get paid: open your <strong>Wallet</strong> in the browser, or share a static <strong>PT-PAYTO</strong> handle
         others can pay (same encoding as Receive via QR, without rotation).
       </Typography>
 
@@ -44,13 +44,13 @@ export function ScanMyQrPage() {
 
       <Card variant="outlined" sx={{ p: 2.5, borderRadius: 3 }}>
         <Typography variant="subtitle2" fontWeight={800} gutterBottom>
-          Static pay handle (demo)
+          Static pay handle
         </Typography>
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
           For in-person “show my code” — payer uses Pay by Code to scan or paste.
         </Typography>
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
-          <DemoQrImage value={staticPayString} size={220} label="Static demo PT-PAYTO QR" />
+          <DemoQrImage value={staticPayString} size={220} label="Static PT-PAYTO QR" />
         </Box>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontFamily: 'monospace', wordBreak: 'break-all' }}>
           {staticPayString}
@@ -58,7 +58,7 @@ export function ScanMyQrPage() {
       </Card>
 
       <Alert severity="info" variant="outlined">
-        Production PayToday would rotate keys and bind settlement. Here, both patterns are safe offline demos for UI walkthroughs.
+        In production, keys rotate and settlement is bound to your account. Here, both patterns are suitable for offline previews and training.
       </Alert>
 
       <Button component={RouterLink} to={backToScan} variant="text" sx={{ alignSelf: 'center', fontWeight: 700 }}>

@@ -32,8 +32,8 @@ export const storeTheme = createTheme({
     },
   },
   shape: {
-    /** Bank-grade: slightly tighter corners. */
-    borderRadius: 14,
+    /** Nearly square corners across the store shell. */
+    borderRadius: 4,
   },
   transitions: {
     duration: {
@@ -122,7 +122,7 @@ export const storeTheme = createTheme({
       },
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: 12,
+          borderRadius: 4,
           letterSpacing: 0.02,
           boxShadow: 'none',
           transition: theme.transitions.create(['background-color', 'box-shadow', 'transform'], {
@@ -133,7 +133,7 @@ export const storeTheme = createTheme({
           paddingTop: 14,
           paddingBottom: 14,
           fontSize: '1rem',
-          borderRadius: 14,
+          borderRadius: 4,
         },
         sizeMedium: {
           paddingLeft: 18,
@@ -190,7 +190,7 @@ export const storeTheme = createTheme({
       styleOverrides: {
         root: {
           '& .MuiOutlinedInput-root': {
-            borderRadius: 12,
+            borderRadius: 4,
           },
         },
       },
@@ -198,7 +198,7 @@ export const storeTheme = createTheme({
     MuiOutlinedInput: {
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: 12,
+          borderRadius: 4,
           '&:hover .MuiOutlinedInput-notchedOutline': {
             borderColor: alpha(theme.palette.primary.main, 0.38),
           },
@@ -212,7 +212,7 @@ export const storeTheme = createTheme({
     MuiListItemButton: {
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: 12,
+          borderRadius: 4,
           transition: theme.transitions.create(['background-color', 'transform'], {
             duration: theme.transitions.duration.shorter,
           }),
@@ -232,7 +232,7 @@ export const storeTheme = createTheme({
       styleOverrides: {
         root: {
           fontWeight: 600,
-          borderRadius: 10,
+          borderRadius: 4,
         },
       },
     },
@@ -278,7 +278,7 @@ export const storeTheme = createTheme({
     MuiAccordion: {
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: `${Number(theme.shape.borderRadius) - 2}px !important`,
+          borderRadius: `${Math.max(2, Number(theme.shape.borderRadius) - 1)}px !important`,
           border: `1px solid ${theme.palette.divider}`,
           boxShadow: 'none',
           '&:before': { display: 'none' },
@@ -327,7 +327,7 @@ export const storeTheme = createTheme({
     MuiSkeleton: {
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: 12,
+          borderRadius: 4,
           backgroundColor: alpha(theme.palette.text.primary, 0.08),
         }),
       },
@@ -335,7 +335,7 @@ export const storeTheme = createTheme({
     MuiAlert: {
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: 12,
+          borderRadius: 4,
           alignItems: 'center',
           border: `1px solid ${theme.palette.divider}`,
         }),
@@ -356,7 +356,7 @@ export const storeTheme = createTheme({
     MuiTooltip: {
       styleOverrides: {
         tooltip: {
-          borderRadius: 8,
+          borderRadius: 4,
           fontSize: '0.75rem',
           fontWeight: 600,
           padding: '8px 12px',
@@ -370,6 +370,7 @@ export const storeTheme = createTheme({
     MuiIconButton: {
       styleOverrides: {
         root: ({ theme }) => ({
+          borderRadius: 2,
           transition: theme.transitions.create(['background-color', 'transform'], {
             duration: theme.transitions.duration.shorter,
           }),
@@ -386,7 +387,7 @@ export const storeTheme = createTheme({
           '&:focus-visible': {
             outline: `2px solid ${alpha(theme.palette.primary.main, 0.45)}`,
             outlineOffset: 2,
-            borderRadius: 4,
+            borderRadius: 2,
           },
         }),
       },

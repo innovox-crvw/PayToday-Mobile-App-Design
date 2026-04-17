@@ -25,7 +25,6 @@ import CallSplitIcon from '@mui/icons-material/CallSplit'
 import CardGiftcardIcon from '@mui/icons-material/CardGiftcard'
 import PaymentsIcon from '@mui/icons-material/Payments'
 import RedeemIcon from '@mui/icons-material/Redeem'
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { formatNad, WALLET_BALANCE_CENTS } from '../../data/walletMock'
 import { useAuthMe } from '../../hooks/useAuthMe'
@@ -48,7 +47,6 @@ const QUICK_FUND_CENTS = [5_000, 10_000, 20_000, 50_000] as const
 export function WalletHomePage() {
   const { pathname } = useLocation()
   const prefix = pathname.startsWith('/embed') ? '/embed/wallet' : '/wallet'
-  const profilePath = pathname.startsWith('/embed') ? '/embed/profile' : '/profile'
   const { user, loading: authLoading } = useAuthMe()
 
   const [balanceCents, setBalanceCents] = useState<number | null>(null)
@@ -109,7 +107,7 @@ export function WalletHomePage() {
       const data = (await res.json()) as { balanceCents?: number }
       if (typeof data.balanceCents === 'number') setBalanceCents(data.balanceCents)
       else void loadBalance()
-      setFundMsg(`Added ${formatNad(amountCents)} to your demo wallet.`)
+      setFundMsg(`Added ${formatNad(amountCents)} to your wallet.`)
       setFundNad('')
     } catch (e) {
       setFundMsg(e instanceof Error ? e.message : 'Could not add funds')
@@ -187,9 +185,9 @@ export function WalletHomePage() {
           <Typography variant="caption" sx={{ opacity: 0.85, textAlign: { xs: 'center', md: 'left' } }}>
             {user
               ? walletDemoAvailable
-                ? 'Demo wallet tied to your account: add funds below, then pay with “PayToday Wallet” in hub demos or Vouchers.'
-                : 'Demo wallet tables are not on this database yet. Run backend/scripts/paytoday-add-demo-wallet.sql, then refresh.'
-              : 'Sample balance for guests. Sign in to use a working demo balance (fund + spend).'}
+                ? 'Your account wallet: add funds below, then pay with PayToday Wallet in hub payments or Vouchers.'
+                : 'Wallet funding is not available on this database. Contact your administrator, then refresh.'
+              : 'Sample balance for guests. Sign in to fund and spend from your wallet.'}
           </Typography>
         </Stack>
       </Card>
@@ -197,10 +195,10 @@ export function WalletHomePage() {
       {user && walletDemoAvailable ? (
         <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider', p: { xs: 2, md: 2.5 } }}>
           <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1 }}>
-            Add demo funds
+            Add funds
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            For testing only — credits your demo wallet so hub payments and vouchers can debit it.
+            Credits your wallet balance so hub payments and vouchers can debit it.
           </Typography>
           <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 1.5 }}>
             {QUICK_FUND_CENTS.map((c) => (
@@ -291,21 +289,6 @@ export function WalletHomePage() {
           </List>
         </Card>
       </Stack>
-
-      <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
-        <ListItemButton component={RouterLink} to={profilePath} sx={{ py: 2, px: 2, borderRadius: 3 }}>
-          <ListItemIcon sx={{ minWidth: 48 }}>
-            <PersonOutlineIcon color="primary" />
-          </ListItemIcon>
-          <ListItemText
-            primary="Profile & preferences"
-            secondary="Personal details, support, feedback — sign in from profile"
-            primaryTypographyProps={{ fontWeight: 600 }}
-            secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.25 } }}
-          />
-          <ChevronRightIcon color="action" sx={{ opacity: 0.7 }} />
-        </ListItemButton>
-      </Card>
     </Stack>
   )
 }

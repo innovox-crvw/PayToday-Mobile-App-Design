@@ -119,11 +119,8 @@ export function ServicesPage() {
         minHeight: isMobile ? '50vh' : undefined,
       }}
     >
-      <Typography variant="h6" textAlign="center" fontWeight={800} sx={{ mb: 1, letterSpacing: -0.3 }}>
+      <Typography variant="h6" textAlign="center" fontWeight={800} sx={{ mb: 2, letterSpacing: -0.3 }}>
         Services
-      </Typography>
-      <Typography variant="caption" color="text.secondary" textAlign="center" display="block" sx={{ mb: 2, px: 1, lineHeight: 1.45 }}>
-        Tap a tile for the same demo payment experience as Payments (except Store → shop), including optional notifications when signed in.
       </Typography>
       <Grid container spacing={2} columns={4}>
         {hubTiles.loading ? (
@@ -178,9 +175,6 @@ export function ServicesPage() {
     <Stack spacing={2}>
       <Typography variant="h4" fontWeight={800}>
         Services
-      </Typography>
-      <Typography color="text.secondary">
-        Tap a tile for the same <strong>demo payment</strong> flow as Payments: multiple rails, gateway-style steps, receipt screen, and outbox-backed notifications when you are signed in. Store opens the shop; no real charges.
       </Typography>
       {sheet}
     </Stack>

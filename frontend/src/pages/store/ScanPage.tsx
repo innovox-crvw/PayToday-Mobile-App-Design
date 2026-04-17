@@ -21,8 +21,8 @@ export function ScanPage() {
         Scan
       </Typography>
       <Typography variant="body2" color="text.secondary" textAlign="center">
-        <strong>Live demo:</strong> Pay by Code uses your camera (QR / barcodes in Chrome and Edge) or manual entry. Receive via QR and My QR render real QR patterns for walkthroughs — no{' '}
-        <code>VITE_PAYTODAY_SCAN_API_BASE_URL</code> required. Wire production PayToday scan APIs when they are available.
+        Pay by Code uses your camera (QR / barcodes in Chrome and Edge) or manual entry. Receive via QR and My QR render scannable QR patterns — no{' '}
+        <code>VITE_PAYTODAY_SCAN_API_BASE_URL</code> required. Connect your production PayToday scan APIs when they are available.
       </Typography>
       <Card variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>
         <List disablePadding>

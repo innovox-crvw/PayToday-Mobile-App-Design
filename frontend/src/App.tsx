@@ -5,7 +5,7 @@ import { StoreLayout } from './layouts/StoreLayout'
 import { AdminDepositPage } from './pages/admin/AdminDepositPage'
 import { AdminFulfillmentPage } from './pages/admin/AdminFulfillmentPage'
 import { AdminHomePage } from './pages/admin/AdminHomePage'
-import { AdminPlaceholderPage } from './pages/admin/AdminPlaceholderPage'
+import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage'
 import { AdminReturnsPage } from './pages/admin/AdminReturnsPage'
 import { AdminProductsPage } from './pages/admin/AdminProductsPage'
@@ -20,6 +20,7 @@ import { CheckoutFailurePage } from './pages/store/CheckoutFailurePage'
 import { CheckoutCompletePage } from './pages/store/CheckoutCompletePage'
 import { OrdersListPage } from './pages/store/OrdersListPage'
 import { OrderDetailPage } from './pages/store/OrderDetailPage'
+import { ReturnRequestPage } from './pages/store/ReturnRequestPage'
 import { TrackOrderPage } from './pages/store/TrackOrderPage'
 import { ProductPage } from './pages/store/ProductPage'
 import { PaymentsCategoriesPage } from './pages/payments/PaymentsCategoriesPage'
@@ -125,6 +126,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="checkout/complete" element={<CheckoutCompletePage />} />
       <Route path="orders" element={<OrdersListPage />} />
       <Route path="orders/track" element={<TrackOrderPage />} />
+      <Route path="orders/:orderId/return" element={<ReturnRequestPage />} />
       <Route path="orders/:orderId" element={<OrderDetailPage />} />
       <Route path="account" element={<AccountPage />} />
       <Route path="account/keycloak/callback" element={<KeycloakCallbackPage />} />
@@ -190,15 +192,7 @@ export default function App() {
           <Route path="products" element={<AdminProductsPage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
           <Route path="returns" element={<AdminReturnsPage />} />
-          <Route
-            path="inventory"
-            element={
-              <AdminPlaceholderPage
-                title="Inventory"
-                notes="Stock levels and movements are in SQL (inventory_quantity, stock_movements). Use fulfillment CSV stub or SQL tools for bulk adjustments until the parser is completed."
-              />
-            }
-          />
+          <Route path="inventory" element={<AdminInventoryPage />} />
           <Route path="fulfillment" element={<AdminFulfillmentPage />} />
           <Route path="deposit-boxes" element={<AdminDepositPage />} />
         </Route>

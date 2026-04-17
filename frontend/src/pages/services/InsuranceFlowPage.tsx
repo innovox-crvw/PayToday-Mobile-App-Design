@@ -106,7 +106,7 @@ export function InsuranceFlowPage() {
       append('Validating details…')
       await new Promise((r) => setTimeout(r, 450))
 
-      append('Creating payment session (demo)…')
+      append('Creating payment session…')
       await new Promise((r) => setTimeout(r, 500))
 
       let cidLocal = ''
@@ -115,7 +115,7 @@ export function InsuranceFlowPage() {
         if (pending.ok) {
           cidLocal = pending.correlationId?.trim() || ''
           if (cidLocal) setCorrelationId(cidLocal)
-          append('Queued outbox: hub_demo_pending_payment')
+          append('Queued pending payment notification')
         } else {
           append(pending.msg ?? 'Outbox pending skipped.')
         }
@@ -123,14 +123,14 @@ export function InsuranceFlowPage() {
         append(`Outbox pending failed: ${e instanceof Error ? e.message : String(e)}`)
       }
 
-      append('Confirming with wallet / biometrics (demo)…')
+      append('Confirming with wallet / biometrics…')
       await new Promise((r) => setTimeout(r, 650))
 
       try {
         if (cidLocal) {
           const done = await startOutboxPipeline('complete', cidLocal, reference)
           if (done.ok) {
-            append('Wallet debited. Queued outbox: hub_demo_payment_completed')
+            append('Wallet debited. Payment completed notification queued.')
             setResultOk(true)
           } else {
             append(done.msg ?? 'Payment completion failed.')
@@ -226,7 +226,7 @@ export function InsuranceFlowPage() {
               {page === 0 ? (
                 <Stack spacing={1}>
                   <Typography variant="body2" color="text.secondary">
-                    Complete this demo form to proceed.
+                    Complete this form to proceed.
                   </Typography>
                   <Typography variant="body2">1) Contact details</Typography>
                   <Typography variant="body2">2) Proof of identity</Typography>

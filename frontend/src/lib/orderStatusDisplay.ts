@@ -6,6 +6,7 @@ const LABELS: Record<string, string> = {
   shipped: 'Shipped',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
+  refunded: 'Refunded',
 }
 
 export function formatOrderStatusLabel(status: string | null | undefined): string {

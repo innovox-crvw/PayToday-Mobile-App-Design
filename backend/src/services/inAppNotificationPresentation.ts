@@ -1,3 +1,16 @@
+function fulfillmentStageShortLabel(stage: string): string {
+  const s = stage.toLowerCase()
+  const map: Record<string, string> = {
+    pending: 'Pending',
+    picking: 'Picking',
+    packing: 'Packing',
+    packed: 'Packed',
+    shipped: 'Shipped',
+    delivered: 'Delivered',
+  }
+  return map[s] || stage || 'Updated'
+}
+
 /** Titles/subtitles shown in the in-app notification list (aligned with email templates). */
 export function inAppCopyForTemplate(templateKey: string, payloadJson: string): { title: string; body: string } {
   let payload: Record<string, unknown> = {}
@@ -29,9 +42,34 @@ export function inAppCopyForTemplate(templateKey: string, payloadJson: string): 
   }
 
   if (templateKey === 'pickup_code_ready') {
+    const exp = String(payload.expiresAt ?? '').trim()
+    const expShort = exp ? ` · Expires ${exp.slice(0, 16).replace('T', ' ')} UTC` : ''
     return {
       title: 'Pickup code ready',
-      body: code && orderId ? `Order ${orderId} · Code ${code}` : code ? `Code: ${code}` : 'Your order is ready for collection.',
+      body:
+        code && orderId
+          ? `Order ${orderId} · Code ${code}${expShort}`
+          : code
+            ? `Code: ${code}${expShort}`
+            : 'Your order is ready for collection.',
+    }
+  }
+
+  if (templateKey === 'fulfillment_stage_updated') {
+    const stage = String(payload.stage ?? '').trim()
+    const prev = String(payload.previousStage ?? '').trim()
+    const label = fulfillmentStageShortLabel(stage)
+    const prevLabel = prev ? fulfillmentStageShortLabel(prev) : ''
+    return {
+      title: 'Order fulfillment update',
+      body:
+        orderId && prevLabel && label !== prevLabel
+          ? `Order ${orderId} · ${prevLabel} → ${label}`
+          : orderId && label
+            ? `Order ${orderId} · Now ${label}`
+            : label
+              ? `Fulfillment is now ${label}.`
+              : 'Your order fulfillment status was updated.',
     }
   }
 
@@ -46,6 +84,27 @@ export function inAppCopyForTemplate(templateKey: string, payloadJson: string): 
     return {
       title: 'Complete your demo payment',
       body: ref ? `${hub} · ${payee || 'Payee'} · ${total} · Ref ${ref}` : `${hub} · ${payee || 'Payee'} · ${total}`,
+    }
+  }
+
+  if (templateKey === 'return_case_status') {
+    const orderId = String(payload.orderId ?? '').trim()
+    const status = String(payload.status ?? '').trim().toLowerCase()
+    const label =
+      status === 'pending'
+        ? 'Submitted'
+        : status === 'approved'
+          ? 'Approved'
+          : status === 'rejected'
+            ? 'Rejected'
+            : status === 'received'
+              ? 'Received at warehouse'
+              : status === 'completed'
+                ? 'Refund completed'
+                : status || 'Updated'
+    return {
+      title: 'Return request',
+      body: orderId ? `Order ${orderId} · ${label}` : `Return · ${label}`,
     }
   }
 

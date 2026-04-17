@@ -151,6 +151,7 @@ export function StoreLayout() {
   }, [pathname])
 
   const currentNav = navValue(pathname)
+  const showMobileStoreSearch = isMobile && !hideChromeAppBar && base.startsWith('/shop')
 
   function onSearchSubmit(e: FormEvent) {
     e.preventDefault()
@@ -189,6 +190,43 @@ export function StoreLayout() {
               </>
             )}
           </Toolbar>
+          {showMobileStoreSearch ? (
+            <Box sx={{ px: 2, pb: 1.5, pt: 0 }}>
+              <Paper
+                component="form"
+                onSubmit={onSearchSubmit}
+                elevation={0}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  px: 1.75,
+                  py: 1,
+                  borderRadius: 2,
+                  bgcolor: 'rgba(255,255,255,0.12)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  backdropFilter: 'saturate(140%) blur(10px)',
+                }}
+              >
+                <SearchIcon sx={{ color: 'rgba(255,255,255,0.75)', fontSize: 22 }} />
+                <InputBase
+                  placeholder="Search products, services, payments"
+                  value={searchQ}
+                  onChange={(e) => setSearchQ(e.target.value)}
+                  sx={{
+                    flex: 1,
+                    color: '#fff',
+                    fontSize: '0.95rem',
+                    '& .MuiInputBase-input::placeholder': {
+                      color: 'rgba(255,255,255,0.6)',
+                      opacity: 1,
+                    },
+                  }}
+                  inputProps={{ 'aria-label': 'Search store' }}
+                />
+              </Paper>
+            </Box>
+          ) : null}
         </AppBar>
       )}
 
@@ -265,7 +303,7 @@ export function StoreLayout() {
                   gap: 1,
                   px: 2,
                   py: 1.1,
-                  borderRadius: 999,
+                  borderRadius: 2,
                   bgcolor: 'rgba(255,255,255,0.12)',
                   border: '1px solid rgba(255,255,255,0.18)',
                   backdropFilter: 'saturate(140%) blur(10px)',
@@ -311,7 +349,7 @@ export function StoreLayout() {
           width: 1,
           ...(desktopChrome
             ? {
-                bgcolor: '#f1f5f9',
+                bgcolor: '#ffffff',
               }
             : {}),
         }}
@@ -321,13 +359,17 @@ export function StoreLayout() {
           sx={{
             flex: 1,
             width: 1,
+            minHeight: 0,
             py: hideChromeAppBar ? { xs: 0, sm: 3, md: 4 } : { xs: 2, sm: 3, md: desktopChrome ? 4 : 4 },
             px: { xs: 2, sm: 3, md: desktopChrome ? 4 : 4, lg: 5 },
-            pb: isMobile ? 14 : { md: 6 },
+            // Clear fixed bottom nav (tall bar + labels + optional FAB lift) + home indicator / gesture bar
+            pb: isMobile
+              ? (t) => `calc(${t.spacing(18)} + env(safe-area-inset-bottom, 0px))`
+              : { md: 6 },
             ...(desktopChrome
               ? {
                   bgcolor: 'background.paper',
-                  borderRadius: '20px 20px 0 0',
+                  borderRadius: '6px 6px 0 0',
                   border: `1px solid ${SURFACE_BORDER}`,
                   borderBottom: 'none',
                   mt: 0,

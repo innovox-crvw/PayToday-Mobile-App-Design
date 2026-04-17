@@ -38,23 +38,39 @@ fulfillmentRouter.patch('/orders/:orderId/stage', async (req, res) => {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
+  const orderId = req.params.orderId
   const stage = typeof req.body?.stage === 'string' ? req.body.stage : ''
   const allowed = new Set(['pending', 'picking', 'packing', 'packed', 'shipped', 'delivered', 'pick'])
   if (!stage || !allowed.has(stage)) {
-    res.status(400).json({ error: 'stage required (pending|picking|packing|packed|shipped|delivered)' })
+    res.status(400).json({ error: 'stage required (pending|picking|packing|packed|shipped|delivered|pick)' })
     return
   }
   const normalized = stage === 'pick' ? 'picking' : stage
-  await pool
+
+  const existing = await pool
     .request()
-    .input('oid', req.params.orderId)
+    .input('oid', orderId)
+    .query<{ stage: string }>(`SELECT stage FROM dbo.fulfillment_tasks WHERE order_id = @oid`)
+  const prevStage = existing.recordset[0]?.stage
+  if (prevStage === undefined) {
+    res.status(404).json({ error: 'Fulfillment task not found' })
+    return
+  }
+
+  const upd = await pool
+    .request()
+    .input('oid', orderId)
     .input('stage', normalized)
     .query(`UPDATE dbo.fulfillment_tasks SET stage = @stage, updated_at = SYSUTCDATETIME() WHERE order_id = @oid`)
+  if ((upd.rowsAffected?.[0] ?? 0) === 0) {
+    res.status(404).json({ error: 'Fulfillment task not found' })
+    return
+  }
 
   if (normalized === 'picking' || normalized === 'packing' || normalized === 'packed') {
     await pool
       .request()
-      .input('oid', req.params.orderId)
+      .input('oid', orderId)
       .query(
         `UPDATE dbo.orders SET status = N'processing', updated_at = SYSUTCDATETIME() WHERE id = @oid AND status = N'paid'`,
       )
@@ -63,15 +79,37 @@ fulfillmentRouter.patch('/orders/:orderId/stage', async (req, res) => {
   if (normalized === 'delivered') {
     await pool
       .request()
-      .input('oid', req.params.orderId)
+      .input('oid', orderId)
       .query(`UPDATE dbo.orders SET status = N'delivered', updated_at = SYSUTCDATETIME() WHERE id = @oid`)
   }
   if (normalized === 'shipped') {
     await pool
       .request()
-      .input('oid', req.params.orderId)
+      .input('oid', orderId)
       .query(`UPDATE dbo.orders SET status = N'shipped', updated_at = SYSUTCDATETIME() WHERE id = @oid`)
   }
+
+  if (String(prevStage).trim().toLowerCase() !== normalized.toLowerCase()) {
+    const target = await resolveOrderNotificationTarget(pool, orderId)
+    const channel = await resolveOutboxChannel(
+      pool,
+      target?.userId ?? null,
+      target?.guestEmail ?? null,
+      'fulfillment_stage_updated',
+    )
+    await enqueueNotification(pool, {
+      userId: target?.userId ?? null,
+      email: target?.email ?? null,
+      channel,
+      templateKey: 'fulfillment_stage_updated',
+      payload: JSON.stringify({
+        orderId,
+        stage: normalized,
+        previousStage: prevStage,
+      }),
+    })
+  }
+
   res.json({ ok: true })
 })
 
@@ -87,7 +125,7 @@ fulfillmentRouter.post('/orders/:orderId/pickup-code', async (req, res) => {
     return
   }
   try {
-    const code = await allocatePickupCode(pool, req.params.orderId, locationId)
+    const { pickupCode, expiresAt } = await allocatePickupCode(pool, req.params.orderId, locationId)
     const target = await resolveOrderNotificationTarget(pool, req.params.orderId)
     const channel = await resolveOutboxChannel(pool, target?.userId ?? null, target?.guestEmail ?? null, 'pickup_code_ready')
     await enqueueNotification(pool, {
@@ -95,9 +133,13 @@ fulfillmentRouter.post('/orders/:orderId/pickup-code', async (req, res) => {
       email: target?.email ?? null,
       channel,
       templateKey: 'pickup_code_ready',
-      payload: JSON.stringify({ orderId: req.params.orderId, code }),
+      payload: JSON.stringify({
+        orderId: req.params.orderId,
+        code: pickupCode,
+        expiresAt: expiresAt.toISOString(),
+      }),
     })
-    res.json({ pickupCode: code })
+    res.json({ pickupCode, expiresAt: expiresAt.toISOString() })
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Allocation failed' })
   }

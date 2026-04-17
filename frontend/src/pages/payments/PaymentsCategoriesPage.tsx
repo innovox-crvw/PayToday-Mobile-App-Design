@@ -117,11 +117,8 @@ export function PaymentsCategoriesPage() {
         minHeight: isMobile ? '50vh' : undefined,
       }}
     >
-      <Typography variant="h6" textAlign="center" fontWeight={800} sx={{ mb: 1, letterSpacing: -0.3 }}>
+      <Typography variant="h6" textAlign="center" fontWeight={800} sx={{ mb: 2, letterSpacing: -0.3 }}>
         Categories
-      </Typography>
-      <Typography variant="caption" color="text.secondary" textAlign="center" display="block" sx={{ mb: 2, px: 1, lineHeight: 1.45 }}>
-        Pick a payee to run the demo flow: rails (wallet, card, USSD, EFT), staged processing, and when signed in the same notification_outbox pipeline as the store.
       </Typography>
       <Grid container spacing={2} columns={4}>
         {hubTiles.loading ? (
@@ -176,9 +173,6 @@ export function PaymentsCategoriesPage() {
     <Stack spacing={2}>
       <Typography variant="h4" fontWeight={800}>
         Payments
-      </Typography>
-      <Typography color="text.secondary">
-        Choose a category and payee, then walk through amount, payment rail, and a realistic processing timeline. Sign in under Account to enqueue pending + completed rows for email and in-app notifications (no real money).
       </Typography>
       {sheet}
     </Stack>

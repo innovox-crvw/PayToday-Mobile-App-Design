@@ -531,13 +531,13 @@ export function CheckoutPage() {
               disabled={submitting || !walletDemoAvailable}
               label={
                 <Stack spacing={0.25}>
-                  <Typography fontWeight={700}>Demo wallet</Typography>
+                  <Typography fontWeight={700}>PayToday Wallet</Typography>
                   <Typography variant="caption" color="text.secondary">
                     {walletDemoAvailable
                       ? walletBalanceCents != null
                         ? `Available: ${formatNad(walletBalanceCents)} — debited when the order is placed.`
                         : 'Loading wallet balance…'
-                      : 'Run paytoday-add-demo-wallet.sql on the database to enable demo wallet checkout.'}
+                      : 'Wallet checkout is not available on this database. Contact your administrator.'}
                   </Typography>
                 </Stack>
               }

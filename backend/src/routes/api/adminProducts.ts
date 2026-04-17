@@ -1,7 +1,14 @@
 import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { requireAuth, requireRole } from '../../middleware/auth.js'
-import { createProductSimple, listProducts } from '../../repos/productsRepo.js'
+import { isUuidString } from '../../repos/inventoryRepo.js'
+import {
+  createProductSimple,
+  insertProductImage,
+  listProductsAdmin,
+  updateProductAdmin,
+  updateVariantAdmin,
+} from '../../repos/productsRepo.js'
 
 export const adminProductsRouter = Router()
 adminProductsRouter.use(requireAuth, requireRole('admin', 'ops'))
@@ -12,7 +19,7 @@ adminProductsRouter.get('/', async (_req, res) => {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
-  const items = await listProducts(pool)
+  const items = await listProductsAdmin(pool)
   res.json({ items })
 })
 
@@ -33,6 +40,7 @@ adminProductsRouter.post('/', async (req, res) => {
   const categoryId = typeof req.body?.categoryId === 'string' ? req.body.categoryId : null
   const brandSlug = typeof req.body?.brandSlug === 'string' ? req.body.brandSlug.trim() : null
   const brandName = typeof req.body?.brandName === 'string' ? req.body.brandName.trim() : null
+  const imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : null
   if (!slug || !name || !sku || !Number.isFinite(priceCents)) {
     res.status(400).json({ error: 'slug, name, sku, priceCents required' })
     return
@@ -50,9 +58,116 @@ adminProductsRouter.post('/', async (req, res) => {
       priceCents,
       currency,
       initialStock: Number.isFinite(initialStock) ? initialStock : 0,
+      imageUrl: imageUrl || null,
     })
     res.status(201).json(ids)
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Create failed' })
+  }
+})
+
+adminProductsRouter.patch('/:productId', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const productId = String(req.params.productId ?? '')
+  if (!isUuidString(productId)) {
+    res.status(400).json({ error: 'Invalid product id' })
+    return
+  }
+  const body = req.body as Record<string, unknown>
+  const patch: Parameters<typeof updateProductAdmin>[2] = {}
+  if (Object.prototype.hasOwnProperty.call(body, 'name') && typeof body.name === 'string') {
+    patch.name = body.name
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'slug') && typeof body.slug === 'string') {
+    patch.slug = body.slug
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'description')) {
+    patch.description = typeof body.description === 'string' ? body.description : null
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'isActive')) {
+    patch.isActive = Boolean(body.isActive)
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'categoryId')) {
+    patch.categoryId = typeof body.categoryId === 'string' && body.categoryId.trim() ? body.categoryId.trim() : null
+  }
+  try {
+    await updateProductAdmin(pool, productId, patch)
+    res.json({ ok: true })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Update failed'
+    if (msg === 'Product not found') {
+      res.status(404).json({ error: msg })
+      return
+    }
+    res.status(400).json({ error: msg })
+  }
+})
+
+adminProductsRouter.patch('/:productId/variants/:variantId', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const productId = String(req.params.productId ?? '')
+  const variantId = String(req.params.variantId ?? '')
+  if (!isUuidString(productId) || !isUuidString(variantId)) {
+    res.status(400).json({ error: 'Invalid id' })
+    return
+  }
+  const body = req.body as Record<string, unknown>
+  const patch: Parameters<typeof updateVariantAdmin>[3] = {}
+  if (Object.prototype.hasOwnProperty.call(body, 'sku') && typeof body.sku === 'string') {
+    patch.sku = body.sku
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'variantName') && typeof body.variantName === 'string') {
+    patch.variantName = body.variantName
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'priceCents')) {
+    patch.priceCents = Number(body.priceCents)
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'currency') && typeof body.currency === 'string') {
+    patch.currency = body.currency
+  }
+  try {
+    await updateVariantAdmin(pool, productId, variantId, patch)
+    res.json({ ok: true })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Update failed'
+    if (msg === 'Variant not found for product') {
+      res.status(404).json({ error: msg })
+      return
+    }
+    res.status(400).json({ error: msg })
+  }
+})
+
+adminProductsRouter.post('/:productId/images', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const productId = String(req.params.productId ?? '')
+  if (!isUuidString(productId)) {
+    res.status(400).json({ error: 'Invalid product id' })
+    return
+  }
+  const url = typeof req.body?.url === 'string' ? req.body.url : ''
+  const sortOrder = Number(req.body?.sortOrder ?? 0)
+  try {
+    const chk = await pool.request().input('id', productId).query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.products WHERE id = @id`)
+    if (Number(chk.recordset[0]?.c ?? 0) === 0) {
+      res.status(404).json({ error: 'Product not found' })
+      return
+    }
+    await insertProductImage(pool, productId, url, sortOrder)
+    res.status(201).json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Insert failed' })
   }
 })

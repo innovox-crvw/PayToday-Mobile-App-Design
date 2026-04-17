@@ -28,7 +28,7 @@ export function ScanReceiveQrPage() {
   const amountCents = useMemo(() => parseAmountCents(amountNad), [amountNad])
 
   const payload = useMemo(
-    () => buildReceiveDemoPayload(email || 'guest@paytoday.demo', amountCents),
+    () => buildReceiveDemoPayload(email || 'guest@example.com', amountCents),
     [email, amountCents],
   )
 
@@ -47,7 +47,7 @@ export function ScanReceiveQrPage() {
     <Stack spacing={2} sx={{ maxWidth: 520, mx: 'auto', pb: 4 }}>
       <WalletSubheader title="Receive via QR" />
       <Typography variant="body2" color="text.secondary">
-        Demo receive QR encodes a <strong>PT-PAYTO</strong> string. Another device can open <strong>Pay by Code</strong> and scan
+        This receive QR encodes a <strong>PT-PAYTO</strong> string. Another device can open <strong>Pay by Code</strong> and scan
         it (Chrome) or paste the copied line. QR refreshes every 45s like a rotating checkout token.
       </Typography>
 
@@ -69,7 +69,7 @@ export function ScanReceiveQrPage() {
           Receiving as: <strong>{email || 'guest (sign in for your email in the payload)'}</strong>
         </Typography>
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
-          <DemoQrImage value={rawLine} size={256} label="Demo receive payment QR" />
+          <DemoQrImage value={rawLine} size={256} label="Receive payment QR" />
         </Box>
         <Stack direction="row" spacing={1} justifyContent="center" sx={{ mt: 2 }} flexWrap="wrap">
           <Button startIcon={<ContentCopyIcon />} variant="outlined" onClick={copyPayload} sx={{ fontWeight: 750 }}>
@@ -82,7 +82,7 @@ export function ScanReceiveQrPage() {
       </Card>
 
       <Alert severity="success" variant="outlined">
-        <strong>Demo tip:</strong> open <RouterLink to={`${pathPrefix}/scan/pay-code`}>Pay by Code</RouterLink> on a second
+        <strong>Tip:</strong> open <RouterLink to={`${pathPrefix}/scan/pay-code`}>Pay by Code</RouterLink> on a second
         window, use the <strong>Scan</strong> tab, and point it at this QR (or paste the copied line under Enter code).
       </Alert>
 

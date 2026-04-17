@@ -102,8 +102,8 @@ export function NotificationsPage() {
         <Card variant="outlined" sx={{ borderRadius: 3 }}>
           {items.length === 0 && !error ? (
             <Typography color="text.secondary" sx={{ p: 3 }}>
-              No notifications yet. When you place orders or receive pickup codes, they will appear here (order and payment
-              updates are also emailed).
+              No notifications yet. When you place orders or receive pickup codes, they will appear here when you are signed
+              in. Depending on your device channel in Settings, you may also get email for checkout and payment steps.
             </Typography>
           ) : (
             <List disablePadding>

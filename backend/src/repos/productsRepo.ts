@@ -16,6 +16,7 @@ interface ProductRow {
   categoryName: string | null
   brandSlug: string | null
   brandName: string | null
+  productIsActive: number | boolean
   variantId: string
   sku: string
   variantName: string
@@ -41,6 +42,7 @@ function groupProducts(rows: ProductRow[]): ProductDto[] {
         brandSlug: r.brandSlug?.trim() ? r.brandSlug.trim() : null,
         brandName: r.brandName?.trim() ? r.brandName.trim() : null,
         imageUrl: r.imageUrl,
+        isActive: Boolean(r.productIsActive ?? true),
         variants: [],
       }
       map.set(r.productId, p)
@@ -69,6 +71,7 @@ async function listProductsQuery(
   pool: ConnectionPool,
   opts: ListProductsOptions | undefined,
   includeBrandColumns: boolean,
+  adminCatalogue: boolean,
 ): Promise<ProductDto[]> {
   const req = pool.request()
   const search = opts?.search
@@ -92,6 +95,7 @@ async function listProductsQuery(
       c.slug AS categorySlug,
       c.name AS categoryName,
       ${brandSelect}
+      p.is_active AS productIsActive,
       CAST(v.id AS NVARCHAR(36)) AS variantId,
       v.sku,
       v.name AS variantName,
@@ -104,7 +108,7 @@ async function listProductsQuery(
     FROM dbo.products p
     LEFT JOIN dbo.categories c ON c.id = p.category_id
     INNER JOIN dbo.product_variants v ON v.product_id = p.id
-    WHERE p.is_active = 1
+    WHERE ${adminCatalogue ? '1 = 1' : 'p.is_active = 1'}
   `
   if (search && search.trim()) {
     sql += ` AND (p.name LIKE @q OR p.slug LIKE @q OR v.sku LIKE @q)`
@@ -131,10 +135,19 @@ async function listProductsQuery(
 
 export async function listProducts(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
   try {
-    return await listProductsQuery(pool, opts, true)
+    return await listProductsQuery(pool, opts, true, false)
   } catch (e) {
     if (!isMissingBrandColumnError(e)) throw e
-    return listProductsQuery(pool, opts, false)
+    return listProductsQuery(pool, opts, false, false)
+  }
+}
+
+export async function listProductsAdmin(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
+  try {
+    return await listProductsQuery(pool, opts, true, true)
+  } catch (e) {
+    if (!isMissingBrandColumnError(e)) throw e
+    return listProductsQuery(pool, opts, false, true)
   }
 }
 
@@ -160,6 +173,7 @@ async function getProductBySlugQuery(
       c.slug AS categorySlug,
       c.name AS categoryName,
       ${brandSelect}
+      p.is_active AS productIsActive,
       CAST(v.id AS NVARCHAR(36)) AS variantId,
       v.sku,
       v.name AS variantName,
@@ -203,6 +217,7 @@ export async function createProductSimple(
     priceCents: number
     currency: string
     initialStock: number
+    imageUrl?: string | null
   },
 ): Promise<{ productId: string; variantId: string }> {
   const r1 = pool.request()
@@ -265,5 +280,155 @@ export async function createProductSimple(
     INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity) VALUES (@variantId, @warehouseId, @qty)
   `)
 
+  const img = input.imageUrl?.trim()
+  if (img) {
+    const r4 = pool.request()
+    r4.input('productId', productId)
+    r4.input('url', img.slice(0, 2000))
+    await r4.query(`
+      INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES (@productId, @url, 0)
+    `)
+  }
+
   return { productId, variantId }
+}
+
+export async function insertProductImage(
+  pool: ConnectionPool,
+  productId: string,
+  url: string,
+  sortOrder: number,
+): Promise<void> {
+  const u = url.trim().slice(0, 2000)
+  if (!u) {
+    throw new Error('url required')
+  }
+  const so = Number.isFinite(sortOrder) ? Math.floor(sortOrder) : 0
+  await pool.request().input('pid', productId).input('url', u).input('so', so).query(`
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES (@pid, @url, @so)
+  `)
+}
+
+export async function updateProductAdmin(
+  pool: ConnectionPool,
+  productId: string,
+  patch: {
+    name?: string
+    slug?: string
+    description?: string | null
+    isActive?: boolean
+    categoryId?: string | null
+  },
+): Promise<void> {
+  const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k)
+  if (!has('name') && !has('slug') && !has('description') && !has('isActive') && !has('categoryId')) {
+    throw new Error('No fields to update')
+  }
+
+  const tx = pool.transaction()
+  await tx.begin()
+  try {
+    const chk = await tx.request().input('id', productId).query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.products WHERE id = @id`)
+    if (Number(chk.recordset[0]?.c ?? 0) === 0) {
+      throw new Error('Product not found')
+    }
+
+    if (patch.name !== undefined) {
+      const v = patch.name.trim()
+      if (!v) {
+        throw new Error('name cannot be empty')
+      }
+      await tx.request().input('id', productId).input('name', v).query(`UPDATE dbo.products SET name = @name WHERE id = @id`)
+    }
+    if (patch.slug !== undefined) {
+      const v = patch.slug.trim()
+      if (!v) {
+        throw new Error('slug cannot be empty')
+      }
+      await tx.request().input('id', productId).input('slug', v).query(`UPDATE dbo.products SET slug = @slug WHERE id = @id`)
+    }
+    if (patch.description !== undefined) {
+      await tx
+        .request()
+        .input('id', productId)
+        .input('description', patch.description)
+        .query(`UPDATE dbo.products SET description = @description WHERE id = @id`)
+    }
+    if (patch.isActive !== undefined) {
+      await tx
+        .request()
+        .input('id', productId)
+        .input('active', patch.isActive ? 1 : 0)
+        .query(`UPDATE dbo.products SET is_active = @active WHERE id = @id`)
+    }
+    if (patch.categoryId !== undefined) {
+      await tx
+        .request()
+        .input('id', productId)
+        .input('categoryId', patch.categoryId)
+        .query(`UPDATE dbo.products SET category_id = @categoryId WHERE id = @id`)
+    }
+    await tx.commit()
+  } catch (e) {
+    await tx.rollback()
+    throw e
+  }
+}
+
+export async function updateVariantAdmin(
+  pool: ConnectionPool,
+  productId: string,
+  variantId: string,
+  patch: { sku?: string; variantName?: string; priceCents?: number; currency?: string },
+): Promise<void> {
+  if (Object.keys(patch).length === 0) {
+    throw new Error('No fields to update')
+  }
+  const tx = pool.transaction()
+  await tx.begin()
+  try {
+    const own = await tx
+      .request()
+      .input('vid', variantId)
+      .input('pid', productId)
+      .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_variants WHERE id = @vid AND product_id = @pid`)
+    if (Number(own.recordset[0]?.c ?? 0) === 0) {
+      throw new Error('Variant not found for product')
+    }
+    if (patch.sku !== undefined) {
+      const v = patch.sku.trim()
+      if (!v) {
+        throw new Error('sku cannot be empty')
+      }
+      await tx.request().input('vid', variantId).input('sku', v).query(`UPDATE dbo.product_variants SET sku = @sku WHERE id = @vid`)
+    }
+    if (patch.variantName !== undefined) {
+      const v = patch.variantName.trim()
+      if (!v) {
+        throw new Error('variantName cannot be empty')
+      }
+      await tx.request().input('vid', variantId).input('nm', v).query(`UPDATE dbo.product_variants SET name = @nm WHERE id = @vid`)
+    }
+    if (patch.priceCents !== undefined) {
+      if (!Number.isFinite(patch.priceCents) || patch.priceCents < 0 || !Number.isInteger(patch.priceCents)) {
+        throw new Error('priceCents must be a non-negative integer')
+      }
+      await tx
+        .request()
+        .input('vid', variantId)
+        .input('pc', patch.priceCents)
+        .query(`UPDATE dbo.product_variants SET price_cents = @pc WHERE id = @vid`)
+    }
+    if (patch.currency !== undefined) {
+      const c = patch.currency.trim().slice(0, 3).toUpperCase()
+      if (c.length !== 3) {
+        throw new Error('currency must be a 3-letter code')
+      }
+      await tx.request().input('vid', variantId).input('cur', c).query(`UPDATE dbo.product_variants SET currency = @cur WHERE id = @vid`)
+    }
+    await tx.commit()
+  } catch (e) {
+    await tx.rollback()
+    throw e
+  }
 }

@@ -1,63 +1,115 @@
 import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { optionalAuth, requireAuth, requireRole } from '../../middleware/auth.js'
+import {
+  approveReturnCase,
+  completeReturnCaseRefund,
+  createReturnCase,
+  getReturnCaseAdmin,
+  listReturnCasesAdmin,
+  receiveReturnCase,
+  rejectReturnCase,
+  returnCaseAnalytics,
+} from '../../services/returnService.js'
 
 export const returnsRouter = Router()
 
+function guestEmailFromBody(req: { body?: unknown }): string {
+  const b = req.body && typeof (req.body as { email?: unknown }).email === 'string' ? (req.body as { email: string }).email : ''
+  return b.trim().toLowerCase()
+}
+
+type ReturnLineBody = { productId?: unknown; variantId?: unknown; quantity?: unknown }
+
+function parseReturnLines(body: unknown): { productId: string; variantId: string; quantity: number }[] {
+  if (!body || typeof body !== 'object') return []
+  const raw = (body as { lines?: unknown }).lines
+  if (!Array.isArray(raw)) return []
+  const out: { productId: string; variantId: string; quantity: number }[] = []
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue
+    const r = row as ReturnLineBody
+    const productId = typeof r.productId === 'string' ? r.productId.trim() : ''
+    const variantId = typeof r.variantId === 'string' ? r.variantId.trim() : ''
+    const quantity = typeof r.quantity === 'number' ? r.quantity : Number(r.quantity)
+    if (!productId || !variantId) continue
+    if (!Number.isFinite(quantity) || quantity < 1) continue
+    out.push({ productId, variantId, quantity: Math.floor(quantity) })
+  }
+  return out
+}
+
+function parseImageUrls(body: unknown): string[] | null {
+  if (!body || typeof body !== 'object') return null
+  const raw = (body as { imageUrls?: unknown }).imageUrls
+  if (!Array.isArray(raw)) return null
+  const urls: string[] = []
+  for (const u of raw.slice(0, 8)) {
+    if (typeof u === 'string' && u.trim().length > 0 && u.length < 2000) urls.push(u.trim())
+  }
+  return urls.length ? urls : null
+}
+
+/** Customer / guest: structured return request (no inventory change until admin marks received). */
 returnsRouter.post('/request', optionalAuth, async (req, res) => {
   const pool = await getSqlPool()
   if (!pool) {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
-  const orderId = typeof req.body?.orderId === 'string' ? req.body.orderId : ''
-  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : ''
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
-  if (!orderId || !reason) {
-    res.status(400).json({ error: 'orderId and reason required' })
-    return
-  }
-
-  const o = await pool
-    .request()
-    .input('oid', orderId)
-    .query<{ status: string; user_id: string | null; guest_email: string | null }>(
-      `SELECT status, CAST(user_id AS NVARCHAR(36)) AS user_id, guest_email FROM dbo.orders WHERE id = @oid`,
-    )
-  const row = o.recordset[0]
-  if (!row || row.status !== 'delivered') {
-    res.status(400).json({ error: 'Returns only allowed on delivered orders' })
-    return
-  }
-
   const u = req.user
-  if (u) {
-    if (row.user_id !== u.sub && !['admin', 'ops', 'fulfillment'].includes(u.role)) {
-      res.status(403).json({ error: 'Forbidden' })
-      return
-    }
-  } else {
-    if (!row.guest_email || row.guest_email.toLowerCase() !== email) {
-      res.status(403).json({ error: 'Guest email must match order' })
-      return
-    }
+  const orderId = typeof req.body?.orderId === 'string' ? req.body.orderId.trim() : ''
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason : ''
+  const lines = parseReturnLines(req.body)
+  const imageUrls = parseImageUrls(req.body)
+  const guestEmail = guestEmailFromBody(req)
+
+  if (!u && !guestEmail) {
+    res.status(400).json({ error: 'email is required on the request body for guest return requests' })
+    return
   }
 
-  await pool
-    .request()
-    .input('oid', orderId)
-    .input('uid', u?.sub ?? null)
-    .input('em', row.guest_email)
-    .input('reason', reason)
-    .query(`
-      INSERT INTO dbo.return_requests (order_id, user_id, guest_email, reason, status)
-      VALUES (@oid, @uid, @em, @reason, N'pending')
-    `)
-  res.status(201).json({ ok: true })
+  if (!orderId || !reason.trim()) {
+    res.status(400).json({ error: 'orderId and reason are required' })
+    return
+  }
+  if (lines.length === 0) {
+    res.status(400).json({ error: 'lines[] is required with productId, variantId, and quantity per row' })
+    return
+  }
+
+  try {
+    const { returnCaseId } = await createReturnCase(pool, {
+      orderId,
+      userId: u?.sub ?? null,
+      guestEmailNorm: u ? null : guestEmail,
+      reason: reason.trim(),
+      lines,
+      imageUrls,
+    })
+    res.status(201).json({ ok: true, returnCaseId })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Failed'
+    if (msg === 'Forbidden' || msg === 'Guest email must match the order') {
+      res.status(403).json({ error: msg })
+      return
+    }
+    res.status(400).json({ error: msg })
+  }
 })
 
 export const adminReturnsRouter = Router()
-adminReturnsRouter.use(requireAuth, requireRole('admin', 'ops'))
+adminReturnsRouter.use(requireAuth, requireRole('admin', 'ops', 'fulfillment'))
+
+adminReturnsRouter.get('/analytics', async (_req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const counts = await returnCaseAnalytics(pool)
+  res.json({ counts })
+})
 
 adminReturnsRouter.get('/', async (_req, res) => {
   const pool = await getSqlPool()
@@ -65,17 +117,22 @@ adminReturnsRouter.get('/', async (_req, res) => {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
-  const r = await pool.request().query<{
-    id: string
-    order_id: string
-    reason: string
-    status: string
-    created_at: Date
-  }>(`
-    SELECT CAST(id AS NVARCHAR(36)) AS id, CAST(order_id AS NVARCHAR(36)) AS order_id, reason, status, created_at
-    FROM dbo.return_requests ORDER BY created_at DESC
-  `)
-  res.json({ items: r.recordset })
+  const items = await listReturnCasesAdmin(pool)
+  res.json({ items })
+})
+
+adminReturnsRouter.get('/:id', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const detail = await getReturnCaseAdmin(pool, String(req.params.id))
+  if (!detail) {
+    res.status(404).json({ error: 'Not found' })
+    return
+  }
+  res.json(detail)
 })
 
 adminReturnsRouter.post('/:id/approve', async (req, res) => {
@@ -84,57 +141,58 @@ adminReturnsRouter.post('/:id/approve', async (req, res) => {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
-  const id = req.params.id
-  const rr = await pool
-    .request()
-    .input('id', id)
-    .query<{ order_id: string; status: string }>(`SELECT CAST(order_id AS NVARCHAR(36)) AS order_id, status FROM dbo.return_requests WHERE id = @id`)
-  const row = rr.recordset[0]
-  if (!row || row.status !== 'pending') {
-    res.status(400).json({ error: 'Invalid return request' })
+  try {
+    await approveReturnCase(pool, String(req.params.id))
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
+  }
+})
+
+adminReturnsRouter.post('/:id/reject', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
     return
   }
+  const rejectionReason =
+    typeof req.body?.reason === 'string'
+      ? req.body.reason
+      : typeof req.body?.rejectionReason === 'string'
+        ? req.body.rejectionReason
+        : ''
+  try {
+    await rejectReturnCase(pool, String(req.params.id), rejectionReason)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
+  }
+})
 
-  const lines = await pool
-    .request()
-    .input('oid', row.order_id)
-    .query<{ variant_id: string; quantity: number }>(
-      `SELECT CAST(variant_id AS NVARCHAR(36)) AS variant_id, quantity FROM dbo.order_lines WHERE order_id = @oid`,
-    )
-
-  const wh = await pool.request().query<{ id: string }>(`SELECT TOP 1 CAST(id AS NVARCHAR(36)) AS id FROM dbo.warehouses ORDER BY code`)
-  const wid = wh.recordset[0]?.id
-  if (!wid) {
-    res.status(500).json({ error: 'No warehouse' })
+adminReturnsRouter.post('/:id/receive', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
     return
   }
-
-  for (const l of lines.recordset) {
-    await pool
-      .request()
-      .input('vid', l.variant_id)
-      .input('wid', wid)
-      .input('qty', l.quantity)
-      .input('oid', row.order_id)
-      .query(`
-        UPDATE dbo.inventory_quantity SET quantity = quantity + @qty WHERE variant_id = @vid AND warehouse_id = @wid
-      `)
-    await pool
-      .request()
-      .input('vid', l.variant_id)
-      .input('wid', wid)
-      .input('qty', l.quantity)
-      .input('oid', row.order_id)
-      .query(`
-        INSERT INTO dbo.stock_movements (variant_id, warehouse_id, delta_qty, reason, reference_type, reference_id)
-        VALUES (@vid, @wid, @qty, N'return_restock', N'order', @oid)
-      `)
+  try {
+    await receiveReturnCase(pool, String(req.params.id))
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
   }
+})
 
-  await pool
-    .request()
-    .input('id', id)
-    .query(`UPDATE dbo.return_requests SET status = N'approved', resolved_at = SYSUTCDATETIME() WHERE id = @id`)
-
-  res.json({ ok: true })
+adminReturnsRouter.post('/:id/complete-refund', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  try {
+    const result = await completeReturnCaseRefund(pool, String(req.params.id))
+    res.json({ ok: true, ...result })
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
+  }
 })

@@ -28,5 +28,15 @@ export const SURFACE_SHADOW_HOVER = '0 14px 34px rgba(15, 23, 42, 0.09)'
 /** Home promo strip — blue gradient (PayToday store banner). */
 export const STORE_HERO_BANNER_GRADIENT = 'linear-gradient(125deg, #1D4ED8 0%, #2563EB 38%, #60A5FA 100%)'
 
+/** Store homepage: centered content rail (bank-style dashboard width). */
+export const STORE_HOME_RAIL_MAX_WIDTH = 1000
+
+/** Vertical gap between major homepage sections (theme spacing units). */
+export const STORE_HOME_SECTION_GAP = 3.25
+
+/** Hero carousel bottom scrim — lighter than full cinema overlay. */
+export const STORE_HOME_HERO_SCRIM =
+  'linear-gradient(to top, rgba(15,23,42,0.78) 0%, rgba(15,23,42,0.28) 45%, rgba(15,23,42,0.06) 100%)'
+
 /** Light page backdrop behind centered cards (sign-in). */
 export const SIGNIN_PAGE_BACKDROP = 'linear-gradient(165deg, #EEF2FF 0%, #F5F3FF 40%, #F8FAFC 100%)'

@@ -1,26 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom'
-import {
-  Alert,
-  Card,
-  CardActionArea,
-  CardContent,
-  Chip,
-  InputAdornment,
-  MenuItem,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material'
+import { Alert, Card, CardActionArea, CardContent, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material'
 import Grid from '@mui/material/Grid2'
-import SearchIcon from '@mui/icons-material/Search'
 import type { ProductDto, ProductListResponse } from '../../types/catalogue'
 import type { StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
 import { apiUrl, readApiError } from '../../lib/apiOrigin'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { friendlyFetchError } from '../../lib/fetchErrors'
 import { formatMoney } from '../../lib/money'
-import { storefrontPrimaryVariantStock } from '../../lib/productStock'
+import { storefrontVariantPriceRange, totalListedStock } from '../../lib/productStock'
 import { ProductImage } from '../../components/store/ProductImage'
 import { DEMO_STORES, getDemoStoreBySlug, getDemoStoreSlugForProduct, getDemoStoreForProduct } from '../../data/demoStores'
 
@@ -43,7 +31,7 @@ export function ShopPage() {
 
   const q = searchParams.get('q') ?? ''
   const categorySlug = searchParams.get('category') ?? ''
-  /** Demo retailer filter (`store`); `brand` kept for older links. */
+  /** Retailer filter (`store`); `brand` kept for older links. */
   const storeSlug = (searchParams.get('store') ?? searchParams.get('brand') ?? '').trim().toLowerCase()
   const sort = (searchParams.get('sort') ?? 'name') as SortKey
 
@@ -54,12 +42,6 @@ export function ShopPage() {
   const [sqlWarning, setSqlWarning] = useState<string | null>(null)
   const [catalogTick, setCatalogTick] = useState(0)
   const productsFetchSeq = useRef(0)
-
-  const [qInput, setQInput] = useState(q)
-
-  useEffect(() => {
-    setQInput(q)
-  }, [q])
 
   useEffect(() => {
     let cancelled = false
@@ -104,7 +86,7 @@ export function ShopPage() {
         setItems(data.items ?? [])
         if (data.catalogFallbackReason === 'sql_unreachable') {
           const parts = [
-            'SQL is configured but the API cannot connect — showing demo products only. Open http://localhost:4000/api/health for details.',
+            'SQL is configured but the API cannot connect — showing cached catalogue data only. Open http://localhost:4000/api/health for details.',
           ]
           if (data.sqlConnectHint) parts.push(data.sqlConnectHint)
           setSqlWarning(parts.join(' '))
@@ -150,14 +132,6 @@ export function ShopPage() {
     setSearchParams(nextParams, { replace: true })
   }
 
-  function submitSearch() {
-    const nextParams = new URLSearchParams(searchParams)
-    const t = qInput.trim()
-    if (t) nextParams.set('q', t)
-    else nextParams.delete('q')
-    setSearchParams(nextParams, { replace: true })
-  }
-
   const categoryChips = useMemo(() => {
     const list = categories.length ? categories : []
     return list
@@ -190,7 +164,7 @@ export function ShopPage() {
           Shop
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Search, browse by category, peek into demo retailer shelves, and sort by price or name
+          Browse by category, filter by retailer, and sort by price or name. Use the search bar above.
         </Typography>
       </Stack>
 
@@ -244,33 +218,6 @@ export function ShopPage() {
           </Stack>
         </Stack>
       ) : null}
-
-      <TextField
-        value={qInput}
-        onChange={(e) => setQInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            submitSearch()
-          }
-        }}
-        fullWidth
-        size="medium"
-        placeholder="Search products…"
-        InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <SearchIcon sx={{ color: 'text.secondary' }} />
-            </InputAdornment>
-          ),
-        }}
-        sx={{
-          '& .MuiOutlinedInput-root': {
-            borderRadius: 3,
-            bgcolor: 'background.paper',
-          },
-        }}
-      />
 
       <TextField select label="Sort" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} size="small" sx={{ maxWidth: 220 }}>
         <MenuItem value="name">Name</MenuItem>
@@ -328,9 +275,15 @@ export function ShopPage() {
       <Grid container spacing={2}>
         {displayItems.map((p) => {
           const v0 = p.variants[0]
-          const price = v0 ? formatMoney(v0.priceCents, v0.currency) : '—'
+          const range = storefrontVariantPriceRange(p)
+          const price =
+            range && p.variants.length > 1 && range.min !== range.max
+              ? `From ${formatMoney(range.min, range.currency)}`
+              : v0
+                ? formatMoney(v0.priceCents, v0.currency)
+                : '—'
           const demoStore = getDemoStoreForProduct(p.slug)
-          const stockTotal = storefrontPrimaryVariantStock(p)
+          const stockTotal = totalListedStock(p)
           return (
             <Grid key={p.id} size={{ xs: 6, sm: 6, md: 4 }}>
               <Card

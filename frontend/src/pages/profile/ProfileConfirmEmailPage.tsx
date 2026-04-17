@@ -9,7 +9,7 @@ export function ProfileConfirmEmailPage() {
         Please confirm your new email
       </Typography>
       <Typography color="text.secondary" variant="body2">
-        Enter the 4-digit code sent to your email address (demo: any code).
+        Enter the 4-digit code sent to your email address.
       </Typography>
       <Stack direction="row" spacing={1} justifyContent="center">
         {[0, 1, 2, 3].map((i) => (

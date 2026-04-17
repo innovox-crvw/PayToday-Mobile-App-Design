@@ -21,4 +21,6 @@ export interface ProductDto {
   brandName: string | null
   imageUrl: string | null
   variants: ProductVariantDto[]
+  /** Present on admin catalogue responses. */
+  isActive?: boolean
 }

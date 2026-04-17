@@ -28,7 +28,7 @@ import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import LocalGroceryStoreOutlinedIcon from '@mui/icons-material/LocalGroceryStoreOutlined'
 import type { StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
 import { apiUrl } from '../../lib/apiOrigin'
-import { getRecentVisits, recentVisitLink, type RecentVisitRecord } from '../../lib/recentVisits'
+import { getRecentVisits, MAX_RECENT_VISIT_ITEMS, recentVisitLink, type RecentVisitRecord } from '../../lib/recentVisits'
 import { SurfaceSection } from '../../components/page/SurfaceSection'
 import {
   CHROME_SHADOW_SOFT,
@@ -36,7 +36,6 @@ import {
   SURFACE_BORDER,
   SURFACE_SHADOW,
   SURFACE_SHADOW_HOVER,
-  STORE_HERO_BANNER_GRADIENT,
 } from '../../theme/branding'
 import CardGiftcardOutlinedIcon from '@mui/icons-material/CardGiftcardOutlined'
 import UmbrellaOutlinedIcon from '@mui/icons-material/UmbrellaOutlined'
@@ -101,30 +100,31 @@ function resolveStoreLink(linkPath: string | null | undefined, pathPrefix: strin
 
 function categoryIcon(slug: string | null | undefined): ReactNode {
   const s = (slug ?? '').toLowerCase()
-  if (s === 'electronics') return <PhoneIphoneOutlinedIcon sx={{ fontSize: 36, color: 'primary.main' }} />
-  if (s === 'fashion') return <CheckroomOutlinedIcon sx={{ fontSize: 36, color: 'primary.main' }} />
-  if (s === 'home') return <HomeOutlinedIcon sx={{ fontSize: 36, color: 'primary.main' }} />
-  if (s === 'groceries') return <LocalGroceryStoreOutlinedIcon sx={{ fontSize: 36, color: 'primary.main' }} />
-  return <HomeOutlinedIcon sx={{ fontSize: 36, color: 'primary.main' }} />
+  const sx = { fontSize: 36, color: 'primary.main' } as const
+  if (s === 'electronics') return <PhoneIphoneOutlinedIcon sx={sx} />
+  if (s === 'fashion') return <CheckroomOutlinedIcon sx={sx} />
+  if (s === 'home') return <HomeOutlinedIcon sx={sx} />
+  if (s === 'groceries') return <LocalGroceryStoreOutlinedIcon sx={sx} />
+  return <HomeOutlinedIcon sx={sx} />
 }
 
 const services = [
-  { key: 'classifieds', label: 'Classifieds', icon: <NoteAltOutlinedIcon sx={{ fontSize: 48, color: '#F87171' }} /> },
-  { key: 'parking', label: 'Parking', icon: <DirectionsCarOutlinedIcon sx={{ fontSize: 48, color: '#93C5FD' }} /> },
+  { key: 'classifieds', label: 'Classifieds', icon: <NoteAltOutlinedIcon sx={{ color: '#F87171' }} /> },
+  { key: 'parking', label: 'Parking', icon: <DirectionsCarOutlinedIcon sx={{ color: '#93C5FD' }} /> },
   {
     key: 'vouchers',
     label: 'Vouchers',
-    icon: <CardGiftcardOutlinedIcon sx={{ fontSize: 48, color: '#FCD34D' }} />,
+    icon: <CardGiftcardOutlinedIcon sx={{ color: '#FCD34D' }} />,
   },
   {
     key: 'insurance',
     label: 'Insurance',
-    icon: <UmbrellaOutlinedIcon sx={{ fontSize: 48, color: '#C4B5FD' }} />,
+    icon: <UmbrellaOutlinedIcon sx={{ color: '#C4B5FD' }} />,
   },
   {
     key: 'store',
     label: 'Store',
-    icon: <ShoppingCartOutlinedIcon sx={{ fontSize: 48, color: '#fff' }} />,
+    icon: <ShoppingCartOutlinedIcon sx={{ color: '#5B21D6' }} />,
   },
 ]
 
@@ -151,7 +151,7 @@ function PayTodayLogo({ to }: { to: string }) {
           border: '2px solid rgba(255,255,255,0.95)',
           px: 1,
           py: 0.25,
-          borderRadius: 1,
+          borderRadius: 0.5,
           letterSpacing: 3,
         }}
       >
@@ -196,7 +196,7 @@ function RecentShortcutChip({ to, label }: { to: string; label: string }) {
           sx={{
             width: 64,
             height: 64,
-            borderRadius: '50%',
+            borderRadius: 1,
             background: recentShortcutAccent(label),
             color: '#fff',
             display: 'flex',
@@ -230,6 +230,18 @@ function RecentShortcutChip({ to, label }: { to: string; label: string }) {
   )
 }
 
+/** Hide native scrollbar; row still scrolls with touch/mouse wheel on the tiles. */
+function hideHorizontalScrollbar() {
+  return {
+    scrollbarWidth: 'none' as const,
+    msOverflowStyle: 'none' as const,
+    '&::-webkit-scrollbar': {
+      display: 'none',
+      height: 0,
+    },
+  }
+}
+
 function BrandChip({ b, to }: { b: Brand; to: string }) {
   return (
     <Box
@@ -239,7 +251,7 @@ function BrandChip({ b, to }: { b: Brand; to: string }) {
         flexShrink: 0,
         width: 64,
         height: 64,
-        borderRadius: '50%',
+        borderRadius: 1,
         background: b.bg,
         color: b.color ?? '#fff',
         display: 'flex',
@@ -412,16 +424,49 @@ export function StoreHomePage() {
     })()
   }, [])
 
-  const scrollRowSx = useMemo(
+  /** Popular + categories + recent: horizontal strips; `minWidth: 0` so flex doesn’t swallow overflow on mobile. */
+  const homeHorizontalStripSx = useMemo(
     () => ({
       display: 'flex',
+      flexDirection: 'row',
+      flexWrap: 'nowrap',
       gap: 1.5,
-      overflowX: 'auto' as const,
-      pb: 0.5,
+      width: '100%',
+      maxWidth: '100%',
+      minWidth: 0,
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      pb: 1,
       mx: { xs: -0.5, sm: 0 },
       px: { xs: 0.5, sm: 0 },
-      scrollbarWidth: 'none' as const,
-      '&::-webkit-scrollbar': { display: 'none' },
+      WebkitOverflowScrolling: 'touch',
+      overscrollBehaviorX: 'contain',
+      scrollSnapType: reduceMotion ? ('none' as const) : ('x proximity' as const),
+      ...hideHorizontalScrollbar(),
+    }),
+    [reduceMotion],
+  )
+
+  /** Recent + Services: below `md`, 2-column grid; `md+` horizontal strip (scrollbar hidden). */
+  const homeSectionTilesSx = useMemo(
+    () => ({
+      display: { xs: 'grid', md: 'flex' },
+      gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))' },
+      gap: { xs: 2, md: 1.5 },
+      overflowX: { xs: 'visible', md: 'auto' },
+      overflowY: { md: 'visible' },
+      pb: { xs: 0, md: 0.5 },
+      mx: { xs: 0, md: -0.5 },
+      px: { xs: 0, md: 0.5 },
+      '@media (min-width: 900px)': {
+        flexWrap: 'nowrap',
+        width: '100%',
+        maxWidth: '100%',
+        minWidth: 0,
+        WebkitOverflowScrolling: 'touch',
+        overscrollBehaviorX: 'contain',
+        ...hideHorizontalScrollbar(),
+      },
     }),
     [],
   )
@@ -446,7 +491,9 @@ export function StoreHomePage() {
         gap: 1,
         px: 2,
         py: 1.25,
-        borderRadius: 4,
+        borderRadius: 1,
+        minWidth: 0,
+        width: 1,
         ...(isMobile
           ? {
               bgcolor: 'rgba(255,255,255,0.22)',
@@ -456,6 +503,7 @@ export function StoreHomePage() {
               bgcolor: 'background.paper',
               border: 1,
               borderColor: 'divider',
+              boxShadow: SURFACE_SHADOW,
             }),
       }}
     >
@@ -466,6 +514,7 @@ export function StoreHomePage() {
         onChange={(e) => setSearch(e.target.value)}
         sx={{
           flex: 1,
+          minWidth: 0,
           color: isMobile ? '#fff' : 'text.primary',
           '& input::placeholder': {
             color: isMobile ? 'rgba(255,255,255,0.75)' : 'text.secondary',
@@ -477,43 +526,59 @@ export function StoreHomePage() {
   )
 
   return (
-    <Stack spacing={0} sx={{ pb: 2 }}>
+    <Stack spacing={0} sx={{ pb: 2, width: 1, minWidth: 0 }}>
       {isMobile ? (
         <Box
           sx={{
             background: HEADER_CHROME_GRADIENT,
             color: '#fff',
-            borderRadius: '0 0 24px 24px',
-            pt: 2,
-            pb: 3,
-            px: 2,
-            mx: -2,
+            borderRadius: { xs: '0 0 6px 6px', sm: '0 0 8px 8px' },
+            pt: { xs: 1.75, sm: 2 },
+            pb: { xs: 2.5, sm: 3 },
+            px: { xs: 2, sm: 2.5 },
+            mx: { xs: -2, sm: -3 },
             boxShadow: CHROME_SHADOW_SOFT,
           }}
         >
-          <Stack spacing={2}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Stack spacing={{ xs: 1.75, sm: 2 }} sx={{ minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minWidth: 0 }}>
               <IconButton
                 component={RouterLink}
                 to={profilePath}
-                sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.35)' }}
+                sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.35)', flexShrink: 0 }}
                 aria-label="Profile"
               >
                 <PersonOutlineIcon />
               </IconButton>
-              <PayTodayLogo to={pathPrefix || '/'} />
-              <IconButton component={RouterLink} to={notificationsPath} sx={{ color: '#fff' }} aria-label="Notifications">
+              <Box sx={{ minWidth: 0, flex: 1, display: 'flex', justifyContent: 'center' }}>
+                <PayTodayLogo to={pathPrefix || '/'} />
+              </Box>
+              <IconButton
+                component={RouterLink}
+                to={notificationsPath}
+                sx={{ color: '#fff', flexShrink: 0 }}
+                aria-label="Notifications"
+              >
                 <Badge color="error" variant="dot">
                   <NotificationsNoneIcon />
                 </Badge>
               </IconButton>
             </Box>
-            <Stack spacing={0.25}>
-              <Typography component="h1" sx={{ fontWeight: 800, fontSize: '1.35rem', letterSpacing: -0.3, lineHeight: 1.25 }}>
+            <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+              <Typography
+                component="h1"
+                sx={{
+                  fontWeight: 800,
+                  fontSize: { xs: 'clamp(1.1rem, 4.2vw, 1.35rem)', sm: '1.35rem' },
+                  letterSpacing: -0.3,
+                  lineHeight: 1.25,
+                  wordBreak: 'break-word',
+                }}
+              >
                 {welcomeTitle}
               </Typography>
               {welcomeSubtitle ? (
-                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.85)' }}>
+                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.85)', lineHeight: 1.45 }}>
                   {welcomeSubtitle}
                 </Typography>
               ) : null}
@@ -523,29 +588,14 @@ export function StoreHomePage() {
         </Box>
       ) : null}
 
-      <Stack spacing={{ xs: 3, md: 4 }} sx={{ pt: { xs: 3, md: 0 }, maxWidth: { md: 1120 }, mx: { md: 'auto' }, width: 1 }}>
-        {!isMobile ? (
-          <Box
-            sx={{
-              background: STORE_HERO_BANNER_GRADIENT,
-              borderRadius: 4,
-              px: { md: 3 },
-              py: { md: 3 },
-              color: '#fff',
-              boxShadow: '0 12px 40px rgba(37, 99, 235, 0.25)',
-            }}
-          >
-            <Typography variant="overline" sx={{ opacity: 0.92, letterSpacing: 2, fontWeight: 700 }}>
-              PayToday store
-            </Typography>
-            <Typography variant="h4" component="h1" fontWeight={800} letterSpacing={-0.5} sx={{ mt: 0.5 }}>
-              Shop products — pay with PayToday
-            </Typography>
-            <Typography variant="body1" sx={{ mt: 1, opacity: 0.95, maxWidth: 560 }}>
-              Browse DB-backed catalog items, then checkout on the secure PayToday gateway.
-            </Typography>
-          </Box>
-        ) : null}
+      <Stack
+        spacing={{ xs: 3, md: 4 }}
+        sx={{
+          pt: { xs: 3, md: 2 },
+          width: 1,
+          minWidth: 0,
+        }}
+      >
         {/* Hero carousel: placement images + horizontal slide */}
         <Stack spacing={1.5} alignItems="center">
           <Card
@@ -556,7 +606,7 @@ export function StoreHomePage() {
             sx={{
               position: 'relative',
               width: '100%',
-              borderRadius: 4,
+              borderRadius: 1,
               bgcolor: '#0f172a',
               boxShadow: '0 8px 32px rgba(15,23,42,0.12)',
               overflow: 'hidden',
@@ -621,7 +671,7 @@ export function StoreHomePage() {
                     sx={{
                       flex: `0 0 ${heroSlidePercent}%`,
                       width: `${heroSlidePercent}%`,
-                      minHeight: { xs: 200, sm: 240 },
+                      minHeight: { xs: 200, sm: 220, md: 240 },
                       position: 'relative',
                       display: 'block',
                       textDecoration: 'none',
@@ -680,13 +730,14 @@ export function StoreHomePage() {
                   if (e.key === 'ArrowRight') goHeroNext()
                 }}
                 sx={{
-                  borderRadius: 999,
-                  width: i === heroIndex ? 22 : 8,
-                  height: 8,
+                  borderRadius: 0.5,
+                  width: i === heroIndex ? 18 : 6,
+                  height: 6,
+                  minWidth: 6,
                   bgcolor: i === heroIndex ? 'primary.main' : 'action.disabledBackground',
                   cursor: 'pointer',
-                  transition: 'transform 0.2s, width 0.2s, background-color 0.2s',
-                  '&:hover': { transform: 'scale(1.12)' },
+                  transition: 'width 0.2s, background-color 0.2s',
+                  '&:hover': { opacity: 0.92 },
                   '&:focus-visible': { outline: (t) => `2px solid ${t.palette.primary.main}`, outlineOffset: 2 },
                 }}
               />
@@ -694,31 +745,77 @@ export function StoreHomePage() {
           </Box>
         </Stack>
 
+        <SurfaceSection title="Popular">
+          <Box role="region" aria-label="Popular brands — swipe left or right on the tiles to scroll" sx={homeHorizontalStripSx}>
+            {popularBrands.map((b) => (
+              <Box
+                key={`pop-${b.id}`}
+                sx={{
+                  flexShrink: 0,
+                  scrollSnapAlign: 'start',
+                  display: 'flex',
+                  justifyContent: 'center',
+                }}
+              >
+                <BrandChip b={b} to={shop} />
+              </Box>
+            ))}
+          </Box>
+        </SurfaceSection>
+
         {categories.length > 0 ? (
           <SurfaceSection title="Shop by category">
-            <Box sx={scrollRowSx}>
+            <Box role="region" aria-label="Categories — swipe left or right on the tiles to scroll" sx={homeHorizontalStripSx}>
               {categories.filter((c) => Boolean(c?.slug?.trim())).map((c) => (
-                <Box key={c.slug} sx={{ flexShrink: 0, width: 108, textAlign: 'center' }}>
+                <Box
+                  key={c.slug}
+                  sx={{
+                    flexShrink: 0,
+                    width: 108,
+                    scrollSnapAlign: 'start',
+                    textAlign: 'center',
+                  }}
+                >
                   <Card
                     component={RouterLink}
                     to={`${shop}?category=${encodeURIComponent(c.slug)}`}
                     elevation={0}
                     sx={{
-                      borderRadius: 3,
+                      borderRadius: 1,
                       border: 1,
                       borderColor: 'divider',
                       textDecoration: 'none',
-                      py: 2,
+                      height: 118,
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
+                      justifyContent: 'center',
                       gap: 1,
+                      width: 1,
+                      boxSizing: 'border-box',
+                      px: 0.5,
+                      py: 1,
                       transition: 'transform 0.15s',
                       '&:hover': { transform: 'translateY(-2px)' },
                     }}
                   >
                     {categoryIcon(c.slug)}
-                    <Typography sx={{ fontWeight: 700, fontSize: '0.8rem', px: 0.5, lineHeight: 1.2 }}>{c.name}</Typography>
+                    <Typography
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.8rem',
+                        px: 0.25,
+                        lineHeight: 1.2,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        wordBreak: 'break-word',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {c.name}
+                    </Typography>
                   </Card>
                 </Box>
               ))}
@@ -737,26 +834,33 @@ export function StoreHomePage() {
                 to={shop}
                 size="small"
                 variant="outlined"
-                sx={{ fontWeight: 700, borderRadius: 999 }}
+                sx={{ fontWeight: 700, borderRadius: 1 }}
               >
                 Browse store
               </Button>
             </Stack>
           ) : (
-            <Box sx={scrollRowSx}>
-              {recentVisits.map((r) => (
-                <RecentShortcutChip
+            <Box role="region" aria-label="Recent shortcuts — swipe left or right on the tiles to scroll" sx={homeHorizontalStripSx}>
+              {recentVisits.slice(0, MAX_RECENT_VISIT_ITEMS).map((r) => (
+                <Box
                   key={r.dedupeKey}
-                  to={recentVisitLink(r.relPath, pathPrefix)}
-                  label={r.label}
-                />
+                  sx={{
+                    flexShrink: 0,
+                    width: 76,
+                    scrollSnapAlign: 'start',
+                    display: 'flex',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <RecentShortcutChip to={recentVisitLink(r.relPath, pathPrefix)} label={r.label} />
+                </Box>
               ))}
             </Box>
           )}
         </SurfaceSection>
 
         <SurfaceSection title="Services">
-          <Box sx={scrollRowSx}>
+          <Box sx={homeSectionTilesSx}>
             {services.map((s) => {
               const to =
                 s.key === 'classifieds'
@@ -769,14 +873,22 @@ export function StoreHomePage() {
                         ? shop
                         : shop
               return (
-              <Box key={s.key} sx={{ flexShrink: 0, width: 132, textAlign: 'center' }}>
+              <Box
+                key={s.key}
+                sx={{
+                  width: { xs: '100%', md: 132 },
+                  minWidth: 0,
+                  flexShrink: { md: 0 },
+                  textAlign: 'center',
+                }}
+              >
                 <Card
                   component={RouterLink}
                   to={to}
                   elevation={0}
                   sx={{
-                    height: 118,
-                    borderRadius: 3,
+                    height: { xs: 108, md: 118 },
+                    borderRadius: 1,
                     bgcolor: 'background.paper',
                     border: `1px solid ${SURFACE_BORDER}`,
                     display: 'flex',
@@ -784,8 +896,11 @@ export function StoreHomePage() {
                     justifyContent: 'center',
                     textDecoration: 'none',
                     boxShadow: SURFACE_SHADOW,
+                    width: 1,
+                    boxSizing: 'border-box',
                     transition: 'transform 0.15s, box-shadow 0.15s',
                     '&:hover': { transform: 'translateY(-2px)', boxShadow: SURFACE_SHADOW_HOVER },
+                    '& .MuiSvgIcon-root': { fontSize: { xs: '2.5rem', md: '3rem' } },
                   }}
                 >
                   {s.icon}
@@ -794,14 +909,6 @@ export function StoreHomePage() {
               </Box>
               )
             })}
-          </Box>
-        </SurfaceSection>
-
-        <SurfaceSection title="Popular">
-          <Box sx={scrollRowSx}>
-            {popularBrands.map((b) => (
-              <BrandChip key={`pop-${b.id}`} b={b} to={shop} />
-            ))}
           </Box>
         </SurfaceSection>
 

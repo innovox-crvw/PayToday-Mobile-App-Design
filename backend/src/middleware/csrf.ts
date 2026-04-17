@@ -5,19 +5,49 @@ import { env } from '../config/env.js'
 const CSRF_COOKIE = 'pt_csrf'
 const CSRF_HEADER = 'x-csrf-token'
 
-function secureCookie(): boolean {
-  return env.nodeEnv === 'production' || env.cookieSameSite === 'none'
+function requestIsHttps(req: Request): boolean {
+  if (req.secure) return true
+  const xf = req.get('x-forwarded-proto')
+  if (!xf) return false
+  return xf.split(',')[0]?.trim() === 'https'
+}
+
+/**
+ * SameSite=None requires Secure; browsers drop the cookie on plain HTTP, which breaks mobile/LAN dev.
+ * Fall back to Lax + non-secure on HTTP so the double-submit cookie still sticks.
+ */
+function csrfCookieOptions(req: Request): {
+  httpOnly: boolean
+  sameSite: 'strict' | 'lax' | 'none'
+  secure: boolean
+  maxAge: number
+  path: string
+} {
+  const https = requestIsHttps(req)
+  let sameSite = env.cookieSameSite
+  let secure: boolean
+  if (sameSite === 'none') {
+    secure = https
+    if (!https) {
+      sameSite = 'lax'
+      secure = false
+    }
+  } else {
+    secure = env.nodeEnv === 'production' && https
+  }
+  return {
+    httpOnly: false,
+    sameSite,
+    secure,
+    maxAge: 12 * 60 * 60 * 1000,
+    path: '/',
+  }
 }
 
 /** Returns a new CSRF token and sets the double-submit cookie. */
-export function sendCsrfToken(_req: Request, res: Response): void {
+export function sendCsrfToken(req: Request, res: Response): void {
   const token = crypto.randomBytes(32).toString('hex')
-  res.cookie(CSRF_COOKIE, token, {
-    httpOnly: false,
-    sameSite: env.cookieSameSite,
-    secure: secureCookie(),
-    maxAge: 12 * 60 * 60 * 1000,
-  })
+  res.cookie(CSRF_COOKIE, token, csrfCookieOptions(req))
   res.json({ csrfToken: token })
 }
 

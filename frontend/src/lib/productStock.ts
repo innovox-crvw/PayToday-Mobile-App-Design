@@ -13,3 +13,16 @@ export function storefrontPrimaryVariantStock(product: ProductDto): number {
   const v0 = product.variants[0]
   return Math.max(0, v0?.stockQuantity ?? 0)
 }
+
+/** Min/max price across variants (same currency assumed). */
+export function storefrontVariantPriceRange(product: ProductDto): { min: number; max: number; currency: string } | null {
+  const v0 = product.variants[0]
+  if (!v0) return null
+  let min = v0.priceCents
+  let max = v0.priceCents
+  for (const v of product.variants) {
+    min = Math.min(min, v.priceCents)
+    max = Math.max(max, v.priceCents)
+  }
+  return { min, max, currency: v0.currency }
+}

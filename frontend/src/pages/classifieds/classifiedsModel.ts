@@ -145,7 +145,7 @@ export const CLASSIFIEDS_MOCK: ClassifiedListing[] = [
   },
   {
     id: 'ad3',
-    title: 'iPhone — demo listing',
+    title: 'iPhone — sample listing',
     priceCents: 120_000,
     location: 'Walvis Bay',
     category: 'Electronics',

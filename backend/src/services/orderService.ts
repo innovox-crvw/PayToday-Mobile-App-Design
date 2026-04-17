@@ -194,6 +194,62 @@ async function restoreReservedLinesInTransaction(
   await transaction.request().input('oid', orderId).query(`DELETE FROM dbo.inventory_reservations WHERE order_id = @oid`)
 }
 
+/**
+ * After payment, reservation rows are cleared but on-hand stock stays reduced.
+ * Cancelling a paid (or processing) unshipped order must add order line quantities back.
+ */
+async function restockPaidOrderLinesInTransaction(transaction: Transaction, orderId: string): Promise<void> {
+  const wh = await transaction.request().query<{ id: string }>(
+    `SELECT TOP 1 CAST(id AS NVARCHAR(36)) AS id FROM dbo.warehouses ORDER BY code`,
+  )
+  const warehouseId = wh.recordset[0]?.id
+  if (!warehouseId) {
+    throw new Error('No warehouse configured')
+  }
+
+  await transaction.request().input('oid', orderId).query(`DELETE FROM dbo.inventory_reservations WHERE order_id = @oid`)
+
+  const lines = await transaction
+    .request()
+    .input('oid', orderId)
+    .query<{ variant_id: string; quantity: number }>(
+      `SELECT CAST(variant_id AS NVARCHAR(36)) AS variant_id, quantity FROM dbo.order_lines WHERE order_id = @oid`,
+    )
+
+  for (const line of lines.recordset) {
+    const upd = await transaction
+      .request()
+      .input('vid', line.variant_id)
+      .input('wid', warehouseId)
+      .input('qty', line.quantity)
+      .query(`
+        UPDATE dbo.inventory_quantity
+        SET quantity = quantity + @qty
+        WHERE variant_id = @vid AND warehouse_id = @wid
+      `)
+    if ((upd.rowsAffected[0] ?? 0) === 0) {
+      await transaction
+        .request()
+        .input('vid', line.variant_id)
+        .input('wid', warehouseId)
+        .input('qty', line.quantity)
+        .query(`
+          INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity) VALUES (@vid, @wid, @qty)
+        `)
+    }
+    await transaction
+      .request()
+      .input('vid', line.variant_id)
+      .input('wid', warehouseId)
+      .input('qty', line.quantity)
+      .input('oid', orderId)
+      .query(`
+        INSERT INTO dbo.stock_movements (variant_id, warehouse_id, delta_qty, reason, reference_type, reference_id)
+        VALUES (@vid, @wid, @qty, N'order_cancel_restock', N'order', @oid)
+      `)
+  }
+}
+
 /** Standalone release (e.g. tooling); prefer {@link cancelUnshippedOrderAdmin} for admin cancel. */
 export async function releaseCheckoutInventoryForOrder(pool: ConnectionPool, orderId: string): Promise<void> {
   const transaction = pool.transaction()
@@ -222,11 +278,13 @@ export async function cancelUnshippedOrderAdmin(pool: ConnectionPool, orderId: s
     if (!st) {
       throw new Error('Order not found')
     }
-    if (st === 'shipped' || st === 'delivered' || st === 'cancelled') {
+    if (st === 'shipped' || st === 'delivered' || st === 'cancelled' || st === 'refunded') {
       throw new Error('Cannot cancel this order')
     }
     if (st === 'pending_payment') {
       await restoreReservedLinesInTransaction(transaction, orderId)
+    } else if (st === 'paid' || st === 'processing') {
+      await restockPaidOrderLinesInTransaction(transaction, orderId)
     }
     await transaction
       .request()
@@ -335,6 +393,132 @@ export async function markOrderPaid(pool: ConnectionPool, orderId: string): Prom
       .query(`UPDATE dbo.fulfillment_tasks SET stage = N'pending', updated_at = SYSUTCDATETIME() WHERE order_id = @oid`)
 
     await transaction.commit()
+  } catch (e) {
+    await transaction.rollback()
+    throw e
+  }
+}
+
+/** 10% handling fee on customer-requested refunds (basis points). */
+export const CUSTOMER_REFUND_HANDLING_FEE_BPS = 1000
+
+export async function cancelCustomerUnpaidOrder(pool: ConnectionPool, orderId: string): Promise<void> {
+  const transaction = pool.transaction()
+  await transaction.begin()
+  try {
+    const cur = await transaction
+      .request()
+      .input('oid', orderId)
+      .query<{ status: string }>(`SELECT status FROM dbo.orders WITH (UPDLOCK, ROWLOCK) WHERE id = @oid`)
+    const st = cur.recordset[0]?.status
+    if (!st) {
+      throw new Error('Order not found')
+    }
+    if (st === 'paid' || st === 'processing') {
+      throw new Error('PAID_USE_REFUND')
+    }
+    if (st !== 'pending_payment' && st !== 'draft') {
+      throw new Error('Cannot cancel this order')
+    }
+    if (st === 'pending_payment') {
+      await restoreReservedLinesInTransaction(transaction, orderId)
+    }
+    await transaction
+      .request()
+      .input('oid', orderId)
+      .query(
+        `UPDATE dbo.orders SET status = N'cancelled', cancelled_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME() WHERE id = @oid`,
+      )
+    await transaction.commit()
+  } catch (e) {
+    await transaction.rollback()
+    throw e
+  }
+}
+
+export type CustomerRefundBreakdown = {
+  totalCents: number
+  handlingFeeCents: number
+  netRefundCents: number
+  currency: string
+  userId: string | null
+}
+
+/**
+ * Refunds a paid (or processing) order before ship: restocks inventory, sets status refunded,
+ * and records fee / net amounts when migration 010 is applied.
+ */
+export async function refundCustomerPaidOrderWithFee(
+  pool: ConnectionPool,
+  orderId: string,
+  handlingFeeBps: number,
+): Promise<CustomerRefundBreakdown> {
+  if (!Number.isFinite(handlingFeeBps) || handlingFeeBps < 0 || handlingFeeBps > 10000) {
+    throw new Error('Invalid handling fee')
+  }
+  const transaction = pool.transaction()
+  await transaction.begin()
+  try {
+    const cur = await transaction
+      .request()
+      .input('oid', orderId)
+      .query<{
+        status: string
+        total_cents: number
+        currency: string
+        user_id: string | null
+      }>(
+        `SELECT status, total_cents, currency, CAST(user_id AS NVARCHAR(36)) AS user_id FROM dbo.orders WITH (UPDLOCK, ROWLOCK) WHERE id = @oid`,
+      )
+    const row = cur.recordset[0]
+    if (!row) {
+      throw new Error('Order not found')
+    }
+    const st = row.status
+    if (st !== 'paid' && st !== 'processing') {
+      throw new Error('Refund not available for this order')
+    }
+    const totalCents = Number(row.total_cents ?? 0)
+    const handlingFeeCents = Math.floor((totalCents * handlingFeeBps) / 10000)
+    const netRefundCents = Math.max(0, totalCents - handlingFeeCents)
+
+    await restockPaidOrderLinesInTransaction(transaction, orderId)
+
+    const upd = transaction.request()
+    upd.input('oid', orderId)
+    upd.input('fee', handlingFeeCents)
+    upd.input('net', netRefundCents)
+    try {
+      await upd.query(`
+        UPDATE dbo.orders SET
+          status = N'refunded',
+          refunded_at = SYSUTCDATETIME(),
+          updated_at = SYSUTCDATETIME(),
+          refund_handling_fee_cents = @fee,
+          refund_net_cents = @net
+        WHERE id = @oid
+      `)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!/refund_handling_fee|refund_net|Invalid column name/i.test(msg)) {
+        throw e
+      }
+      await transaction
+        .request()
+        .input('oid', orderId)
+        .query(
+          `UPDATE dbo.orders SET status = N'refunded', refunded_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME() WHERE id = @oid`,
+        )
+    }
+
+    await transaction.commit()
+    return {
+      totalCents,
+      handlingFeeCents,
+      netRefundCents,
+      currency: (row.currency ?? 'NAD').trim(),
+      userId: row.user_id,
+    }
   } catch (e) {
     await transaction.rollback()
     throw e

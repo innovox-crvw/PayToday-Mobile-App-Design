@@ -20,6 +20,10 @@ export function createApp(): express.Express {
 
   const spaDist = resolveSpaDist(env.spaStaticRoot)
 
+  if (env.trustProxy) {
+    app.set('trust proxy', 1)
+  }
+
   app.use(helmet())
   app.use(
     cors({

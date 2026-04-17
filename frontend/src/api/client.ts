@@ -1,7 +1,25 @@
 import { apiUrl } from '../lib/apiOrigin'
-import { CSRF_HEADER } from './constants'
+import { CSRF_COOKIE_NAME, CSRF_HEADER } from './constants'
 
 let csrfToken: string | null = null
+
+/** Prefer the live cookie value so the `X-CSRF-Token` header always matches what the browser sends. */
+function readCsrfCookie(): string | null {
+  if (typeof document === 'undefined') return null
+  const parts = document.cookie.split(';')
+  const prefix = `${CSRF_COOKIE_NAME}=`
+  for (const part of parts) {
+    const s = part.trim()
+    if (s.startsWith(prefix)) {
+      try {
+        return decodeURIComponent(s.slice(prefix.length))
+      } catch {
+        return s.slice(prefix.length)
+      }
+    }
+  }
+  return null
+}
 
 /**
  * Parse a fetch `Response` as JSON. If the body is HTML (common when `/api` hits the SPA or a proxy error),
@@ -28,13 +46,24 @@ export async function fetchCsrfToken(): Promise<string> {
     throw new Error(`CSRF failed: ${res.status}`)
   }
   const data = await readResponseJson<{ csrfToken: string }>(res)
-  csrfToken = data.csrfToken
+  const fromCookie = readCsrfCookie()
+  csrfToken = fromCookie ?? data.csrfToken
+  if (import.meta.env.DEV && typeof document !== 'undefined' && !fromCookie) {
+    console.warn(
+      '[api] CSRF cookie not visible after GET /api/csrf — sign-in may fail with "CSRF validation failed" (common: SameSite=None+Secure on HTTP, or SPA/API on different hosts). Prefer same-origin /api via Vite proxy, or set COOKIE_SAME_SITE=lax for HTTP dev; add your phone URL to CORS_ORIGINS if using a separate API origin.',
+    )
+  }
   return csrfToken
 }
 
 async function ensureCsrfForMutation(method: string): Promise<void> {
   const m = method.toUpperCase()
   if (m === 'GET' || m === 'HEAD') return
+  const fromCookie = readCsrfCookie()
+  if (fromCookie) {
+    csrfToken = fromCookie
+    return
+  }
   if (!csrfToken) {
     await fetchCsrfToken()
   }
@@ -44,8 +73,11 @@ export async function apiFetch(path: string, init: RequestInit = {}, allowRefres
   const method = init.method ?? 'GET'
   await ensureCsrfForMutation(method)
   const headers = new Headers(init.headers)
-  if (method.toUpperCase() !== 'GET' && method.toUpperCase() !== 'HEAD' && csrfToken) {
-    headers.set(CSRF_HEADER, csrfToken)
+  if (method.toUpperCase() !== 'GET' && method.toUpperCase() !== 'HEAD') {
+    const headerToken = readCsrfCookie() ?? csrfToken
+    if (headerToken) {
+      headers.set(CSRF_HEADER, headerToken)
+    }
   }
   const url = path.startsWith('http://') || path.startsWith('https://') ? path : apiUrl(path)
   const res = await fetch(url, {
@@ -60,7 +92,7 @@ export async function apiFetch(path: string, init: RequestInit = {}, allowRefres
     !path.startsWith('/api/auth/login') &&
     !path.startsWith('/api/auth/register')
   ) {
-    const refresh = await fetch(apiUrl('/api/auth/refresh'), { method: 'POST', credentials: 'include' })
+    const refresh = await apiFetch('/api/auth/refresh', { method: 'POST' }, false)
     if (refresh.ok) {
       return apiFetch(path, init, false)
     }

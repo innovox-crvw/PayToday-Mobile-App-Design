@@ -76,6 +76,12 @@ export const env = {
   port: Number(process.env.PORT ?? 4000),
   /** MS SQL connection string; omit to use in-memory catalogue (dev only). */
   sqlConnectionString: applySqlTcpOverride(sqlConnectionStringFromEnv()),
+  /**
+   * When true, the API never reads `dbo.integration_settings` — PayToday, Keycloak, and notify settings
+   * use only this process environment (`merge*` functions receive an empty map). Use when the table is
+   * removed or you do not want SQL overrides.
+   */
+  integrationUseEnvOnly: parseEnvBool(process.env.INTEGRATION_USE_ENV_ONLY, false),
   jwtSecret: process.env.JWT_SECRET ?? 'dev-only-change-me',
   cookieName: process.env.AUTH_COOKIE_NAME ?? 'pt_session',
   refreshCookieName: process.env.REFRESH_COOKIE_NAME ?? 'pt_refresh',
@@ -153,8 +159,10 @@ export const env = {
   /** Optional PayToday scan/pay API base (server-side BFF or logging). */
   paytodayScanApiBaseUrl: (process.env.PAYTODAY_SCAN_API_BASE_URL ?? '').replace(/\/$/u, ''),
   cookieSameSite: parseSameSite(process.env.COOKIE_SAME_SITE),
+  /** When true, `app.set('trust proxy', 1)` so `req.secure` / HTTPS detection works behind a reverse proxy. */
+  trustProxy: parseEnvBool(process.env.TRUST_PROXY, false),
   notificationEmailFrom: process.env.NOTIFICATION_EMAIL_FROM ?? '',
-  /** Today notify service: POST /email with `x-api-key`. Default base matches hosted API. */
+  /** Notifications API base (Postman `{{baseUrl}}`, e.g. `http://localhost:3001/api/v1` or hosted `…/api/v1`). */
   notifyServiceBaseUrl: (process.env.NOTIFY_SERVICE_BASE_URL ?? 'https://notify-service.today-ww.net/api/v1').replace(
     /\/$/u,
     '',
@@ -167,6 +175,11 @@ export const env = {
     return p || '/notifications'
   })(),
   notifyServiceApiKey: process.env.NOTIFY_SERVICE_API_KEY ?? '',
+  /**
+   * When true, POST mail to `{NOTIFY_SERVICE_BASE_URL}/email` only (PayToday Notifications “Send custom email” in Postman).
+   * When false, use `{base}/{NOTIFY_SERVICE_PORTAL}/email` if `NOTIFY_SERVICE_PORTAL` is set, else `{base}/email`.
+   */
+  notifyServiceUseFlatEmailPath: parseEnvBool(process.env.NOTIFY_SERVICE_USE_FLAT_EMAIL_PATH, false),
   /**
    * Optional JSON map: outbox `template_key` → notify `templateId` (portal template).
    * Example: {"checkout_pending_payment":"tmpl_abc","payment_confirmed":"tmpl_def","hub_demo_pending_payment":"…","hub_demo_payment_completed":"…"}
@@ -201,6 +214,12 @@ export const env = {
     const n = Number(process.env.PICKUP_CODE_TTL_HOURS ?? 48)
     if (!Number.isFinite(n) || n <= 0) return 48
     return n
+  })(),
+  /** Max days after order `created_at` that a customer may open a return (shipped/delivered orders). Default 90. */
+  storeReturnWindowDays: (() => {
+    const n = Number(process.env.STORE_RETURN_WINDOW_DAYS ?? 90)
+    if (!Number.isFinite(n) || n < 1) return 90
+    return Math.min(Math.floor(n), 3650)
   })(),
   /**
    * Optional path to the Vite production build (`dist` with `index.html`).

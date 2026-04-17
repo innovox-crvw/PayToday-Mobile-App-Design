@@ -84,11 +84,11 @@ export function ScanPayCodePage() {
     }
   }, [searchParams])
 
-  const demoTips = useMemo(
+  const paymentCodeTips = useMemo(
     () => (
       <Stack spacing={0.75}>
         <Typography variant="caption" color="text.secondary" component="div">
-          <strong>Demo codes:</strong> <code>PT-RETAIL-MAERUA</code>, <code>PT-PARKING-001</code>,{' '}
+          <strong>Example codes:</strong> <code>PT-RETAIL-MAERUA</code>, <code>PT-PARKING-001</code>,{' '}
           <code>PT-FUEL-SHELL-KH</code> — or scan the QR from <strong>Receive via QR</strong> on another tab.
         </Typography>
       </Stack>
@@ -115,7 +115,7 @@ export function ScanPayCodePage() {
         <WalletSubheader title="Confirm payment" />
         <Card variant="outlined" sx={{ p: 2.5, borderRadius: 3 }}>
           <Typography variant="overline" color="text.secondary" fontWeight={800}>
-            Merchant (demo)
+            Merchant
           </Typography>
           <Typography variant="h6" fontWeight={850} sx={{ mt: 0.5 }}>
             {interpretation.merchantName}
@@ -143,7 +143,7 @@ export function ScanPayCodePage() {
             size="large"
             sx={{ py: 1.25, fontWeight: 850 }}
           >
-            Pay with wallet (demo flow)
+            Pay with wallet
           </Button>
           <Button variant="outlined" onClick={resetFlow} sx={{ fontWeight: 700 }}>
             Scan another code
@@ -160,7 +160,7 @@ export function ScanPayCodePage() {
     <Stack spacing={2} sx={{ maxWidth: 520, mx: 'auto', pb: 4 }}>
       <WalletSubheader title="Pay by Code" />
       <Typography variant="body2" color="text.secondary">
-        Live demo: use your camera to read QR or barcodes (Chrome / Edge), or type a code. No PayToday scan API required.
+        Use your camera to read QR or barcodes (Chrome / Edge), or type a code. Works without a hosted PayToday scan API.
       </Typography>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth" sx={{ borderBottom: 1, borderColor: 'divider' }}>
@@ -199,11 +199,11 @@ export function ScanPayCodePage() {
           {camError ? <Alert severity="warning">{camError}</Alert> : null}
           {!hasDetector && !camError ? (
             <Alert severity="info">
-              This browser does not expose <strong>BarcodeDetector</strong>. You can still demo the flow with{' '}
+              This browser does not expose <strong>BarcodeDetector</strong>. You can still continue with{' '}
               <strong>Enter code</strong> or <strong>Simulate retail scan</strong> below.
             </Alert>
           ) : null}
-          {demoTips}
+          {paymentCodeTips}
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Button variant="outlined" onClick={() => handleDecode('PT-RETAIL-MAERUA')} sx={{ fontWeight: 750 }}>
               Simulate retail scan
@@ -224,7 +224,7 @@ export function ScanPayCodePage() {
             minRows={2}
             fullWidth
           />
-          {demoTips}
+          {paymentCodeTips}
           <Button variant="contained" size="large" onClick={submitManual} disabled={!manualCode.trim()} sx={{ py: 1.15, fontWeight: 850 }}>
             Continue
           </Button>

@@ -21,6 +21,8 @@ export interface ProductDto {
   brandName: string | null
   imageUrl: string | null
   variants: ProductVariantDto[]
+  /** Admin API only — inactive products are hidden from the storefront. */
+  isActive?: boolean
 }
 
 export interface ProductListResponse {

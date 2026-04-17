@@ -7,7 +7,11 @@ import {
   CardActionArea,
   CardContent,
   Divider,
+  FormControl,
+  InputLabel,
   Link,
+  MenuItem,
+  Select,
   Stack,
   Tab,
   Tabs,
@@ -19,7 +23,7 @@ import type { ProductDto, ProductListResponse } from '../../types/catalogue'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { apiUrl, readApiError } from '../../lib/apiOrigin'
 import { friendlyFetchError } from '../../lib/fetchErrors'
-import { storefrontPrimaryVariantStock } from '../../lib/productStock'
+import { storefrontPrimaryVariantStock, storefrontVariantPriceRange } from '../../lib/productStock'
 import { formatMoney } from '../../lib/money'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { ProductImage } from '../../components/store/ProductImage'
@@ -49,6 +53,7 @@ export function ProductPage() {
   const [addedMsg, setAddedMsg] = useState<string | null>(null)
   const [detailTab, setDetailTab] = useState(0)
   const [catalogTick, setCatalogTick] = useState(0)
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
   const productFetchSeq = useRef(0)
   const relatedFetchSeq = useRef(0)
 
@@ -113,12 +118,24 @@ export function ProductPage() {
   }, [product?.id, slug, catalogTick])
 
   useEffect(() => {
-    const v = product?.variants[0]
+    if (!product?.variants.length) return
+    setSelectedVariantId((cur) => {
+      if (cur && product.variants.some((v) => v.id === cur)) return cur
+      return product.variants[0]!.id
+    })
+  }, [product?.id, product?.variants])
+
+  useEffect(() => {
+    const v =
+      product?.variants.find((x) => x.id === selectedVariantId) ?? product?.variants[0]
     if (!v) return
     const max = Math.max(0, v.stockQuantity)
-    if (max <= 0) return
+    if (max <= 0) {
+      setQty(0)
+      return
+    }
     setQty((q) => Math.min(Math.max(1, q), max))
-  }, [product?.id, product?.variants[0]?.stockQuantity])
+  }, [product?.id, selectedVariantId, product?.variants])
 
   async function addToCart(variantId: string) {
     setAdding(true)
@@ -161,11 +178,12 @@ export function ProductPage() {
     return <Typography>Loading…</Typography>
   }
 
-  const v0 = product.variants[0]
-  const stock = v0 ? Math.max(0, v0.stockQuantity) : 0
+  const variant =
+    product.variants.find((v) => v.id === selectedVariantId) ?? product.variants[0] ?? null
+  const stock = variant ? Math.max(0, variant.stockQuantity) : 0
   const demoStore = getDemoStoreForProduct(product.slug)
   const retailerHref = demoStore ? `${shopPath}?store=${encodeURIComponent(demoStore.slug)}` : shopPath
-  const priceLine = v0 ? formatMoney(v0.priceCents, v0.currency) : '—'
+  const priceLine = variant ? formatMoney(variant.priceCents, variant.currency) : '—'
 
   return (
     <Stack spacing={0} sx={{ maxWidth: 1100, mx: 'auto' }}>
@@ -217,13 +235,32 @@ export function ProductPage() {
             </Link>
           ) : null}
 
-          {v0 ? (
+          {variant ? (
             <>
+              {product.variants.length > 1 ? (
+                <FormControl fullWidth size="small">
+                  <InputLabel id="product-variant-label">Choose option</InputLabel>
+                  <Select
+                    labelId="product-variant-label"
+                    id="product-variant-select"
+                    label="Choose option"
+                    value={variant.id}
+                    onChange={(e) => setSelectedVariantId(String(e.target.value))}
+                  >
+                    {product.variants.map((v) => (
+                      <MenuItem key={v.id} value={v.id} disabled={v.stockQuantity <= 0}>
+                        {v.name} — {formatMoney(v.priceCents, v.currency)}
+                        {v.stockQuantity <= 0 ? ' (out of stock)' : ''}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              ) : null}
               <Typography variant="h5" color="primary" fontWeight={800}>
                 {priceLine}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                SKU {v0.sku} · {stock} in stock (reserved at checkout; released if the order is cancelled before payment)
+                SKU {variant.sku} · {stock} in stock (reserved at checkout; released if the order is cancelled before payment)
               </Typography>
               {stock > 0 && stock <= 5 ? (
                 <Typography variant="caption" color="warning.main" fontWeight={700}>
@@ -260,7 +297,7 @@ export function ProductPage() {
                 color="success"
                 size="large"
                 disabled={adding || stock <= 0}
-                onClick={() => void addToCart(v0.id)}
+                onClick={() => void addToCart(variant.id)}
                 sx={{ fontWeight: 800, py: 1.5 }}
               >
                 <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
@@ -370,7 +407,13 @@ export function ProductPage() {
             >
               {related.map((p) => {
                 const rv = p.variants[0]
-                const price = rv ? formatMoney(rv.priceCents, rv.currency) : '—'
+                const range = storefrontVariantPriceRange(p)
+                const price =
+                  range && p.variants.length > 1 && range.min !== range.max
+                    ? `From ${formatMoney(range.min, range.currency)}`
+                    : rv
+                      ? formatMoney(rv.priceCents, rv.currency)
+                      : '—'
                 return (
                   <Card
                     key={p.id}

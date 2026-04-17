@@ -310,7 +310,7 @@ export function ClassifiedsHomePage() {
             sellers — you are responsible for verifying listings and safe meetups or payments.
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            This is a demo flow; production terms will be provided by your legal team.
+            Final terms for your organisation should be provided by your legal team.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

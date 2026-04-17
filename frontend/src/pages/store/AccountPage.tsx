@@ -214,8 +214,10 @@ export function AccountPage() {
             <Stack spacing={2}>
               <TextField label="Display name" value={fullName} onChange={(e) => setFullName(e.target.value)} fullWidth />
               <Alert severity="info" sx={{ borderRadius: 2 }}>
-                Order and payment updates are emailed to you. Other store alerts appear in{' '}
-                <RouterLink to={`${pathPrefix}/notifications`}>Notifications</RouterLink> in the app.
+                In-app alerts live under{' '}
+                <RouterLink to={`${pathPrefix}/notifications`}>Notifications</RouterLink> when you are signed in. Choose
+                how this device surfaces email vs in-app under{' '}
+                <RouterLink to={`${pathPrefix}/profile/settings`}>Profile → Settings</RouterLink>.
               </Alert>
               <Button variant="contained" onClick={() => void saveProfile()} sx={{ alignSelf: 'flex-start', fontWeight: 600 }}>
                 Save changes

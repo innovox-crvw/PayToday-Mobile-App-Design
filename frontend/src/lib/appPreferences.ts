@@ -2,6 +2,33 @@
 
 export const PT_UI_LANGUAGE = 'pt-ui-language'
 export const PT_REDUCED_MOTION = 'pt-reduced-motion'
+export const PT_NOTIFY_DELIVERY_CHANNEL = 'pt-notify-delivery-channel'
+
+/** How this device prefers order/payment alerts to be surfaced (does not change server email routing). */
+export type NotifyDeliveryPreference = 'email' | 'in_app' | 'both' | 'device'
+
+const VALID_NOTIFY: ReadonlySet<string> = new Set(['email', 'in_app', 'both', 'device'])
+
+export const NOTIFY_DELIVERY_CHANGED_EVENT = 'pt-notify-delivery-channel-changed'
+
+export function readNotifyDeliveryChannel(): NotifyDeliveryPreference {
+  try {
+    const v = localStorage.getItem(PT_NOTIFY_DELIVERY_CHANNEL)
+    if (v && VALID_NOTIFY.has(v)) return v as NotifyDeliveryPreference
+  } catch {
+    /* private mode */
+  }
+  return 'both'
+}
+
+export function writeNotifyDeliveryChannel(ch: NotifyDeliveryPreference): void {
+  try {
+    localStorage.setItem(PT_NOTIFY_DELIVERY_CHANNEL, ch)
+    window.dispatchEvent(new CustomEvent(NOTIFY_DELIVERY_CHANGED_EVENT, { detail: { channel: ch } }))
+  } catch {
+    /* private mode */
+  }
+}
 
 export function readUiLanguage(): string {
   try {
@@ -23,6 +50,16 @@ export function writeUiLanguage(code: string): void {
     document.documentElement.lang = trimmed
   } catch {
     /* private mode */
+  }
+}
+
+/** Ensure `lang` reflects stored preference (default `en`). */
+export function applyUiLanguageFromStorage(): void {
+  try {
+    const raw = readUiLanguage()
+    document.documentElement.lang = raw && raw !== 'en' ? raw : 'en'
+  } catch {
+    /* ignore */
   }
 }
 
@@ -50,14 +87,7 @@ export function writeReducedMotion(on: boolean): void {
 
 /** Call once at app boot (e.g. main.tsx). */
 export function applyStoredAppPreferences(): void {
-  const lang = readUiLanguage()
-  if (lang) {
-    try {
-      document.documentElement.lang = lang
-    } catch {
-      /* ignore */
-    }
-  }
+  applyUiLanguageFromStorage()
   if (readReducedMotion()) {
     try {
       document.documentElement.classList.add('pt-reduced-motion')

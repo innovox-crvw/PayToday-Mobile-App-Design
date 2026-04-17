@@ -148,7 +148,7 @@ export const SERVICES_HUB_TILES: readonly HubNavigationTileDto[] = [
     iconKey: 'ussd',
     listStyle: null,
     linkPath: 'services/ussd',
-    paymentMethodsCaption: 'USSD · *120# (demo)',
+    paymentMethodsCaption: 'USSD · *120#',
   },
   {
     slug: 'store',

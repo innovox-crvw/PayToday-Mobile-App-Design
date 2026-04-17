@@ -1,6 +1,7 @@
 import type { ConnectionPool } from 'mssql'
 import { loadDotenvFiles } from '../config/env.js'
 import { sendNotifyTransactionalEmail } from './notifyEmailApi.js'
+import { isSmtpOutboundConfigured, sendSmtpTransactionalEmail } from './smtpTransactionalEmail.js'
 import { getIntegrationSettingsMap } from './integrationSettingsCache.js'
 import { mergeNotifyRuntime } from './integrationRuntimeConfig.js'
 import { inAppCopyForTemplate } from './inAppNotificationPresentation.js'
@@ -85,16 +86,6 @@ export function startNotificationWorker(getPool: () => Promise<ConnectionPool | 
           if (wantsEmail) {
             if (!row.email?.trim()) {
               console.info('[notification email] skipped — no recipient', row.template_key)
-            } else if (!notifyCfg.apiKey.trim()) {
-              console.warn(
-                '[notification email] NOTIFY_SERVICE_API_KEY is not set — set it in .env or dbo.integration_settings for outbound email',
-                row.template_key,
-              )
-              const inAppHandled = wantsInApp && Boolean(row.user_id?.trim())
-              if (!inAppHandled) {
-                okToMarkSent = false
-              }
-              /* `both` with user_id: in-app row already written; allow marking sent without email in dev. */
             } else {
               let payload: Record<string, unknown> = {}
               try {
@@ -102,17 +93,48 @@ export function startNotificationWorker(getPool: () => Promise<ConnectionPool | 
               } catch {
                 payload = { raw: row.payload }
               }
-              const r = await sendNotifyTransactionalEmail(
-                {
-                  to: row.email.trim(),
+              const recipient = row.email.trim()
+              let emailSent = false
+
+              if (notifyCfg.apiKey.trim()) {
+                const r = await sendNotifyTransactionalEmail(
+                  { to: recipient, templateKey: row.template_key, payload },
+                  notifyCfg,
+                )
+                if (r.ok) {
+                  emailSent = true
+                } else {
+                  console.warn('[notification email] notify service failed', row.template_key, r.error)
+                }
+              }
+
+              if (!emailSent && isSmtpOutboundConfigured()) {
+                const r2 = await sendSmtpTransactionalEmail({
+                  to: recipient,
                   templateKey: row.template_key,
                   payload,
-                },
-                notifyCfg,
-              )
-              if (!r.ok) {
-                console.warn('[notification email] notify service failed — will retry', row.template_key, r.error)
-                okToMarkSent = false
+                })
+                if (r2.ok) {
+                  emailSent = true
+                } else {
+                  console.warn('[notification email] SMTP failed — will retry', row.template_key, r2.error)
+                }
+              }
+
+              if (!emailSent) {
+                const configuredOutbound = notifyCfg.apiKey.trim() || isSmtpOutboundConfigured()
+                if (configuredOutbound) {
+                  okToMarkSent = false
+                } else {
+                  console.warn(
+                    '[notification email] no outbound email — set NOTIFY_SERVICE_API_KEY (Today notify) or SMTP_HOST + NOTIFICATION_EMAIL_FROM',
+                    row.template_key,
+                  )
+                  const inAppHandled = wantsInApp && Boolean(row.user_id?.trim())
+                  if (!inAppHandled) {
+                    okToMarkSent = false
+                  }
+                }
               }
             }
           }

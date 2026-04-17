@@ -1,5 +1,7 @@
 const STORAGE_KEY = 'pt_recent_svc_cat_pay_v3'
-const MAX_ITEMS = 5
+
+/** Max recent shortcuts stored and shown on the store home “Recent” row. */
+export const MAX_RECENT_VISIT_ITEMS = 5
 
 export type RecentVisitRecord = {
   dedupeKey: string
@@ -45,7 +47,7 @@ export function recordRecentVisit(input: { dedupeKey: string; relPath: string; l
       label,
       at: Date.now(),
     })
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next.slice(0, MAX_ITEMS)))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next.slice(0, MAX_RECENT_VISIT_ITEMS)))
     window.dispatchEvent(new Event('pt-recent-visits-updated'))
   } catch {
     /* storage full / disabled */

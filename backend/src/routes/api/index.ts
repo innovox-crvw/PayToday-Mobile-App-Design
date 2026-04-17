@@ -14,7 +14,9 @@ import { fulfillmentRouter } from './fulfillment.js'
 import { ordersRouter } from './orders.js'
 import { paymentReturnRouter } from './paymentReturn.js'
 import { adminOrdersRouter } from './adminOrders.js'
+import { adminDepositRouter } from './adminDeposit.js'
 import { adminInventoryRouter } from './adminInventory.js'
+import { adminOverviewRouter } from './adminOverview.js'
 import { returnsRouter, adminReturnsRouter } from './returns.js'
 import { storefrontPublicRouter } from './storefrontPublic.js'
 import { notificationsRouter } from './notifications.js'
@@ -85,6 +87,8 @@ apiRouter.use('/returns', returnsRouter)
 apiRouter.use('/admin/orders', adminOrdersRouter)
 apiRouter.use('/admin/returns', adminReturnsRouter)
 apiRouter.use('/admin/inventory', adminInventoryRouter)
+apiRouter.use('/admin/overview', adminOverviewRouter)
+apiRouter.use('/admin/deposit', adminDepositRouter)
 
 apiRouter.get('/admin/ping', requireAuth, requireRole('admin', 'ops', 'fulfillment'), (_req, res) => {
   res.json({ ok: true })

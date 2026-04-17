@@ -34,8 +34,11 @@ import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import {
   applyStoredAppPreferences,
+  type NotifyDeliveryPreference,
+  readNotifyDeliveryChannel,
   readReducedMotion,
   readUiLanguage,
+  writeNotifyDeliveryChannel,
   writeReducedMotion,
   writeUiLanguage,
 } from '../../lib/appPreferences'
@@ -50,20 +53,17 @@ type HealthBody = {
   sqlHints?: string[]
 }
 
-type NotifyChannel = 'email' | 'in_app' | 'both'
-
-function isNotifyChannel(v: string | undefined): v is NotifyChannel {
-  return v === 'email' || v === 'in_app' || v === 'both'
+function isNotifyDeliveryPreference(v: string): v is NotifyDeliveryPreference {
+  return v === 'email' || v === 'in_app' || v === 'both' || v === 'device'
 }
 
 export function ProfileSettingsPage() {
   const prefix = useStorePathPrefix()
+  const notificationsPath = prefix ? `${prefix}/notifications` : '/notifications'
   const signInPath = `${prefix}/onboarding/login?returnTo=${encodeURIComponent(`${prefix}/profile/settings`)}`
   const { user, loading: authLoading, refresh: refreshAuth } = useAuthMe()
 
-  const [notifyChannel, setNotifyChannel] = useState<NotifyChannel>('email')
-  const [notifyDirty, setNotifyDirty] = useState(false)
-  const [savingNotify, setSavingNotify] = useState(false)
+  const [notifyChannel, setNotifyChannel] = useState<NotifyDeliveryPreference>(() => readNotifyDeliveryChannel())
   const [notifyMsg, setNotifyMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
 
   const [uiLanguage, setUiLanguage] = useState('en')
@@ -81,10 +81,8 @@ export function ProfileSettingsPage() {
   } | null>(null)
 
   useEffect(() => {
-    const ch = user?.notificationChannel
-    setNotifyChannel(isNotifyChannel(ch) ? ch : 'email')
-    setNotifyDirty(false)
-  }, [user?.notificationChannel])
+    setNotifyChannel(readNotifyDeliveryChannel())
+  }, [])
 
   useEffect(() => {
     setUiLanguage(readUiLanguage() || 'en')
@@ -131,31 +129,11 @@ export function ProfileSettingsPage() {
     }
   }, [])
 
-  async function saveNotifications() {
-    if (!user) return
-    setNotifyMsg(null)
-    setSavingNotify(true)
-    try {
-      await fetchCsrfToken()
-      const res = await apiFetch('/api/auth/me', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notificationChannel: notifyChannel }),
-      })
-      const data = await readResponseJson<{ ok?: boolean; error?: string }>(res)
-      if (!res.ok) {
-        setNotifyMsg({ text: data.error ?? 'Could not save settings', severity: 'error' })
-        return
-      }
-      setNotifyMsg({ text: 'Notification preference saved.', severity: 'success' })
-      setNotifyDirty(false)
-      await refreshAuth()
-      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
-    } catch (e) {
-      setNotifyMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
-    } finally {
-      setSavingNotify(false)
-    }
+  function persistNotifyChannel(next: NotifyDeliveryPreference) {
+    setNotifyChannel(next)
+    writeNotifyDeliveryChannel(next)
+    setNotifyMsg({ text: 'Channel preference saved on this device.', severity: 'success' })
+    window.setTimeout(() => setNotifyMsg(null), 2800)
   }
 
   function persistUiLanguage(code: string) {
@@ -195,7 +173,8 @@ export function ProfileSettingsPage() {
 
       {!authLoading && !user ? (
         <Alert severity="info" sx={{ borderRadius: 2 }}>
-          Sign in to save notification preferences to your account.{' '}
+          <strong>In-app history</strong> loads from the server after you sign in with a store account. Channel choices
+          below still apply on this device.{' '}
           <Link component={RouterLink} to={signInPath} fontWeight={700}>
             Sign in
           </Link>
@@ -211,44 +190,54 @@ export function ProfileSettingsPage() {
                 Notifications
               </Typography>
             </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Stored on your PayToday profile when you are signed in with a database-backed account. In-app messages still
-              appear under Notifications in the header.
+            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.65 }}>
+              When you are signed in with a database-backed store account, your <strong>in-app notification list</strong>{' '}
+              is stored on the server (order and payment updates, pickup codes, and similar alerts). Open{' '}
+              <Link component={RouterLink} to={notificationsPath} fontWeight={700}>
+                Notifications
+              </Link>{' '}
+              in the header to read them.
             </Typography>
 
-            <FormControl disabled={!user || authLoading}>
+            <FormControl disabled={authLoading}>
               <FormLabel id="notify-channel-label" sx={{ fontWeight: 700, color: 'text.primary', mb: 0.5 }}>
                 Channel
               </FormLabel>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                How you prefer to be notified on <strong>this device</strong>. Saved in your browser only (not synced to
+                your PayToday account). Server emails for checkout and payments may still be sent for legal and receipt
+                reasons; this controls how we surface alerts in the app UI.
+              </Typography>
               <RadioGroup
                 aria-labelledby="notify-channel-label"
                 value={notifyChannel}
                 onChange={(e) => {
                   const v = e.target.value
-                  if (isNotifyChannel(v)) {
-                    setNotifyChannel(v)
-                    setNotifyDirty(true)
-                    setNotifyMsg(null)
-                  }
+                  if (isNotifyDeliveryPreference(v)) persistNotifyChannel(v)
                 }}
               >
                 <FormControlLabel value="email" control={<Radio />} label="Email only" />
                 <FormControlLabel value="in_app" control={<Radio />} label="In-app only" />
                 <FormControlLabel value="both" control={<Radio />} label="Email and in-app" />
+                <FormControlLabel
+                  value="device"
+                  control={<Radio />}
+                  label={
+                    <Box>
+                      <Typography component="span" fontWeight={600}>
+                        App on this device
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        Prefer alerts while using this app here. Push to a native app can be wired later; until then this
+                        behaves like in-app first.
+                      </Typography>
+                    </Box>
+                  }
+                />
               </RadioGroup>
             </FormControl>
 
             {notifyMsg ? <Alert severity={notifyMsg.severity}>{notifyMsg.text}</Alert> : null}
-
-            <Button
-              variant="contained"
-              disabled={!user || !notifyDirty || savingNotify}
-              onClick={() => void saveNotifications()}
-              sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
-              startIcon={savingNotify ? <CircularProgress size={18} color="inherit" /> : undefined}
-            >
-              {savingNotify ? 'Saving…' : 'Save notification preference'}
-            </Button>
           </Stack>
         </CardContent>
       </Card>
@@ -415,7 +404,7 @@ export function ProfileSettingsPage() {
                     <Box component="span" sx={{ fontFamily: 'monospace' }}>
                       .env
                     </Box>
-                    ). The store runs on in-memory demo data.
+                    ). The store runs on in-memory sample data.
                   </Alert>
                 ) : null}
                 {health.database === 'unreachable' ? (

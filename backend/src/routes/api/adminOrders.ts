@@ -55,7 +55,7 @@ adminOrdersRouter.post('/:orderId/cancel', requireRole('admin', 'ops'), async (r
     res.status(404).json({ error: 'Not found' })
     return
   }
-  if (st === 'shipped' || st === 'delivered' || st === 'cancelled') {
+  if (st === 'shipped' || st === 'delivered' || st === 'cancelled' || st === 'refunded') {
     res.status(400).json({ error: 'Cannot cancel this order' })
     return
   }

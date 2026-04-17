@@ -78,7 +78,13 @@ function ledgerRowToDto(row: {
   const payee = row.payee_label?.trim()
   const et = row.entry_type
   const typeLabel =
-    et === 'demo_fund' ? 'Top-up' : et === 'store_checkout_spend' ? 'Store purchase' : 'Wallet payment'
+    et === 'demo_fund'
+      ? 'Top-up'
+      : et === 'store_checkout_spend'
+        ? 'Store purchase'
+        : et === 'store_refund_credit'
+          ? 'Store refund (after fee)'
+          : 'Wallet payment'
   return {
     id: row.id,
     business: isCredit ? 'Demo wallet funding' : payee || 'Wallet payment',

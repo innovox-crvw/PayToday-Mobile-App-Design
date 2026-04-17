@@ -1,6 +1,7 @@
 import { env } from '../config/env.js'
 import type { UserRole } from '../types/roles.js'
 
+/** SQL `integration_settings` overrides env when non-empty; use `INTEGRATION_USE_ENV_ONLY=true` to skip SQL entirely. */
 function pick(map: Map<string, string> | null | undefined, key: string): string | undefined {
   const v = map?.get(key)
   if (v == null) return undefined
@@ -122,11 +123,13 @@ export type NotifyRuntimeConfig = {
   publicStoreUrl: string
   /**
    * Path segment after the API base version, e.g. `business-2025-api-portal` →
-   * `…/api/v1/{portal}/email` for transactional email.
+   * `…/api/v1/{portal}/email` for transactional email (ignored when `useFlatEmailPath` is true).
    */
   portal: string
   /** Path on the notify service after the portal segment, e.g. `/notifications` for inbox UI. */
   inboxPath: string
+  /** POST `{base}/email` only (Postman PayToday Notifications Service). */
+  useFlatEmailPath: boolean
 }
 
 function stripNotifyTrailingSlashes(s: string): string {
@@ -137,16 +140,22 @@ function trimNotifyPortalSegment(portal: string): string {
   return portal.trim().replace(/^\/+|\/+$/gu, '')
 }
 
-/** POST URL for transactional email (`x-api-key` header). */
-export function notifyTransactionalEmailUrl(cfg: Pick<NotifyRuntimeConfig, 'baseUrl' | 'portal'>): string {
+/** POST URL for transactional email (`X-API-Key` header per PayToday Notifications Postman collection). */
+export function notifyTransactionalEmailUrl(cfg: Pick<NotifyRuntimeConfig, 'baseUrl' | 'portal' | 'useFlatEmailPath'>): string {
   const base = stripNotifyTrailingSlashes((cfg.baseUrl || 'https://notify-service.today-ww.net/api/v1').trim())
+  if (cfg.useFlatEmailPath) {
+    return `${base}/email`
+  }
   const portal = trimNotifyPortalSegment(cfg.portal)
   if (!portal) return `${base}/email`
   return `${base}/${portal}/email`
 }
 
-/** Public inbox URL on the notify host (no secrets). Undefined if base or portal is missing. */
-export function notifyInboxBrowserUrl(cfg: Pick<NotifyRuntimeConfig, 'baseUrl' | 'portal' | 'inboxPath'>): string | undefined {
+/** Public inbox URL on the notify host (no secrets). Undefined if base or portal is missing, or flat email path is used. */
+export function notifyInboxBrowserUrl(
+  cfg: Pick<NotifyRuntimeConfig, 'baseUrl' | 'portal' | 'inboxPath' | 'useFlatEmailPath'>,
+): string | undefined {
+  if (cfg.useFlatEmailPath) return undefined
   const base = stripNotifyTrailingSlashes(cfg.baseUrl.trim())
   const portal = trimNotifyPortalSegment(cfg.portal)
   if (!base || !portal) return undefined
@@ -164,5 +173,6 @@ export function mergeNotifyRuntime(map: Map<string, string> | null | undefined):
     publicStoreUrl: (pick(map, 'PUBLIC_STORE_URL') ?? env.publicStoreUrl).replace(/\/$/u, ''),
     portal: (pick(map, 'NOTIFY_SERVICE_PORTAL') ?? env.notifyServicePortal).trim(),
     inboxPath: (pick(map, 'NOTIFY_SERVICE_INBOX_PATH') ?? env.notifyServiceInboxPath).trim() || '/notifications',
+    useFlatEmailPath: pickBool(map, 'NOTIFY_SERVICE_USE_FLAT_EMAIL_PATH', env.notifyServiceUseFlatEmailPath),
   }
 }
