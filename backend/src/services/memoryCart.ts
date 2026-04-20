@@ -32,3 +32,8 @@ export function upsertMemoryCartLine(sessionToken: string, variantId: string, qu
   linesBySession.get(sessionToken)!.delete(variantId)
   return true
 }
+
+export function clearMemoryCartLines(sessionToken: string): void {
+  const m = linesBySession.get(sessionToken)
+  if (m) m.clear()
+}

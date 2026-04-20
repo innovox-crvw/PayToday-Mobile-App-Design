@@ -1,5 +1,18 @@
 import type { ConnectionPool, Transaction } from 'mssql'
-import { getCartLines } from './cartService.js'
+import type { InventoryPolicy } from '../types/catalogue.js'
+import { normalizeInventoryPolicy } from '../repos/productsRepo.js'
+import { validateCartAndReturnLines } from './checkoutValidation.js'
+
+async function readInventoryPolicy(tx: Transaction, variantId: string): Promise<InventoryPolicy> {
+  try {
+    const r = await tx.request().input('vid', variantId).query<{ inventory_policy: string | null }>(
+      `SELECT inventory_policy FROM dbo.product_variants WHERE id = @vid`,
+    )
+    return normalizeInventoryPolicy(r.recordset[0]?.inventory_policy)
+  } catch {
+    return 'track'
+  }
+}
 
 export async function createOrderFromCart(
   pool: ConnectionPool,
@@ -19,10 +32,7 @@ export async function createOrderFromCart(
   const transaction = pool.transaction()
   await transaction.begin()
   try {
-    const lines = await getCartLines(transaction, cartId)
-    if (lines.length === 0) {
-      throw new Error('Cart is empty')
-    }
+    const lines = await validateCartAndReturnLines(transaction, cartId)
 
     let computedSubtotal = 0
     let currency = lines[0]?.currency ?? 'NAD'
@@ -39,22 +49,6 @@ export async function createOrderFromCart(
       .request()
       .query<{ id: string }>(`SELECT TOP 1 CAST(id AS NVARCHAR(36)) AS id FROM dbo.warehouses ORDER BY code`)
     const warehouseId = wh.recordset[0]?.id
-
-    if (warehouseId) {
-      for (const l of lines) {
-        const inv = await transaction
-          .request()
-          .input('vid', l.variantId)
-          .input('wid', warehouseId)
-          .query<{ quantity: number }>(
-            `SELECT quantity FROM dbo.inventory_quantity WHERE variant_id = @vid AND warehouse_id = @wid`,
-          )
-        const q = inv.recordset[0]?.quantity ?? 0
-        if (q < l.quantity) {
-          throw new Error('Insufficient stock for one or more items')
-        }
-      }
-    }
 
     const totalCents = input.subtotalCents + input.shippingCents + input.taxCents
 
@@ -99,19 +93,45 @@ export async function createOrderFromCart(
 
     if (warehouseId) {
       for (const l of lines) {
+        const pol = await readInventoryPolicy(transaction, l.variantId)
+        if (pol === 'not_tracked') {
+          continue
+        }
+
         const upd = transaction.request()
         upd.input('vid', l.variantId)
         upd.input('wid', warehouseId)
         upd.input('qty', l.quantity)
         upd.input('oid', orderId)
-        const dec = await upd.query(`
-        UPDATE dbo.inventory_quantity
-        SET quantity = quantity - @qty
-        WHERE variant_id = @vid AND warehouse_id = @wid AND quantity >= @qty
-      `)
-        if ((dec.rowsAffected[0] ?? 0) === 0) {
-          throw new Error('Insufficient stock while reserving inventory')
+
+        if (pol === 'track') {
+          const dec = await upd.query(`
+            UPDATE dbo.inventory_quantity
+            SET quantity = quantity - @qty
+            WHERE variant_id = @vid AND warehouse_id = @wid AND quantity >= @qty
+          `)
+          if ((dec.rowsAffected[0] ?? 0) === 0) {
+            throw new Error('Insufficient stock while reserving inventory')
+          }
+        } else {
+          const dec = await upd.query(`
+            UPDATE dbo.inventory_quantity
+            SET quantity = quantity - @qty
+            WHERE variant_id = @vid AND warehouse_id = @wid
+          `)
+          if ((dec.rowsAffected[0] ?? 0) === 0) {
+            await transaction
+              .request()
+              .input('vid', l.variantId)
+              .input('wid', warehouseId)
+              .input('qty', -l.quantity)
+              .query(`
+                INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+                VALUES (@vid, @wid, @qty)
+              `)
+          }
         }
+
         await transaction
           .request()
           .input('oid', orderId)

@@ -36,6 +36,8 @@ function parseBody(req: import('express').Request): {
   amountCents: number
   payMethod: PayMethod
   reference: string
+  /** Prepaid meter or municipal account — required for services `water` and `electricity` demos. */
+  meterOrAccountRef: string | null
 } | null {
   const b = req.body as Record<string, unknown>
   const variant = parseVariant(b.variant)
@@ -70,6 +72,21 @@ function parseBody(req: import('express').Request): {
   const reference = typeof b.reference === 'string' ? b.reference.trim().slice(0, 80) : ''
   if (!reference || !/^[\w.-]+$/u.test(reference)) return null
 
+  const rawMeter = typeof b.meterOrAccountRef === 'string' ? b.meterOrAccountRef.trim().slice(0, 80) : ''
+  const needsMeterOrAccount =
+    variant === 'services' && (serviceSlug === 'water' || serviceSlug === 'electricity')
+  let meterOrAccountRef: string | null = null
+  if (variant === 'services') {
+    if (needsMeterOrAccount) {
+      if (rawMeter.length < 4) return null
+      if (!/^[\d\w\s./-]+$/u.test(rawMeter)) return null
+      meterOrAccountRef = rawMeter
+    } else if (rawMeter) {
+      if (rawMeter.length < 2 || !/^[\d\w\s./-]+$/u.test(rawMeter)) return null
+      meterOrAccountRef = rawMeter
+    }
+  }
+
   return {
     variant,
     categorySlug,
@@ -79,13 +96,18 @@ function parseBody(req: import('express').Request): {
     amountCents,
     payMethod,
     reference,
+    meterOrAccountRef,
   }
 }
 
 hubDemoPaymentRouter.post('/demo-payment/pending', async (req, res) => {
   const parsed = parseBody(req)
   if (!parsed) {
-    bad(res, 400, 'Invalid body: variant, categorySlug, payeeName, amountCents (>=100), payMethod, reference, and itemId or serviceSlug are required.')
+    bad(
+      res,
+      400,
+      'Invalid body: variant, categorySlug, payeeName, amountCents (>=100), payMethod, reference, and itemId or serviceSlug. For services water/electricity, meterOrAccountRef is required (min 4 characters, letters/digits/spaces/./-).',
+    )
     return
   }
   const pool = await getSqlPool({ eager: true })
@@ -109,6 +131,7 @@ hubDemoPaymentRouter.post('/demo-payment/pending', async (req, res) => {
     currency: 'NAD',
     payMethod: parsed.payMethod,
     stage: 'pending' as const,
+    ...(parsed.meterOrAccountRef ? { meterOrAccountRef: parsed.meterOrAccountRef } : {}),
   }
 
   const channel = await resolveOutboxChannel(pool, userId, email, 'hub_demo_pending_payment')
@@ -176,6 +199,7 @@ hubDemoPaymentRouter.post('/demo-payment/complete', async (req, res) => {
     payMethod: parsed.payMethod,
     stage: 'completed' as const,
     completedAt: new Date().toISOString(),
+    ...(parsed.meterOrAccountRef ? { meterOrAccountRef: parsed.meterOrAccountRef } : {}),
   }
 
   const channel = await resolveOutboxChannel(pool, userId, email, 'hub_demo_payment_completed')

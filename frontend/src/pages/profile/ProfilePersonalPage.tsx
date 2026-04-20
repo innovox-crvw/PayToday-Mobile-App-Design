@@ -7,6 +7,7 @@ import {
   Card,
   CardContent,
   CircularProgress,
+  Divider,
   Stack,
   TextField,
   Typography,
@@ -24,7 +25,16 @@ export function ProfilePersonalPage() {
 
   const { user, loading } = useAuthMe()
   const [fullName, setFullName] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+  const [confirmEmail, setConfirmEmail] = useState('')
+  const [emailPassword, setEmailPassword] = useState('')
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
   const [saving, setSaving] = useState(false)
+  const [savingEmail, setSavingEmail] = useState(false)
+  const [savingPw, setSavingPw] = useState(false)
+  const [resending, setResending] = useState(false)
   const [msg, setMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
 
   useEffect(() => {
@@ -32,7 +42,7 @@ export function ProfilePersonalPage() {
     else if (!user) setFullName('')
   }, [user])
 
-  async function save() {
+  async function saveName() {
     if (!user) return
     setMsg(null)
     setSaving(true)
@@ -48,12 +58,115 @@ export function ProfilePersonalPage() {
         setMsg({ text: data.error ?? 'Could not save', severity: 'error' })
         return
       }
-      setMsg({ text: 'Saved.', severity: 'success' })
+      setMsg({ text: 'Display name saved.', severity: 'success' })
       window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function saveEmail() {
+    if (!user) return
+    setMsg(null)
+    setSavingEmail(true)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newEmail.trim().toLowerCase(),
+          confirmEmail: confirmEmail.trim().toLowerCase(),
+          currentPassword: emailPassword,
+        }),
+      })
+      const data = (await res.json()) as {
+        ok?: boolean
+        error?: string
+        emailVerificationRequired?: boolean
+        devVerificationToken?: string
+      }
+      if (!res.ok) {
+        setMsg({ text: data.error ?? 'Could not update email', severity: 'error' })
+        return
+      }
+      setNewEmail('')
+      setConfirmEmail('')
+      setEmailPassword('')
+      const parts = ['Email updated.']
+      if (data.emailVerificationRequired) {
+        parts.push('Confirm the new address using the link sent to your email, or open the link from the dev token if enabled.')
+      }
+      if (data.devVerificationToken) {
+        parts.push(`Dev token: ${data.devVerificationToken}`)
+      }
+      setMsg({ text: parts.join(' '), severity: 'success' })
+      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
+    } finally {
+      setSavingEmail(false)
+    }
+  }
+
+  async function savePassword() {
+    if (!user) return
+    setMsg(null)
+    setSavingPw(true)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: currentPw,
+          newPassword: newPw,
+          confirmNewPassword: confirmPw,
+        }),
+      })
+      const data = (await res.json()) as { ok?: boolean; error?: string }
+      if (!res.ok) {
+        setMsg({ text: data.error ?? 'Could not update password', severity: 'error' })
+        return
+      }
+      setCurrentPw('')
+      setNewPw('')
+      setConfirmPw('')
+      setMsg({ text: 'Password updated. You remain signed in on this device.', severity: 'success' })
+      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
+    } finally {
+      setSavingPw(false)
+    }
+  }
+
+  async function resendVerification() {
+    setMsg(null)
+    setResending(true)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/auth/resend-verification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const data = (await res.json()) as { ok?: boolean; error?: string; alreadyVerified?: boolean; devVerificationToken?: string }
+      if (!res.ok) {
+        setMsg({ text: data.error ?? 'Could not resend', severity: 'error' })
+        return
+      }
+      if (data.alreadyVerified) {
+        setMsg({ text: 'Email is already verified.', severity: 'success' })
+        window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+        return
+      }
+      const t = data.devVerificationToken
+        ? `Verification link uses token (dev): open ${confirmPath}?token=${encodeURIComponent(data.devVerificationToken)}`
+        : 'Use the link sent to your inbox, or open Profile → Confirm email with the token from your email.'
+      setMsg({ text: `If your account is eligible, a new verification link was prepared. ${t}`, severity: 'success' })
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : 'Failed', severity: 'error' })
+    } finally {
+      setResending(false)
     }
   }
 
@@ -78,7 +191,7 @@ export function ProfilePersonalPage() {
               No user account
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
-              Personal details are available after you sign in. Your display name and email from the account screen will show here.
+              Personal details are available after you sign in.
             </Typography>
             <Button component={RouterLink} to={accountPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
               Go to Account
@@ -89,11 +202,13 @@ export function ProfilePersonalPage() {
     )
   }
 
+  const verified = user.emailVerified !== false
+
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}>
+    <Stack spacing={2.5} sx={{ maxWidth: 520, mx: 'auto', pb: 4 }}>
       <WalletSubheader title="My Personal Details" />
       <Typography variant="body2" color="text.secondary">
-        Display name and email stay in sync with the Account screen. Changes here update your profile for the store and notifications.
+        Update your display name, sign-in email, or password. Email and password changes require your current password for store accounts that use a password.
       </Typography>
 
       {msg ? (
@@ -102,26 +217,73 @@ export function ProfilePersonalPage() {
         </Alert>
       ) : null}
 
-      <TextField
-        label="Display name"
-        value={fullName}
-        onChange={(e) => setFullName(e.target.value)}
-        fullWidth
-        autoComplete="name"
-      />
-      <TextField label="Email" value={user.email} fullWidth disabled helperText="Email is tied to your sign-in. Change it via support if needed." />
+      {!verified ? (
+        <Alert severity="warning" action={
+          <Button color="inherit" size="small" disabled={resending} onClick={() => void resendVerification()}>
+            {resending ? 'Sending…' : 'Resend link'}
+          </Button>
+        }>
+          Your email is not verified yet. After registering, open the link we send you, or resend and then open{' '}
+          <RouterLink to={confirmPath}>Confirm email</RouterLink> with the token from the message.
+        </Alert>
+      ) : null}
 
-      <Typography variant="caption" color="text.secondary" display="block">
-        Extra fields (phone, ID, date of birth) can be added when your KYC APIs are connected.
+      <Typography variant="subtitle2" fontWeight={700}>
+        Display name
       </Typography>
-
-      <Button component={RouterLink} to={confirmPath} variant="text" size="small" sx={{ alignSelf: 'flex-start' }}>
-        Preview email confirmation flow
+      <TextField label="Display name" value={fullName} onChange={(e) => setFullName(e.target.value)} fullWidth autoComplete="name" />
+      <Button variant="contained" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={saving} onClick={() => void saveName()}>
+        {saving ? 'Saving…' : 'Save name'}
       </Button>
 
-      <Button variant="contained" size="large" fullWidth sx={{ borderRadius: 2, fontWeight: 700, mt: 1 }} disabled={saving} onClick={() => void save()}>
-        {saving ? 'Saving…' : 'Save'}
+      <Divider sx={{ my: 1 }} />
+
+      <Typography variant="subtitle2" fontWeight={700}>
+        Email ({user.email})
+      </Typography>
+      <TextField
+        label="New email"
+        type="email"
+        value={newEmail}
+        onChange={(e) => setNewEmail(e.target.value)}
+        fullWidth
+        autoComplete="email"
+      />
+      <TextField
+        label="Confirm new email"
+        type="email"
+        value={confirmEmail}
+        onChange={(e) => setConfirmEmail(e.target.value)}
+        fullWidth
+        autoComplete="off"
+      />
+      <TextField
+        label="Current password"
+        type="password"
+        value={emailPassword}
+        onChange={(e) => setEmailPassword(e.target.value)}
+        fullWidth
+        autoComplete="current-password"
+      />
+      <Button variant="outlined" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={savingEmail} onClick={() => void saveEmail()}>
+        {savingEmail ? 'Updating…' : 'Update email'}
       </Button>
+
+      <Divider sx={{ my: 1 }} />
+
+      <Typography variant="subtitle2" fontWeight={700}>
+        Password
+      </Typography>
+      <TextField label="Current password" type="password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} fullWidth autoComplete="current-password" />
+      <TextField label="New password" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} fullWidth autoComplete="new-password" />
+      <TextField label="Confirm new password" type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} fullWidth autoComplete="new-password" />
+      <Button variant="outlined" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={savingPw} onClick={() => void savePassword()}>
+        {savingPw ? 'Updating…' : 'Update password'}
+      </Button>
+
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ pt: 1 }}>
+        Forgot your password? Use the store forgot-password flow when linked from sign-in, or ask your administrator for Keycloak accounts.
+      </Typography>
     </Stack>
   )
 }

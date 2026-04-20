@@ -20,6 +20,7 @@ import SupportAgentOutlinedIcon from '@mui/icons-material/SupportAgentOutlined'
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
+import HomeWorkOutlinedIcon from '@mui/icons-material/HomeWorkOutlined'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
@@ -35,6 +36,7 @@ type MenuItem = {
 
 const menu: MenuItem[] = [
   { to: 'personal', label: 'My Personal Details', icon: <PersonOutlineIcon />, authOnly: true },
+  { to: 'addresses', label: 'Address book', icon: <HomeWorkOutlinedIcon />, authOnly: true },
   { to: 'settings', label: 'Settings', icon: <SettingsOutlinedIcon />, authOnly: true },
   { to: 'support', label: 'Support', icon: <SupportAgentOutlinedIcon /> },
   { to: 'legal', label: 'Legal', icon: <GavelOutlinedIcon /> },

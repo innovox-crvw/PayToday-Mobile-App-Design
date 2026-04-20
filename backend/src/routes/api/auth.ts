@@ -6,29 +6,44 @@ import { env } from '../../config/env.js'
 import type { UserRole } from '../../types/roles.js'
 import { requireAuth } from '../../middleware/auth.js'
 import { getSqlPool } from '../../db/pool.js'
-import { createUser, findUserByEmail, findUserById, updateUserProfile } from '../../repos/usersRepo.js'
+import { isValidEmailFormat } from '../../lib/emailValidation.js'
+import {
+  createUser,
+  findUserByEmail,
+  findUserById,
+  updateUserProfile,
+  resetLoginFailures,
+  recordFailedLogin,
+  updateUserEmail,
+  setUserPasswordHash,
+  setEmailVerificationToken,
+  findUserIdByEmailVerificationHash,
+  markEmailVerified,
+} from '../../repos/usersRepo.js'
+import {
+  findKeycloakThrottleByEmail,
+  recordFailedKeycloakThrottle,
+  resetKeycloakThrottle,
+} from '../../repos/keycloakLoginThrottleRepo.js'
+import {
+  insertPasswordResetToken,
+  findValidPasswordResetUserId,
+  markPasswordResetTokenUsed,
+} from '../../repos/passwordResetTokensRepo.js'
 import { findValidRefreshToken, revokeAllRefreshTokensForUser, revokeRefreshToken } from '../../repos/refreshTokensRepo.js'
 import { sqlUserIdFromJwtUser } from '../../lib/authUserId.js'
 import { mergeGuestCartIntoUser } from '../../services/cartService.js'
 import { CART_COOKIE } from '../../services/cartService.js'
 import { accessTokenCookieOptions } from '../../services/authCookies.js'
 import { issueAccessToken, setAuthCookiesForUser } from '../../services/authSession.js'
-import {
-  buildKeycloakAuthorizeUrl,
-  exchangeKeycloakCode,
-  fetchKeycloakProfileFromAccessToken,
-  KeycloakAuthError,
-} from '../../services/keycloakOidc.js'
-import { fetchKeycloakPasswordGrantToken } from '../../services/keycloakToken.js'
+import { KeycloakAuthError, keycloakPasswordSignIn } from '../../services/keycloakClient.js'
 import { upsertUserFromKeycloakProfile } from '../../services/keycloakProvision.js'
 import { getIntegrationSettingsMap } from '../../services/integrationSettingsCache.js'
 import {
-  isKeycloakOidcConfiguredKc,
-  isRocpEnvReadyKc,
+  isKeycloakConfigured,
   mergeKeycloakRuntime,
   mergeNotifyRuntime,
   notifyInboxBrowserUrl,
-  type KeycloakRuntimeConfig,
 } from '../../services/integrationRuntimeConfig.js'
 
 export const authRouter = Router()
@@ -48,7 +63,7 @@ const KEYCLOAK_HTTP_API_INDEX = [
     path: '/api/auth/login',
     csrf: true,
     summary:
-      'Sign in. JSON: { email, password, authSource?: "local" | "paytoday" }. Default local DB bcrypt; paytoday uses Keycloak ROPC when KEYCLOAK_ROPC_LOGIN_ENABLED and token/client env are set.',
+      'Sign in. JSON: { email, password, authSource?: "local" | "paytoday" }. Default local DB bcrypt; paytoday uses Keycloak password grant server-side when KEYCLOAK_BASE_URL/REALM/CLIENT_ID are set.',
   },
   {
     method: 'GET' as const,
@@ -60,25 +75,8 @@ const KEYCLOAK_HTTP_API_INDEX = [
     method: 'GET' as const,
     path: '/api/auth/keycloak/status',
     csrf: false,
-    summary: 'Whether OIDC is configured; Keycloak-only and ROPC flags.',
-  },
-  {
-    method: 'GET' as const,
-    path: '/api/auth/keycloak/start',
-    csrf: false,
-    summary: 'Returns Keycloak authorize URL for PKCE (query: redirect_uri, code_challenge, code_challenge_method, after_login).',
-  },
-  {
-    method: 'POST' as const,
-    path: '/api/auth/keycloak/callback',
-    csrf: true,
-    summary: 'Exchange authorization code for app session cookies (JSON body: code, redirect_uri, code_verifier, state).',
-  },
-  {
-    method: 'POST' as const,
-    path: '/api/auth/keycloak/ro-password',
-    csrf: true,
-    summary: 'Optional ROPC sign-in when KEYCLOAK_ROPC_LOGIN_ENABLED=true (JSON: username, password, optional audience).',
+    summary:
+      'Returns paytodaySignInEnabled + localPasswordLoginAllowed so the SPA knows which /api/auth/login methods are available.',
   },
 ]
 
@@ -89,21 +87,18 @@ authRouter.get('/keycloak/routes', (_req, res) => {
   })
 })
 
+/**
+ * Auth-method availability for the SPA. The SPA never calls Keycloak directly;
+ * it just needs to know which `/api/auth/login` `authSource` values work right now.
+ */
 authRouter.get('/keycloak/status', async (_req, res) => {
   const pool = await getSqlPool()
   const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
-  const enabled = isKeycloakOidcConfiguredKc(kc)
-  const ropcEnvReady = isRocpEnvReadyKc(kc)
   res.json({
-    enabled,
-    clientId: kc.oidcClientId || undefined,
-    keycloakOnly: kc.signInOnly,
-    /** When `keycloakOnly` is true but Keycloak env is incomplete, the UI should show a configuration warning. */
-    keycloakReady: kc.signInOnly ? enabled : undefined,
-    /** `POST /api/auth/keycloak/ro-password` and `POST /api/auth/login` with `authSource: "paytoday"` when this is true. */
-    ropcLoginEnabled: kc.ropcLoginEnabled && ropcEnvReady,
-    /** When false and `keycloakOnly` is true, hide local email/password forms (unless you intentionally allow dual sign-in). */
-    localPasswordLoginAllowed: !kc.signInOnly || kc.allowLocalPasswordLogin,
+    /** `POST /api/auth/login` with `authSource: "paytoday"` works when this is true. */
+    paytodaySignInEnabled: isKeycloakConfigured(kc),
+    /** Local store sign-in and registration are always available; role-based gating lives in `users.role`. */
+    localPasswordLoginAllowed: true,
   })
 })
 
@@ -120,65 +115,81 @@ authRouter.get('/public-config', async (_req, res) => {
   })
 })
 
-/** Local email/password login/register blocked when KEYCLOAK_SIGN_IN_ONLY=true unless dual-login override is set. */
-function rejectPasswordAuthIfKeycloakOnly(res: import('express').Response, kc: KeycloakRuntimeConfig): boolean {
-  if (!kc.signInOnly) return false
-  if (kc.allowLocalPasswordLogin) return false
-  if (!isKeycloakOidcConfiguredKc(kc)) {
-    res.status(503).json({
-      error:
-        'KEYCLOAK_SIGN_IN_ONLY is enabled but Keycloak OIDC is not configured. Set KEYCLOAK_ISSUER (or KEYCLOAK_TOKEN_URL) and KEYCLOAK_CLIENT_ID in the environment or dbo.integration_settings.',
-    })
-    return true
-  }
-  res.status(403).json({
-    error: 'Password sign-in is disabled. Use “Continue with Keycloak”.',
-    keycloakOnly: true,
-  })
-  return true
+async function isKeycloakSignInLocked(
+  pool: NonNullable<Awaited<ReturnType<typeof getSqlPool>>>,
+  emailLower: string,
+): Promise<boolean> {
+  const user = await findUserByEmail(pool, emailLower)
+  if (user?.locked_until && new Date(user.locked_until) > new Date()) return true
+  const th = await findKeycloakThrottleByEmail(pool, emailLower)
+  if (th?.locked_until && new Date(th.locked_until) > new Date()) return true
+  return false
 }
 
-async function completeKeycloakPasswordGrantSession(
+async function recordKeycloakAuthFailure(
+  pool: NonNullable<Awaited<ReturnType<typeof getSqlPool>>>,
+  emailLower: string,
+): Promise<void> {
+  const user = await findUserByEmail(pool, emailLower)
+  if (user?.keycloak_sub) {
+    await recordFailedLogin(pool, user.id, env.authLockoutMaxAttempts, env.authLockoutMinutes)
+  } else {
+    await recordFailedKeycloakThrottle(pool, emailLower, env.authLockoutMaxAttempts, env.authLockoutMinutes)
+  }
+}
+
+async function clearKeycloakAuthFailuresOnSuccess(
+  pool: NonNullable<Awaited<ReturnType<typeof getSqlPool>>>,
+  userId: string,
+  emailLower: string,
+): Promise<void> {
+  await resetLoginFailures(pool, userId)
+  await resetKeycloakThrottle(pool, emailLower)
+}
+
+/**
+ * Sign in a PayToday user via Keycloak password grant and hydrate local `dbo.users`.
+ * Called from `POST /api/auth/login` when `authSource: "paytoday"`.
+ */
+async function completePaytodaySignIn(
   pool: NonNullable<Awaited<ReturnType<typeof getSqlPool>>>,
   req: import('express').Request,
   res: import('express').Response,
-  username: string,
+  email: string,
   password: string,
-  audience: 'frontend' | 'mobile',
-  kc: KeycloakRuntimeConfig,
 ): Promise<void> {
-  if (!kc.tokenUrl || !kc.issuerBase) {
-    res.status(503).json({
+  const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
+  if (!isKeycloakConfigured(kc)) {
+    res.status(400).json({
       error:
-        'Keycloak password grant is not configured. Set KEYCLOAK_TOKEN_URL and KEYCLOAK_ISSUER (or a token URL from which the issuer can be derived) in env or dbo.integration_settings.',
+        "PayToday sign-in isn't configured on this server. Set KEYCLOAK_BASE_URL, KEYCLOAK_REALM, and KEYCLOAK_CLIENT_ID.",
       code: 'paytoday_login_failed',
     })
     return
   }
-  if (audience === 'mobile') {
-    if (!kc.mobileClientId || !kc.mobileClientSecret) {
-      res.status(503).json({
-        error: 'Keycloak mobile client is not configured for password grant.',
-        code: 'paytoday_login_failed',
-      })
-      return
-    }
-  } else if (!kc.frontendClientId || !kc.frontendClientSecret) {
-    res.status(503).json({
-      error:
-        'Keycloak frontend client is not configured for password grant. Set KEYCLOAK_FRONTEND_CLIENT_ID and KEYCLOAK_FRONTEND_CLIENT_SECRET in env or dbo.integration_settings.',
-      code: 'paytoday_login_failed',
+  const emailLower = email.trim().toLowerCase()
+  if (emailLower && isValidEmailFormat(emailLower) && (await isKeycloakSignInLocked(pool, emailLower))) {
+    res.status(423).json({
+      error: 'Account temporarily locked due to failed sign-in attempts. Try again later.',
+      code: 'account_locked',
     })
     return
   }
   try {
-    const tok = await fetchKeycloakPasswordGrantToken(kc, audience, username, password)
-    const profile = await fetchKeycloakProfileFromAccessToken(kc, tok.access_token)
+    const profile = await keycloakPasswordSignIn(kc, email, password)
+    const profileEmailLower = profile.email.trim().toLowerCase()
+    if (await isKeycloakSignInLocked(pool, profileEmailLower)) {
+      res.status(423).json({
+        error: 'Account temporarily locked due to failed sign-in attempts. Try again later.',
+        code: 'account_locked',
+      })
+      return
+    }
     const row = await upsertUserFromKeycloakProfile(pool, {
       keycloakSub: profile.keycloakSub,
       email: profile.email,
       fullName: profile.fullName,
-      role: profile.role,
+      emailVerified: profile.emailVerified,
     })
     const sessionToken = req.cookies?.[CART_COOKIE] as string | undefined
     if (sessionToken) {
@@ -189,121 +200,28 @@ async function completeKeycloakPasswordGrantSession(
       }
     }
     await revokeAllRefreshTokensForUser(pool, row.id)
+    await clearKeycloakAuthFailuresOnSuccess(pool, row.id, profileEmailLower)
     await setAuthCookiesForUser(res, pool, row.id, row.email, row.role)
     res.json({ ok: true, user: { id: row.id, email: row.email, role: row.role }, authSource: 'paytoday' })
   } catch (e) {
+    if (emailLower && isValidEmailFormat(emailLower)) {
+      try {
+        await recordKeycloakAuthFailure(pool, emailLower)
+      } catch {
+        /* ignore throttle DB errors */
+      }
+    }
     if (e instanceof KeycloakAuthError) {
       res.status(e.statusCode).json({ error: e.message, code: 'paytoday_login_failed' })
       return
     }
-    const msg = e instanceof Error ? e.message : 'Keycloak sign-in failed'
+    const msg = e instanceof Error ? e.message : 'PayToday sign-in failed'
     res.status(401).json({ error: msg, code: 'paytoday_login_failed' })
   }
 }
 
-authRouter.get('/keycloak/start', async (req, res) => {
-  try {
-    const pool = await getSqlPool()
-    const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
-    const redirectUri = typeof req.query.redirect_uri === 'string' ? req.query.redirect_uri : ''
-    const codeChallenge = typeof req.query.code_challenge === 'string' ? req.query.code_challenge : ''
-    const codeChallengeMethod = typeof req.query.code_challenge_method === 'string' ? req.query.code_challenge_method : ''
-    const afterLogin = typeof req.query.after_login === 'string' ? req.query.after_login : '/account'
-    if (!redirectUri || !codeChallenge || codeChallengeMethod !== 'S256') {
-      res
-        .status(400)
-        .json({ error: 'redirect_uri, code_challenge, and code_challenge_method=S256 are required' })
-      return
-    }
-    const url = await buildKeycloakAuthorizeUrl(kc, {
-      redirectUri,
-      codeChallenge,
-      codeChallengeMethod: 'S256',
-      afterLogin,
-    })
-    res.json({ url })
-  } catch (e) {
-    if (e instanceof KeycloakAuthError) {
-      res.status(e.statusCode).json({ error: e.message })
-      return
-    }
-    throw e
-  }
-})
-
-authRouter.post('/keycloak/callback', async (req, res) => {
-  const pool = await getSqlPool()
-  if (!pool) {
-    res.status(503).json({ error: 'Database required for Keycloak sign-in' })
-    return
-  }
-  const code = typeof req.body?.code === 'string' ? req.body.code : ''
-  const redirectUri = typeof req.body?.redirect_uri === 'string' ? req.body.redirect_uri : ''
-  const codeVerifier = typeof req.body?.code_verifier === 'string' ? req.body.code_verifier : ''
-  const state = typeof req.body?.state === 'string' ? req.body.state : ''
-  if (!code || !redirectUri || !codeVerifier || !state) {
-    res.status(400).json({ error: 'code, redirect_uri, code_verifier, and state are required' })
-    return
-  }
-  try {
-    const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
-    const profile = await exchangeKeycloakCode(kc, { code, redirectUri, codeVerifier, state })
-    const row = await upsertUserFromKeycloakProfile(pool, {
-      keycloakSub: profile.keycloakSub,
-      email: profile.email,
-      fullName: profile.fullName,
-      role: profile.role,
-    })
-    const sessionToken = req.cookies?.[CART_COOKIE] as string | undefined
-    if (sessionToken) {
-      try {
-        await mergeGuestCartIntoUser(pool, sessionToken, row.id)
-      } catch {
-        /* ignore */
-      }
-    }
-    await revokeAllRefreshTokensForUser(pool, row.id)
-    await setAuthCookiesForUser(res, pool, row.id, row.email, row.role)
-    res.json({ ok: true, user: { id: row.id, email: row.email, role: row.role }, next: profile.next })
-  } catch (e) {
-    if (e instanceof KeycloakAuthError) {
-      res.status(e.statusCode).json({ error: e.message })
-      return
-    }
-    throw e
-  }
-})
-
-/**
- * Keycloak resource-owner password grant → same session cookies as OIDC callback.
- * Disabled unless `KEYCLOAK_ROPC_LOGIN_ENABLED=true` and token + frontend client credentials are set.
- * Does not return Keycloak access tokens to the client.
- */
-authRouter.post('/keycloak/ro-password', async (req, res) => {
-  const pool = await getSqlPool()
-  const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
-  if (!kc.ropcLoginEnabled) {
-    res.status(404).json({ error: 'Not found' })
-    return
-  }
-  if (!pool) {
-    res.status(503).json({ error: 'Database required for Keycloak sign-in' })
-    return
-  }
-  const username = typeof req.body?.username === 'string' ? req.body.username.trim() : ''
-  const password = typeof req.body?.password === 'string' ? req.body.password : ''
-  const audience = req.body?.audience === 'mobile' ? 'mobile' : 'frontend'
-  if (!username || !password) {
-    res.status(400).json({ error: 'username and password required' })
-    return
-  }
-  await completeKeycloakPasswordGrantSession(pool, req, res, username, password, audience, kc)
-})
-
 authRouter.post('/register', async (req, res) => {
   const pool = await getSqlPool()
-  const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
-  if (rejectPasswordAuthIfKeycloakOnly(res, kc)) return
   if (!pool) {
     res.status(503).json({ error: 'Database unavailable — start SQL Server or use login without registering' })
     return
@@ -315,17 +233,37 @@ authRouter.post('/register', async (req, res) => {
     res.status(400).json({ error: 'email and password required' })
     return
   }
+  if (!isValidEmailFormat(email)) {
+    res.status(400).json({ error: 'Invalid email format' })
+    return
+  }
   if (password.length < 8) {
     res.status(400).json({ error: 'password must be at least 8 characters' })
     return
   }
   const existing = await findUserByEmail(pool, email)
   if (existing) {
+    if (existing.keycloak_sub) {
+      res.status(409).json({
+        error: 'This email already has a PayToday account. Sign in with PayToday instead of registering.',
+        code: 'paytoday_account_exists',
+      })
+      return
+    }
     res.status(409).json({ error: 'Email already registered' })
     return
   }
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
-  const userId = await createUser(pool, { email, passwordHash, fullName, role: 'customer' })
+  const emailNorm = email.toLowerCase()
+  const userId = await createUser(pool, { email: emailNorm, passwordHash, fullName, role: 'customer' })
+  const rawVerify = crypto.randomBytes(32).toString('hex')
+  const verifyHash = crypto.createHash('sha256').update(rawVerify, 'utf8').digest()
+  const verifyExp = new Date(Date.now() + 48 * 60 * 60 * 1000)
+  try {
+    await setEmailVerificationToken(pool, userId, verifyHash, verifyExp)
+  } catch (e) {
+    console.warn('[auth/register] email verification token skipped:', e instanceof Error ? e.message : e)
+  }
   const sessionToken = req.cookies?.[CART_COOKIE] as string | undefined
   if (sessionToken) {
     try {
@@ -334,8 +272,16 @@ authRouter.post('/register', async (req, res) => {
       /* ignore merge failures */
     }
   }
-  await setAuthCookiesForUser(res, pool, userId, email, 'customer')
-  res.json({ ok: true, user: { id: userId, email, role: 'customer' } })
+  await setAuthCookiesForUser(res, pool, userId, emailNorm, 'customer')
+  const body: Record<string, unknown> = {
+    ok: true,
+    user: { id: userId, email: emailNorm, role: 'customer' },
+    emailVerificationRequired: true,
+  }
+  if (env.nodeEnv !== 'production' && process.env.DEV_EMAIL_VERIFICATION_REVEAL_TOKEN === 'true') {
+    body.devVerificationToken = rawVerify
+  }
+  res.json(body)
 })
 
 authRouter.post('/login', async (req, res) => {
@@ -344,17 +290,10 @@ authRouter.post('/login', async (req, res) => {
   if (authSource === 'paytoday') {
     const poolEarly = await getSqlPool()
     const kcEarly = mergeKeycloakRuntime(await getIntegrationSettingsMap(poolEarly))
-    if (!kcEarly.ropcLoginEnabled) {
+    if (!isKeycloakConfigured(kcEarly)) {
       res.status(400).json({
         error:
-          'PayToday password sign-in is disabled. Set KEYCLOAK_ROPC_LOGIN_ENABLED=true and Keycloak token URL + client credentials (env or dbo.integration_settings), use “Continue with Keycloak”, or sign in with a store password when allowed.',
-        code: 'paytoday_login_failed',
-      })
-      return
-    }
-    if (!isRocpEnvReadyKc(kcEarly)) {
-      res.status(503).json({
-        error: 'Keycloak resource-owner (password) grant is not fully configured on the server.',
+          "PayToday sign-in isn't configured on this server. Set KEYCLOAK_BASE_URL, KEYCLOAK_REALM, and KEYCLOAK_CLIENT_ID.",
         code: 'paytoday_login_failed',
       })
       return
@@ -365,25 +304,26 @@ authRouter.post('/login', async (req, res) => {
       res.status(400).json({ error: 'email and password required' })
       return
     }
-    const pool = await getSqlPool()
-    if (!pool) {
+    if (!poolEarly) {
       res.status(503).json({
         error: 'Database required for PayToday sign-in',
         code: 'paytoday_login_failed',
       })
       return
     }
-    await completeKeycloakPasswordGrantSession(pool, req, res, email, password, 'frontend', kcEarly)
+    await completePaytodaySignIn(poolEarly, req, res, email, password)
     return
   }
 
   const pool = await getSqlPool()
-  const kc = mergeKeycloakRuntime(await getIntegrationSettingsMap(pool))
-  if (rejectPasswordAuthIfKeycloakOnly(res, kc)) return
   const email = typeof req.body?.email === 'string' ? req.body.email.trim() : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
   if (!email || !password) {
     res.status(400).json({ error: 'email and password required' })
+    return
+  }
+  if (!isValidEmailFormat(email)) {
+    res.status(400).json({ error: 'Invalid email format' })
     return
   }
 
@@ -401,16 +341,26 @@ authRouter.post('/login', async (req, res) => {
       res.status(401).json({ error: 'Invalid credentials' })
       return
     }
-    if (!user.password_hash) {
-      res.status(401).json({
-        error: 'This account uses Keycloak. Use “Continue with Keycloak” on the sign-in page.',
+    if (!user.password_hash || user.keycloak_sub) {
+      res.status(409).json({
+        error: 'This email uses a PayToday account. Switch to PayToday sign-in.',
+        code: 'use_paytoday_account',
+      })
+      return
+    }
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      res.status(423).json({
+        error: 'Account temporarily locked due to failed sign-in attempts. Try again later.',
+        code: 'account_locked',
       })
       return
     }
     if (!(await bcrypt.compare(password, user.password_hash))) {
+      await recordFailedLogin(pool, user.id, env.authLockoutMaxAttempts, env.authLockoutMinutes)
       res.status(401).json({ error: 'Invalid credentials' })
       return
     }
+    await resetLoginFailures(pool, user.id)
     role = user.role
     const sessionToken = req.cookies?.[CART_COOKIE] as string | undefined
     if (sessionToken) {
@@ -466,6 +416,108 @@ authRouter.post('/logout', async (req, res) => {
   res.json({ ok: true })
 })
 
+authRouter.get('/verify-email', async (req, res) => {
+  const pool = await getSqlPool()
+  const raw = typeof req.query.token === 'string' ? req.query.token.trim() : ''
+  if (!pool || !raw) {
+    res.status(400).json({ error: 'token required' })
+    return
+  }
+  const hash = crypto.createHash('sha256').update(raw, 'utf8').digest()
+  const userId = await findUserIdByEmailVerificationHash(pool, hash)
+  if (!userId) {
+    res.status(400).json({ error: 'Invalid or expired verification link' })
+    return
+  }
+  await markEmailVerified(pool, userId)
+  res.json({ ok: true, message: 'Email verified.' })
+})
+
+authRouter.post('/forgot-password', async (req, res) => {
+  const pool = await getSqlPool()
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const body: Record<string, unknown> = { ok: true, message: 'If an account exists, a reset link will be sent.' }
+  if (!pool || !email || !isValidEmailFormat(email)) {
+    res.json(body)
+    return
+  }
+  const user = await findUserByEmail(pool, email)
+  if (!user?.password_hash) {
+    res.json(body)
+    return
+  }
+  const raw = crypto.randomBytes(32).toString('hex')
+  const hash = crypto.createHash('sha256').update(raw, 'utf8').digest()
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+  await insertPasswordResetToken(pool, user.id, hash, expiresAt)
+  if (env.nodeEnv !== 'production' && env.devPasswordResetRevealToken) {
+    body.devResetToken = raw
+    body.devResetHint = 'Set DEV_PASSWORD_RESET_REVEAL_TOKEN=false in production; integrate email delivery for real resets.'
+  }
+  res.json(body)
+})
+
+authRouter.post('/reset-password', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database unavailable' })
+    return
+  }
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : ''
+  const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : ''
+  const confirm = typeof req.body?.confirmNewPassword === 'string' ? req.body.confirmNewPassword : ''
+  if (!token || !newPassword || newPassword !== confirm) {
+    res.status(400).json({ error: 'token, newPassword, and matching confirmNewPassword required' })
+    return
+  }
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: 'password must be at least 8 characters' })
+    return
+  }
+  const hash = crypto.createHash('sha256').update(token, 'utf8').digest()
+  const found = await findValidPasswordResetUserId(pool, hash)
+  if (!found) {
+    res.status(400).json({ error: 'Invalid or expired reset link' })
+    return
+  }
+  const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS)
+  await setUserPasswordHash(pool, found.userId, passwordHash)
+  await markPasswordResetTokenUsed(pool, found.tokenId)
+  await revokeAllRefreshTokensForUser(pool, found.userId)
+  const row = await findUserById(pool, found.userId)
+  if (row) {
+    await setAuthCookiesForUser(res, pool, row.id, row.email, row.role)
+  }
+  res.json({ ok: true })
+})
+
+authRouter.post('/resend-verification', requireAuth, async (req, res) => {
+  const pool = await getSqlPool()
+  const uid = sqlUserIdFromJwtUser(req.user)
+  if (!pool || !uid) {
+    res.status(503).json({ error: 'Database unavailable' })
+    return
+  }
+  const row = await findUserById(pool, uid)
+  if (!row?.password_hash) {
+    res.status(400).json({ error: 'Email verification applies to password accounts only.' })
+    return
+  }
+  if (row.email_verified) {
+    res.json({ ok: true, alreadyVerified: true })
+    return
+  }
+  const raw = crypto.randomBytes(32).toString('hex')
+  const hash = crypto.createHash('sha256').update(raw, 'utf8').digest()
+  const verifyExp = new Date(Date.now() + 48 * 60 * 60 * 1000)
+  await setEmailVerificationToken(pool, uid, hash, verifyExp)
+  const out: Record<string, unknown> = { ok: true }
+  if (env.nodeEnv !== 'production' && process.env.DEV_EMAIL_VERIFICATION_REVEAL_TOKEN === 'true') {
+    out.devVerificationToken = raw
+  }
+  res.json(out)
+})
+
 authRouter.get('/me', requireAuth, async (req, res) => {
   const pool = await getSqlPool()
   const uid = sqlUserIdFromJwtUser(req.user)
@@ -478,6 +530,7 @@ authRouter.get('/me', requireAuth, async (req, res) => {
             ...req.user,
             fullName: row.full_name,
             notificationChannel: row.notification_channel,
+            emailVerified: Boolean(row.email_verified),
           },
         })
         return
@@ -503,6 +556,12 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
     })
     return
   }
+  const row = await findUserById(pool, uid)
+  if (!row) {
+    res.status(404).json({ error: 'User not found' })
+    return
+  }
+
   const body = req.body ?? {}
   let fullName: string | null | undefined
   if (Object.prototype.hasOwnProperty.call(body, 'fullName')) {
@@ -510,9 +569,100 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
       res.status(400).json({ error: 'fullName must be a string' })
       return
     }
-    fullName = body.fullName.trim() || null
+    const t = body.fullName.trim()
+    if (t.length > 200) {
+      res.status(400).json({ error: 'fullName is too long' })
+      return
+    }
+    fullName = t || null
   }
   const notificationChannel = typeof body.notificationChannel === 'string' ? body.notificationChannel : undefined
+
+  const wantsEmail = Object.prototype.hasOwnProperty.call(body, 'email')
+  const wantsPassword =
+    Object.prototype.hasOwnProperty.call(body, 'newPassword') ||
+    Object.prototype.hasOwnProperty.call(body, 'confirmNewPassword')
+
+  const newEmail = wantsEmail && typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  const confirmEmail =
+    wantsEmail && typeof body.confirmEmail === 'string' ? body.confirmEmail.trim().toLowerCase() : ''
+  const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : ''
+  const newPassword = typeof body.newPassword === 'string' ? body.newPassword : ''
+  const confirmNewPassword = typeof body.confirmNewPassword === 'string' ? body.confirmNewPassword : ''
+
+  if (wantsEmail || wantsPassword) {
+    if (!row.password_hash) {
+      res.status(400).json({
+        error: 'Password changes and email changes for Keycloak accounts must be done in your identity provider.',
+      })
+      return
+    }
+    if (!currentPassword) {
+      res.status(400).json({ error: 'currentPassword is required to change email or password' })
+      return
+    }
+    if (!(await bcrypt.compare(currentPassword, row.password_hash))) {
+      res.status(401).json({ error: 'Current password is incorrect' })
+      return
+    }
+  }
+
+  if (wantsEmail) {
+    if (!newEmail || !confirmEmail || newEmail !== confirmEmail) {
+      res.status(400).json({ error: 'email and confirmEmail must match' })
+      return
+    }
+    if (!isValidEmailFormat(newEmail)) {
+      res.status(400).json({ error: 'Invalid email format' })
+      return
+    }
+    if (newEmail === row.email.toLowerCase()) {
+      res.status(400).json({ error: 'That is already your email' })
+      return
+    }
+    const taken = await findUserByEmail(pool, newEmail)
+    if (taken) {
+      res.status(409).json({ error: 'Email already in use' })
+      return
+    }
+    await updateUserEmail(pool, uid, newEmail)
+    const rawVerify = crypto.randomBytes(32).toString('hex')
+    const vHash = crypto.createHash('sha256').update(rawVerify, 'utf8').digest()
+    const verifyExp = new Date(Date.now() + 48 * 60 * 60 * 1000)
+    await pool
+      .request()
+      .input('id', uid)
+      .query(`UPDATE dbo.users SET email_verified = 0, updated_at = SYSUTCDATETIME() WHERE id = @id`)
+    await setEmailVerificationToken(pool, uid, vHash, verifyExp)
+    await revokeAllRefreshTokensForUser(pool, uid)
+    await setAuthCookiesForUser(res, pool, uid, newEmail, row.role)
+    res.json({
+      ok: true,
+      emailChanged: true,
+      emailVerificationRequired: true,
+      ...(env.nodeEnv !== 'production' && process.env.DEV_EMAIL_VERIFICATION_REVEAL_TOKEN === 'true'
+        ? { devVerificationToken: rawVerify }
+        : {}),
+    })
+    return
+  }
+
+  if (wantsPassword) {
+    if (!newPassword || newPassword !== confirmNewPassword) {
+      res.status(400).json({ error: 'newPassword and confirmNewPassword must match' })
+      return
+    }
+    if (newPassword.length < 8) {
+      res.status(400).json({ error: 'password must be at least 8 characters' })
+      return
+    }
+    const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS)
+    await setUserPasswordHash(pool, uid, passwordHash)
+    await revokeAllRefreshTokensForUser(pool, uid)
+    await setAuthCookiesForUser(res, pool, uid, row.email, row.role)
+    res.json({ ok: true, passwordChanged: true })
+    return
+  }
 
   if (fullName === undefined && notificationChannel === undefined) {
     res.status(400).json({ error: 'No updates provided' })

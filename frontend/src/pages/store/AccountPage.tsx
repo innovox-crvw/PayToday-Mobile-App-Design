@@ -204,6 +204,9 @@ export function AccountPage() {
               <Button component={RouterLink} to={`${pathPrefix}/profile`} variant="outlined" size="small">
                 Profile hub
               </Button>
+              <Button component={RouterLink} to={`${pathPrefix}/profile/addresses`} variant="outlined" size="small">
+                Addresses
+              </Button>
             </Stack>
           </Paper>
 

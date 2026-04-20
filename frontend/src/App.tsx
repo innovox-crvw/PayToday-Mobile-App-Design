@@ -9,15 +9,17 @@ import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage'
 import { AdminReturnsPage } from './pages/admin/AdminReturnsPage'
 import { AdminProductsPage } from './pages/admin/AdminProductsPage'
+import { AdminCategoriesPage } from './pages/admin/AdminCategoriesPage'
 import { AdminLoginPage } from './pages/admin/AdminLoginPage'
 import { RequireAdminStaff } from './pages/admin/RequireAdminStaff'
 import { AccountPage } from './pages/store/AccountPage'
-import { KeycloakCallbackPage } from './pages/store/KeycloakCallbackPage'
 import { CartPage } from './pages/store/CartPage'
 import { CheckoutPage } from './pages/store/CheckoutPage'
 import { CheckoutSuccessPage } from './pages/store/CheckoutSuccessPage'
 import { CheckoutFailurePage } from './pages/store/CheckoutFailurePage'
 import { CheckoutCompletePage } from './pages/store/CheckoutCompletePage'
+import { ForgotPasswordPage } from './pages/store/ForgotPasswordPage'
+import { ResetPasswordPage } from './pages/store/ResetPasswordPage'
 import { OrdersListPage } from './pages/store/OrdersListPage'
 import { OrderDetailPage } from './pages/store/OrderDetailPage'
 import { ReturnRequestPage } from './pages/store/ReturnRequestPage'
@@ -44,6 +46,7 @@ import { ProfileFeedbackSentPage } from './pages/profile/ProfileFeedbackSentPage
 import { ProfileSettingsPage } from './pages/profile/ProfileSettingsPage'
 import { ProfileLegalPage } from './pages/profile/ProfileLegalPage'
 import { ProfileDeleteAccountPage } from './pages/profile/ProfileDeleteAccountPage'
+import { ProfileAddressesPage } from './pages/profile/ProfileAddressesPage'
 import { NotificationsPage } from './pages/notifications/NotificationsPage'
 import { NotificationDetailPage } from './pages/notifications/NotificationDetailPage'
 import { ClassifiedsHomePage } from './pages/classifieds/ClassifiedsHomePage'
@@ -86,7 +89,8 @@ function storeRouteElements(withHome: boolean) {
       <Route path="intro" element={<IntroCarouselPage />} />
       <Route path="onboarding/loading" element={<OnboardingLoadingPage />} />
       <Route path="onboarding/login" element={<OnboardingLoginPage />} />
-      <Route path="onboarding/keycloak/callback" element={<KeycloakCallbackPage />} />
+      <Route path="forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="reset-password" element={<ResetPasswordPage />} />
       <Route path="onboarding/complete-profile" element={<OnboardingCompleteProfilePage />} />
       <Route path="onboarding/permissions" element={<OnboardingPermissionsPage />} />
       <Route path="onboarding/add-card" element={<OnboardingAddCardFlowPage />} />
@@ -102,6 +106,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="services/:slug" element={<HubPaymentDemoFlowPage variant="services" />} />
       <Route path="profile" element={<ProfileHubPage />} />
       <Route path="profile/personal" element={<ProfilePersonalPage />} />
+      <Route path="profile/addresses" element={<ProfileAddressesPage />} />
       <Route path="profile/confirm-email" element={<ProfileConfirmEmailPage />} />
       <Route path="profile/support" element={<ProfileSupportPage />} />
       <Route path="profile/faq" element={<ProfileFaqPage />} />
@@ -129,7 +134,6 @@ function storeRouteElements(withHome: boolean) {
       <Route path="orders/:orderId/return" element={<ReturnRequestPage />} />
       <Route path="orders/:orderId" element={<OrderDetailPage />} />
       <Route path="account" element={<AccountPage />} />
-      <Route path="account/keycloak/callback" element={<KeycloakCallbackPage />} />
       <Route path="wallet" element={<WalletHomePage />} />
       <Route path="wallet/rewards" element={<WalletRewardsPage />} />
       <Route path="wallet/paytoday" element={<WalletPayTodayPage />} />
@@ -185,11 +189,11 @@ export default function App() {
       </Route>
 
       <Route path="admin/login" element={<AdminLoginPage />} />
-      <Route path="admin/login/keycloak/callback" element={<KeycloakCallbackPage />} />
       <Route element={<RequireAdminStaff />}>
         <Route path="admin" element={<AdminLayout />}>
           <Route index element={<AdminHomePage />} />
           <Route path="products" element={<AdminProductsPage />} />
+          <Route path="categories" element={<AdminCategoriesPage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
           <Route path="returns" element={<AdminReturnsPage />} />
           <Route path="inventory" element={<AdminInventoryPage />} />

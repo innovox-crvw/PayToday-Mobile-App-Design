@@ -10,6 +10,7 @@ export type AuthMeUser = {
   role: string
   fullName?: string | null
   notificationChannel?: string
+  emailVerified?: boolean
 }
 
 export function useAuthMe() {

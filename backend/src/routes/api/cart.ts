@@ -1,8 +1,9 @@
 import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { optionalAuth } from '../../middleware/auth.js'
-import { CART_COOKIE, getCartLines, getOrCreateCartId, upsertCartLine } from '../../services/cartService.js'
+import { CART_COOKIE, clearCartLines, getCartLines, getOrCreateCartId, upsertCartLine } from '../../services/cartService.js'
 import {
+  clearMemoryCartLines,
   ensureMemoryCartSession,
   getMemoryCartLines,
   upsertMemoryCartLine,
@@ -28,6 +29,7 @@ function buildTotalsPreview(items: { unitPriceCents: number; quantity: number; c
     shippingCentsHome,
     shippingCentsPickup: 0,
     taxCents,
+    discountCents: 0,
     totalHomeCents: subtotalCents + shippingCentsHome + taxCents,
     totalPickupCents: subtotalCents + taxCents,
     freeShippingThresholdCents: env.shippingFreeSubtotalCents,
@@ -70,6 +72,23 @@ cartRouter.get('/', async (req, res) => {
     items,
     ...(wantPreview ? { totalsPreview: buildTotalsPreview(items) } : {}),
   })
+})
+
+cartRouter.delete('/', async (req, res) => {
+  const pool = await getSqlPool({ eager: true })
+  const sessionToken = req.cookies[CART_COOKIE] as string | undefined
+  if (!pool) {
+    const { sessionToken: st, cartId } = ensureMemoryCartSession(sessionToken)
+    clearMemoryCartLines(st)
+    res.cookie(CART_COOKIE, st, cookieOpts())
+    res.json({ cartId, items: getMemoryCartLines(st), source: 'memory' })
+    return
+  }
+  const { cartId, sessionToken: newToken } = await getOrCreateCartId(pool, sessionToken, req.user?.sub)
+  res.cookie(CART_COOKIE, newToken, cookieOpts())
+  await clearCartLines(pool, cartId)
+  const items = await getCartLines(pool, cartId)
+  res.json({ cartId, items })
 })
 
 cartRouter.post('/items', async (req, res) => {

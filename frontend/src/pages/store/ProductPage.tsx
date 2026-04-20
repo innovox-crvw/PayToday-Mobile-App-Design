@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useLocation, useParams } from 'react-router-dom'
 import {
   Box,
   Button,
+  Chip,
   Card,
   CardActionArea,
   CardContent,
@@ -23,7 +24,13 @@ import type { ProductDto, ProductListResponse } from '../../types/catalogue'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { apiUrl, readApiError } from '../../lib/apiOrigin'
 import { friendlyFetchError } from '../../lib/fetchErrors'
-import { storefrontPrimaryVariantStock, storefrontVariantPriceRange } from '../../lib/productStock'
+import {
+  effectiveSellableMax,
+  stockLabelForVariant,
+  storefrontPrimaryVariantStock,
+  storefrontVariantPriceRange,
+  variantIsPurchasable,
+} from '../../lib/productStock'
 import { formatMoney } from '../../lib/money'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { ProductImage } from '../../components/store/ProductImage'
@@ -35,6 +42,13 @@ function normalizeProduct(raw: unknown): ProductDto {
     ...p,
     brandSlug: p.brandSlug ?? null,
     brandName: p.brandName ?? null,
+    images: p.images ?? [],
+    variants: (p.variants ?? []).map((v) => ({
+      ...v,
+      compareAtPriceCents: v.compareAtPriceCents ?? null,
+      inventoryPolicy: v.inventoryPolicy ?? 'track',
+      options: v.options ?? [],
+    })),
   }
 }
 
@@ -54,6 +68,7 @@ export function ProductPage() {
   const [detailTab, setDetailTab] = useState(0)
   const [catalogTick, setCatalogTick] = useState(0)
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
+  const [galleryIndex, setGalleryIndex] = useState(0)
   const productFetchSeq = useRef(0)
   const relatedFetchSeq = useRef(0)
 
@@ -126,16 +141,37 @@ export function ProductPage() {
   }, [product?.id, product?.variants])
 
   useEffect(() => {
-    const v =
-      product?.variants.find((x) => x.id === selectedVariantId) ?? product?.variants[0]
+    const v = product?.variants.find((x) => x.id === selectedVariantId) ?? product?.variants[0]
     if (!v) return
-    const max = Math.max(0, v.stockQuantity)
-    if (max <= 0) {
+    const max = effectiveSellableMax(v)
+    if (max <= 0 || !variantIsPurchasable(v)) {
       setQty(0)
       return
     }
     setQty((q) => Math.min(Math.max(1, q), max))
   }, [product?.id, selectedVariantId, product?.variants])
+
+  useEffect(() => {
+    setGalleryIndex(0)
+  }, [selectedVariantId, product?.id])
+
+  const galleryImages = useMemo(() => {
+    if (!product) return []
+    const sorted = [...(product.images ?? [])].sort((a, b) => a.sortOrder - b.sortOrder)
+    if (sorted.length > 0 && selectedVariantId) {
+      const forVariant = sorted.filter((i) => i.variantId === selectedVariantId)
+      const general = sorted.filter((i) => !i.variantId)
+      const rest = sorted.filter(
+        (i) => i.variantId && i.variantId !== selectedVariantId,
+      )
+      const merged = [...forVariant, ...general, ...rest]
+      return merged.length ? merged : sorted
+    }
+    if (sorted.length > 0) return sorted
+    return product.imageUrl ? [{ url: product.imageUrl, sortOrder: 0, variantId: null as string | null }] : []
+  }, [product, selectedVariantId])
+
+  const heroImageUrl = galleryImages[galleryIndex]?.url ?? product?.imageUrl ?? null
 
   async function addToCart(variantId: string) {
     setAdding(true)
@@ -181,6 +217,8 @@ export function ProductPage() {
   const variant =
     product.variants.find((v) => v.id === selectedVariantId) ?? product.variants[0] ?? null
   const stock = variant ? Math.max(0, variant.stockQuantity) : 0
+  const maxQty = variant ? effectiveSellableMax(variant) : 0
+  const canBuy = variant ? variantIsPurchasable(variant) : false
   const demoStore = getDemoStoreForProduct(product.slug)
   const retailerHref = demoStore ? `${shopPath}?store=${encodeURIComponent(demoStore.slug)}` : shopPath
   const priceLine = variant ? formatMoney(variant.priceCents, variant.currency) : '—'
@@ -204,7 +242,30 @@ export function ProductPage() {
             bgcolor: 'background.paper',
           }}
         >
-          <ProductImage imageUrl={product.imageUrl} alt={product.name} ratio="1" />
+          <ProductImage imageUrl={heroImageUrl} alt={product.name} ratio="1" />
+          {galleryImages.length > 1 ? (
+            <Stack direction="row" gap={1} sx={{ p: 1.5, overflowX: 'auto', bgcolor: 'action.hover' }}>
+              {galleryImages.map((im, idx) => (
+                <Box
+                  key={`${im.url}-${idx}`}
+                  onClick={() => setGalleryIndex(idx)}
+                  sx={{
+                    width: 72,
+                    height: 72,
+                    flexShrink: 0,
+                    borderRadius: 1,
+                    overflow: 'hidden',
+                    cursor: 'pointer',
+                    outline: idx === galleryIndex ? '2px solid' : 'none',
+                    outlineColor: 'success.main',
+                    opacity: idx === galleryIndex ? 1 : 0.75,
+                  }}
+                >
+                  <ProductImage imageUrl={im.url} alt="" ratio="1" />
+                </Box>
+              ))}
+            </Stack>
+          ) : null}
         </Box>
 
         <Stack
@@ -237,6 +298,13 @@ export function ProductPage() {
 
           {variant ? (
             <>
+              {variant.options.length > 0 ? (
+                <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: -0.5 }}>
+                  {variant.options.map((o, i) => (
+                    <Chip key={`${o.name}-${i}`} size="small" label={`${o.name}: ${o.value}`} variant="outlined" />
+                  ))}
+                </Stack>
+              ) : null}
               {product.variants.length > 1 ? (
                 <FormControl fullWidth size="small">
                   <InputLabel id="product-variant-label">Choose option</InputLabel>
@@ -248,26 +316,36 @@ export function ProductPage() {
                     onChange={(e) => setSelectedVariantId(String(e.target.value))}
                   >
                     {product.variants.map((v) => (
-                      <MenuItem key={v.id} value={v.id} disabled={v.stockQuantity <= 0}>
+                      <MenuItem key={v.id} value={v.id} disabled={!variantIsPurchasable(v)}>
                         {v.name} — {formatMoney(v.priceCents, v.currency)}
-                        {v.stockQuantity <= 0 ? ' (out of stock)' : ''}
+                        {!variantIsPurchasable(v) ? ' (unavailable)' : ''}
                       </MenuItem>
                     ))}
                   </Select>
                 </FormControl>
               ) : null}
-              <Typography variant="h5" color="primary" fontWeight={800}>
-                {priceLine}
-              </Typography>
+              <Stack direction="row" alignItems="baseline" gap={1.5} flexWrap="wrap">
+                <Typography variant="h5" color="primary" fontWeight={800}>
+                  {priceLine}
+                </Typography>
+                {variant.compareAtPriceCents != null && variant.compareAtPriceCents > variant.priceCents ? (
+                  <Typography variant="h6" color="text.secondary" sx={{ textDecoration: 'line-through' }}>
+                    {formatMoney(variant.compareAtPriceCents, variant.currency)}
+                  </Typography>
+                ) : null}
+              </Stack>
               <Typography variant="body2" color="text.secondary">
-                SKU {variant.sku} · {stock} in stock (reserved at checkout; released if the order is cancelled before payment)
+                SKU {variant.sku} · {stockLabelForVariant(variant)}
+                {(variant.inventoryPolicy ?? 'track') === 'track'
+                  ? ' (reserved at checkout; released if the order is cancelled before payment)'
+                  : ''}
               </Typography>
-              {stock > 0 && stock <= 5 ? (
+              {(variant.inventoryPolicy ?? 'track') === 'track' && stock > 0 && stock <= 5 ? (
                 <Typography variant="caption" color="warning.main" fontWeight={700}>
                   Low stock — only {stock} left at the warehouse shown in the catalogue.
                 </Typography>
               ) : null}
-              {stock <= 0 ? (
+              {!canBuy ? (
                 <Typography variant="body2" color="error" fontWeight={700}>
                   Currently out of stock.
                 </Typography>
@@ -279,24 +357,24 @@ export function ProductPage() {
                 type="number"
                 label="Quantity"
                 size="small"
-                value={stock <= 0 ? 0 : qty}
+                value={!canBuy ? 0 : qty}
                 onChange={(e) => {
                   const n = Number.parseInt(e.target.value, 10)
                   if (!Number.isFinite(n) || n < 1) {
                     setQty(1)
                     return
                   }
-                  setQty(Math.min(n, stock))
+                  setQty(Math.min(n, maxQty))
                 }}
-                inputProps={{ min: stock ? 1 : 0, max: Math.max(stock, 1) }}
-                disabled={stock <= 0}
+                inputProps={{ min: canBuy ? 1 : 0, max: Math.max(maxQty, 1) }}
+                disabled={!canBuy}
                 sx={{ width: 120 }}
               />
               <Button
                 variant="contained"
                 color="success"
                 size="large"
-                disabled={adding || stock <= 0}
+                disabled={adding || !canBuy}
                 onClick={() => void addToCart(variant.id)}
                 sx={{ fontWeight: 800, py: 1.5 }}
               >

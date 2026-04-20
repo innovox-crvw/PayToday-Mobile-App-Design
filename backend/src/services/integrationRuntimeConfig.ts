@@ -1,7 +1,12 @@
 import { env } from '../config/env.js'
-import type { UserRole } from '../types/roles.js'
 
-/** SQL `integration_settings` overrides env when non-empty; use `INTEGRATION_USE_ENV_ONLY=true` to skip SQL entirely. */
+/**
+ * SQL `integration_settings` overrides env when non-empty; use `INTEGRATION_USE_ENV_ONLY=true` to skip SQL entirely.
+ *
+ * Minimal Keycloak surface — just the four fields needed for server-side Resource Owner Password Credentials
+ * sign-in (plus the optional forgot-password URL surfaced to the SPA). Role mapping happens in-app via
+ * `users.role` managed on the admin page; Keycloak users always land as `customer`.
+ */
 function pick(map: Map<string, string> | null | undefined, key: string): string | undefined {
   const v = map?.get(key)
   if (v == null) return undefined
@@ -15,76 +20,32 @@ function pickBool(map: Map<string, string> | null | undefined, key: string, fall
   return ['true', '1', 'yes'].includes(v.toLowerCase())
 }
 
-function issuerBaseMerged(map: Map<string, string> | null | undefined): string {
-  const explicit = (pick(map, 'KEYCLOAK_ISSUER') ?? '').replace(/\/$/u, '')
-  if (explicit) return explicit
-  const tokenUrl = (pick(map, 'KEYCLOAK_TOKEN_URL') ?? env.keycloakTokenUrl).trim()
-  const i = tokenUrl.indexOf('/protocol/openid-connect')
-  if (i > 0) return tokenUrl.slice(0, i)
-  return env.keycloakIssuerBase
-}
-
 export type KeycloakRuntimeConfig = {
-  issuerBase: string
-  tokenUrl: string
-  oidcClientId: string
-  oidcClientSecret: string
-  frontendClientId: string
-  frontendClientSecret: string
-  mobileClientId: string
-  mobileClientSecret: string
-  realmRoleAdmin: string
-  realmRoleOps: string
-  realmRoleFulfillment: string
-  signInOnly: boolean
-  allowLocalPasswordLogin: boolean
-  ropcLoginEnabled: boolean
+  /** e.g. `https://keycloak.today-ww.net` (no trailing slash, no `/realms/...` suffix). */
+  baseUrl: string
+  /** Keycloak realm name, e.g. `Nedbank`. */
+  realm: string
+  /** OAuth 2.0 client id (a confidential client with Direct access grants ON). */
+  clientId: string
+  /** Optional confidential client secret. Public clients leave this blank. */
+  clientSecret: string
+  /** Optional absolute URL surfaced to the SPA for "Forgot password (PayToday)". */
   paytodayForgotPasswordUrl: string
 }
 
 export function mergeKeycloakRuntime(map: Map<string, string> | null | undefined): KeycloakRuntimeConfig {
-  const issuerBase = issuerBaseMerged(map)
   return {
-    issuerBase,
-    tokenUrl: (pick(map, 'KEYCLOAK_TOKEN_URL') ?? env.keycloakTokenUrl).trim(),
-    oidcClientId: (pick(map, 'KEYCLOAK_CLIENT_ID') ?? env.keycloakOidcClientId).trim(),
-    oidcClientSecret: (pick(map, 'KEYCLOAK_CLIENT_SECRET') ?? env.keycloakOidcClientSecret).trim(),
-    frontendClientId: (pick(map, 'KEYCLOAK_FRONTEND_CLIENT_ID') ?? env.keycloakFrontendClientId).trim(),
-    frontendClientSecret: (pick(map, 'KEYCLOAK_FRONTEND_CLIENT_SECRET') ?? env.keycloakFrontendClientSecret).trim(),
-    mobileClientId: (pick(map, 'KEYCLOAK_MOBILE_CLIENT_ID') ?? env.keycloakMobileClientId).trim(),
-    mobileClientSecret: (pick(map, 'KEYCLOAK_MOBILE_CLIENT_SECRET') ?? env.keycloakMobileClientSecret).trim(),
-    realmRoleAdmin: (pick(map, 'KEYCLOAK_REALM_ROLE_ADMIN') ?? env.keycloakRealmRoleAdmin).trim(),
-    realmRoleOps: (pick(map, 'KEYCLOAK_REALM_ROLE_OPS') ?? env.keycloakRealmRoleOps).trim(),
-    realmRoleFulfillment: (pick(map, 'KEYCLOAK_REALM_ROLE_FULFILLMENT') ?? env.keycloakRealmRoleFulfillment).trim(),
-    signInOnly: pickBool(map, 'KEYCLOAK_SIGN_IN_ONLY', env.keycloakSignInOnly),
-    allowLocalPasswordLogin: pickBool(map, 'KEYCLOAK_ALLOW_LOCAL_PASSWORD_LOGIN', env.keycloakAllowLocalPasswordLogin),
-    ropcLoginEnabled: pickBool(map, 'KEYCLOAK_ROPC_LOGIN_ENABLED', env.keycloakRocpLoginEnabled),
+    baseUrl: (pick(map, 'KEYCLOAK_BASE_URL') ?? env.keycloakBaseUrl).replace(/\/$/u, ''),
+    realm: (pick(map, 'KEYCLOAK_REALM') ?? env.keycloakRealm).trim(),
+    clientId: (pick(map, 'KEYCLOAK_CLIENT_ID') ?? env.keycloakClientId).trim(),
+    clientSecret: (pick(map, 'KEYCLOAK_CLIENT_SECRET') ?? env.keycloakClientSecret).trim(),
     paytodayForgotPasswordUrl: (pick(map, 'PAYTODAY_FORGOT_PASSWORD_URL') ?? env.paytodayForgotPasswordUrl).trim(),
   }
 }
 
-export function isKeycloakOidcConfiguredKc(kc: KeycloakRuntimeConfig): boolean {
-  return Boolean(kc.issuerBase && kc.oidcClientId)
-}
-
-export function isRocpEnvReadyKc(kc: KeycloakRuntimeConfig): boolean {
-  const ropcFrontendReady = Boolean(
-    kc.tokenUrl && kc.frontendClientId && kc.frontendClientSecret && kc.issuerBase,
-  )
-  const ropcMobileReady = Boolean(
-    kc.tokenUrl && kc.mobileClientId && kc.mobileClientSecret && kc.issuerBase,
-  )
-  return ropcFrontendReady || ropcMobileReady
-}
-
-export function roleFromRealmNames(
-  kc: KeycloakRuntimeConfig,
-  realmRoleNames: Set<string>,
-): UserRole {
-  if (kc.realmRoleAdmin && realmRoleNames.has(kc.realmRoleAdmin)) return 'admin'
-  if (kc.realmRoleOps && realmRoleNames.has(kc.realmRoleOps)) return 'ops'
-  if (kc.realmRoleFulfillment && realmRoleNames.has(kc.realmRoleFulfillment)) return 'fulfillment'
-  return 'customer'
+/** PayToday sign-in is available when the three required Keycloak fields are non-empty. */
+export function isKeycloakConfigured(kc: KeycloakRuntimeConfig): boolean {
+  return Boolean(kc.baseUrl && kc.realm && kc.clientId)
 }
 
 export type PayTodayRuntimeConfig = {

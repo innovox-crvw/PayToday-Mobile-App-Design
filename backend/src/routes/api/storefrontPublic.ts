@@ -9,6 +9,7 @@ import { staticHubPaymentCategoryItems } from '../../data/staticHubPaymentCatego
 import { listHubPaymentCategoryItems } from '../../repos/hubPaymentCategoryItemsRepo.js'
 import { listHubNavigationTiles } from '../../repos/hubNavigationTilesRepo.js'
 import { listActivePromotions, type StorePromotionDto } from '../../repos/promotionsRepo.js'
+import { listPopularStoresByOrders } from '../../repos/storefrontPopularRepo.js'
 
 export const storefrontPublicRouter = Router()
 
@@ -70,7 +71,7 @@ storefrontPublicRouter.get('/categories', async (_req, res) => {
     return
   }
   try {
-    const items = await listCategories(pool)
+    const items = await listCategories(pool, { includeInactive: false })
     res.json({ source: 'database', items })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -149,6 +150,50 @@ storefrontPublicRouter.get('/hub/payment-category-items', async (req, res) => {
       return
     }
     res.json({ source: 'error', items: [], detail: process.env.NODE_ENV === 'development' ? msg : undefined })
+  }
+})
+
+/** Top store brands (`products.brand_slug`) by units sold from order lines in a rolling date window. */
+storefrontPublicRouter.get('/storefront/popular-stores', async (req, res) => {
+  const rawDays = typeof req.query.days === 'string' ? Number(req.query.days) : Number(req.query.days)
+  const days = Number.isFinite(rawDays) ? Math.min(365, Math.max(1, Math.floor(rawDays))) : 30
+  const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : Number(req.query.limit)
+  const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, Math.floor(rawLimit))) : 12
+
+  const pool = await getSqlPool({ eager: true })
+  if (!pool) {
+    res.json({
+      source: 'off',
+      days,
+      limit,
+      rangeFromIso: null,
+      rangeToIso: null,
+      items: [],
+    })
+    return
+  }
+  try {
+    const data = await listPopularStoresByOrders(pool, { days, limit })
+    res.json({
+      source: 'database',
+      days: data.days,
+      limit,
+      rangeFromIso: data.rangeFromIso,
+      rangeToIso: data.rangeToIso,
+      items: data.items,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[storefront/popular-stores] failed:', msg)
+    res.json({
+      source: 'error',
+      days,
+      limit,
+      rangeFromIso: null,
+      rangeToIso: null,
+      items: [],
+      detail: process.env.NODE_ENV === 'development' ? msg : undefined,
+    })
   }
 })
 

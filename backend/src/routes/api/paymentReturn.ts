@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { env } from '../../config/env.js'
-import { confirmOrderPaid } from '../../services/paymentConfirmation.js'
+import { recordBrowserPaymentReturn } from '../../repos/paymentsRepo.js'
 
 export const paymentReturnRouter = Router()
 
@@ -14,9 +14,9 @@ function extractOrderId(reference: string | undefined): string | null {
 }
 
 /**
- * Browser redirect after PayToday hosted payment. confirmOrderPaid is idempotent for duplicate hits.
- * Query: reference or orderId, status/success for outcome.
- * When PayToday appends only payment_intent_token, resolve order via dbo.orders.paytoday_payment_intent_token (migration 007).
+ * Browser redirect after PayToday hosted payment.
+ * Does not mark the order paid — only records a browser-return hint and sends the user to the SPA.
+ * Authoritative payment state is applied by POST /api/webhooks/paytoday (or POST /api/payments/webhook).
  */
 paymentReturnRouter.get('/return', async (req, res) => {
   const reference =
@@ -66,6 +66,10 @@ paymentReturnRouter.get('/return', async (req, res) => {
   const base = env.publicStoreUrl
   const successPath = '/checkout/success'
   const failurePath = '/checkout/failure'
+  const payerEmailQ =
+    typeof req.query.payer_email === 'string' && req.query.payer_email.trim().length > 0
+      ? req.query.payer_email.trim()
+      : ''
 
   if (!orderIdParam) {
     res.redirect(302, `${base}${failurePath}?reason=missing_order`)
@@ -73,36 +77,57 @@ paymentReturnRouter.get('/return', async (req, res) => {
   }
 
   if (!pool) {
-    res.redirect(302, `${base}${successPath}?orderId=${encodeURIComponent(orderIdParam)}&demo=1`)
+    res.redirect(
+      302,
+      `${base}${successPath}?orderId=${encodeURIComponent(orderIdParam)}&demo=1&awaitingWebhook=1`,
+    )
     return
   }
 
+  try {
+    if (ok) {
+      await recordBrowserPaymentReturn(pool, orderIdParam, 'success')
+    } else if (fail) {
+      const hint = req.query.status === 'cancelled' || req.query.cancelled === 'true' ? 'cancelled' : 'failed'
+      await recordBrowserPaymentReturn(pool, orderIdParam, hint)
+    } else {
+      await recordBrowserPaymentReturn(pool, orderIdParam, 'unknown')
+    }
+  } catch (e) {
+    console.warn('[payment-return] could not record browser return (migration 015 applied?)', e)
+  }
+
+  try {
+    const dedupeKey = `return:${reference ?? orderIdParam}:${ok ? 'ok' : fail ? 'fail' : 'unk'}`
+    await pool
+      .request()
+      .input('dk', dedupeKey.slice(0, 200))
+      .input('oid', orderIdParam)
+      .query(`INSERT INTO dbo.payment_return_events (dedupe_key, order_id) VALUES (@dk, @oid)`)
+  } catch {
+    /* ignore duplicate audit */
+  }
+
+  const emailSuffix = payerEmailQ ? `&email=${encodeURIComponent(payerEmailQ)}` : ''
+
   if (ok) {
-    try {
-      await confirmOrderPaid(pool, orderIdParam)
-    } catch (e) {
-      console.error('[payment-return] confirm failed', e)
-      res.redirect(302, `${base}${failurePath}?orderId=${encodeURIComponent(orderIdParam)}&reason=capture_failed`)
-      return
-    }
-    try {
-      const dedupeKey = `return:${reference ?? orderIdParam}:ok`
-      await pool
-        .request()
-        .input('dk', dedupeKey)
-        .input('oid', orderIdParam)
-        .query(`INSERT INTO dbo.payment_return_events (dedupe_key, order_id) VALUES (@dk, @oid)`)
-    } catch {
-      /* ignore duplicate audit */
-    }
-    res.redirect(302, `${base}${successPath}?orderId=${encodeURIComponent(orderIdParam)}`)
+    res.redirect(
+      302,
+      `${base}${successPath}?orderId=${encodeURIComponent(orderIdParam)}&awaitingWebhook=1${emailSuffix}`,
+    )
     return
   }
 
   if (fail) {
-    res.redirect(302, `${base}${failurePath}?orderId=${encodeURIComponent(orderIdParam)}`)
+    res.redirect(
+      302,
+      `${base}${failurePath}?orderId=${encodeURIComponent(orderIdParam)}&reason=browser_return${emailSuffix}`,
+    )
     return
   }
 
-  res.redirect(302, `${base}${failurePath}?orderId=${encodeURIComponent(orderIdParam)}&reason=unknown`)
+  res.redirect(
+    302,
+    `${base}${successPath}?orderId=${encodeURIComponent(orderIdParam)}&awaitingWebhook=1&uncertain=1${emailSuffix}`,
+  )
 })

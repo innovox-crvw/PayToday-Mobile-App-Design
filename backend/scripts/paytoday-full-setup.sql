@@ -2,13 +2,12 @@
   PayToday — full schema + sample data for SSMS / sqlcmd
   Run as a user that can CREATE DATABASE (or comment out the CREATE DATABASE block and use an existing DB).
 
-  Includes dbo.notification_outbox, dbo.user_notifications, and two seed outbox rows
-  (hub_demo_pending_payment, hub_demo_payment_completed) for the notify worker + in-app feed.
-  Configure NOTIFY_SERVICE_API_KEY (env or dbo.integration_settings) for outbound email.
+  Schema includes catalogue (012-style), orders/payments (007/010/015), cart snapshot (013), auth self-service (014),
+  migration 016 demo catalogue + deposit extras, Keycloak-ready users, notification outbox seed.
 
   Demo login (after seed):  demo@paytoday.local  /  PayToday123!
 
-  Prefer the bundled all-in-one: backend/scripts/paytoday-database-all-in-one.sql (run: node backend/scripts/build-all-in-one-sql.mjs)
+  Regenerate all-in-one: node backend/scripts/build-all-in-one-sql.mjs
 */
 
 SET NOCOUNT ON;
@@ -38,6 +37,7 @@ IF OBJECT_ID(N'dbo.carts', N'U') IS NOT NULL DROP TABLE dbo.carts;
 IF OBJECT_ID(N'dbo.stock_movements', N'U') IS NOT NULL DROP TABLE dbo.stock_movements;
 IF OBJECT_ID(N'dbo.inventory_quantity', N'U') IS NOT NULL DROP TABLE dbo.inventory_quantity;
 IF OBJECT_ID(N'dbo.product_images', N'U') IS NOT NULL DROP TABLE dbo.product_images;
+IF OBJECT_ID(N'dbo.product_variant_options', N'U') IS NOT NULL DROP TABLE dbo.product_variant_options;
 IF OBJECT_ID(N'dbo.product_variants', N'U') IS NOT NULL DROP TABLE dbo.product_variants;
 IF OBJECT_ID(N'dbo.products', N'U') IS NOT NULL DROP TABLE dbo.products;
 IF OBJECT_ID(N'dbo.categories', N'U') IS NOT NULL DROP TABLE dbo.categories;
@@ -46,6 +46,8 @@ IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL DROP TABLE dbo
 IF OBJECT_ID(N'dbo.notification_outbox', N'U') IS NOT NULL DROP TABLE dbo.notification_outbox;
 IF OBJECT_ID(N'dbo.user_notifications', N'U') IS NOT NULL DROP TABLE dbo.user_notifications;
 IF OBJECT_ID(N'dbo.user_refresh_tokens', N'U') IS NOT NULL DROP TABLE dbo.user_refresh_tokens;
+IF OBJECT_ID(N'dbo.password_reset_tokens', N'U') IS NOT NULL DROP TABLE dbo.password_reset_tokens;
+IF OBJECT_ID(N'dbo.demo_wallet_ledger', N'U') IS NOT NULL DROP TABLE dbo.demo_wallet_ledger;
 IF OBJECT_ID(N'dbo.addresses', N'U') IS NOT NULL DROP TABLE dbo.addresses;
 IF OBJECT_ID(N'dbo.users', N'U') IS NOT NULL DROP TABLE dbo.users;
 IF OBJECT_ID(N'dbo.deposit_boxes', N'U') IS NOT NULL DROP TABLE dbo.deposit_boxes;
@@ -62,7 +64,10 @@ GO
 CREATE TABLE dbo.categories (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_categories PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
   slug NVARCHAR(120) NOT NULL CONSTRAINT UQ_categories_slug UNIQUE,
-  name NVARCHAR(200) NOT NULL
+  name NVARCHAR(200) NOT NULL,
+  parent_id UNIQUEIDENTIFIER NULL CONSTRAINT FK_categories_parent REFERENCES dbo.categories(id),
+  sort_order INT NOT NULL CONSTRAINT DF_categories_sort DEFAULT (0),
+  is_active BIT NOT NULL CONSTRAINT DF_categories_active DEFAULT (1)
 );
 
 CREATE TABLE dbo.products (
@@ -83,12 +88,25 @@ CREATE TABLE dbo.product_variants (
   name NVARCHAR(200) NOT NULL,
   price_cents INT NOT NULL,
   currency CHAR(3) NOT NULL CONSTRAINT DF_variants_currency DEFAULT ('NAD'),
-  low_stock_threshold INT NULL
+  low_stock_threshold INT NULL,
+  compare_at_price_cents INT NULL,
+  inventory_policy NVARCHAR(20) NOT NULL CONSTRAINT DF_pv_invpol DEFAULT (N'track')
 );
+
+CREATE TABLE dbo.product_variant_options (
+  id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_product_variant_options PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+  variant_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_pvo_variant REFERENCES dbo.product_variants(id) ON DELETE CASCADE,
+  option_name NVARCHAR(60) NOT NULL,
+  option_value NVARCHAR(120) NOT NULL,
+  sort_order INT NOT NULL CONSTRAINT DF_pvo_sort DEFAULT (0)
+);
+CREATE INDEX IX_product_variant_options_variant ON dbo.product_variant_options(variant_id);
 
 CREATE TABLE dbo.product_images (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_product_images PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
   product_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_images_product REFERENCES dbo.products(id) ON DELETE CASCADE,
+  /* NO ACTION on variant: CASCADE here + CASCADE product→variants would create multiple cascade paths in SQL Server. */
+  variant_id UNIQUEIDENTIFIER NULL CONSTRAINT FK_product_images_variant REFERENCES dbo.product_variants(id),
   url NVARCHAR(2000) NOT NULL,
   sort_order INT NOT NULL CONSTRAINT DF_images_sort DEFAULT (0)
 );
@@ -176,6 +194,11 @@ CREATE TABLE dbo.users (
   role NVARCHAR(32) NOT NULL,
   notification_channel NVARCHAR(20) NOT NULL CONSTRAINT DF_users_notify DEFAULT ('email'),
   wallet_demo_balance_cents BIGINT NOT NULL CONSTRAINT DF_users_wallet_demo DEFAULT (0),
+  failed_login_count INT NOT NULL CONSTRAINT DF_users_failed_login_count DEFAULT (0),
+  locked_until DATETIME2 NULL,
+  email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT (1),
+  email_verification_token_hash VARBINARY(32) NULL,
+  email_verification_expires_at DATETIME2 NULL,
   created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2 NULL
 );
@@ -195,6 +218,16 @@ CREATE TABLE dbo.user_refresh_tokens (
   expires_at DATETIME2 NOT NULL,
   revoked_at DATETIME2 NULL
 );
+
+CREATE TABLE dbo.password_reset_tokens (
+  id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_password_reset_tokens PRIMARY KEY DEFAULT NEWID(),
+  user_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_password_reset_tokens_user REFERENCES dbo.users(id) ON DELETE CASCADE,
+  token_hash VARBINARY(32) NOT NULL,
+  expires_at DATETIME2 NOT NULL,
+  used_at DATETIME2 NULL,
+  created_at DATETIME2 NOT NULL CONSTRAINT DF_password_reset_tokens_created DEFAULT (SYSUTCDATETIME())
+);
+CREATE INDEX IX_password_reset_tokens_lookup ON dbo.password_reset_tokens(token_hash) WHERE used_at IS NULL;
 
 CREATE TABLE dbo.addresses (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_addresses PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
@@ -254,6 +287,8 @@ CREATE TABLE dbo.cart_lines (
   cart_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_cl_cart REFERENCES dbo.carts(id) ON DELETE CASCADE,
   variant_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_cl_variant REFERENCES dbo.product_variants(id),
   quantity INT NOT NULL,
+  unit_price_cents INT NOT NULL CONSTRAINT DF_cart_lines_unit_price DEFAULT (0),
+  line_currency CHAR(3) NOT NULL CONSTRAINT DF_cart_lines_currency DEFAULT ('NAD'),
   CONSTRAINT PK_cart_lines PRIMARY KEY (cart_id, variant_id)
 );
 
@@ -273,6 +308,9 @@ CREATE TABLE dbo.orders (
   currency CHAR(3) NOT NULL CONSTRAINT DF_orders_cur DEFAULT ('NAD'),
   checkout_idempotency_key NVARCHAR(120) NULL,
   paytoday_reference NVARCHAR(200) NULL,
+  paytoday_payment_intent_token NVARCHAR(128) NULL,
+  refund_handling_fee_cents INT NULL,
+  refund_net_cents INT NULL,
   created_at DATETIME2 NOT NULL CONSTRAINT DF_orders_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2 NULL,
   cancelled_at DATETIME2 NULL,
@@ -293,8 +331,21 @@ CREATE TABLE dbo.payments (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_payments PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
   order_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_payments_order REFERENCES dbo.orders(id),
   status NVARCHAR(40) NOT NULL,
-  idempotency_key NVARCHAR(120) NOT NULL
+  idempotency_key NVARCHAR(120) NOT NULL,
+  payment_reference NVARCHAR(200) NULL,
+  browser_return_at DATETIME2 NULL,
+  browser_return_status NVARCHAR(40) NULL,
+  webhook_processed_at DATETIME2 NULL
 );
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes WHERE name = N'UX_payments_payment_reference' AND object_id = OBJECT_ID(N'dbo.payments')
+)
+BEGIN
+  CREATE UNIQUE NONCLUSTERED INDEX UX_payments_payment_reference
+    ON dbo.payments(payment_reference)
+    WHERE payment_reference IS NOT NULL;
+END;
 
 CREATE TABLE dbo.fulfillment_tasks (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_fulfillment PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
@@ -443,10 +494,10 @@ DECLARE @boxK1 UNIQUEIDENTIFIER = '61000000-0000-0000-0000-000000000002';
 
 INSERT INTO dbo.warehouses (id, code, name) VALUES (@wh, N'MAIN', N'Main warehouse');
 
-INSERT INTO dbo.categories (id, slug, name) VALUES
-  (@catGro, N'groceries', N'Groceries'),
-  (@catEl, N'electronics', N'Electronics'),
-  (@catHome, N'home', N'Home & kitchen');
+INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active) VALUES
+  (@catGro, N'groceries', N'Groceries', NULL, 10, 1),
+  (@catEl, N'electronics', N'Electronics', NULL, 20, 1),
+  (@catHome, N'home', N'Home & kitchen', NULL, 30, 1);
 
 INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name) VALUES
   (@pMilk, @catGro, N'full-cream-milk', N'Spar full cream milk 1L', N'Fresh dairy, 1 litre — from Spar.', 1, N'spar', N'Spar'),
@@ -480,6 +531,26 @@ VALUES (
   N'customer',
   N'email'
 );
+
+/* App admin: existing row → role admin; otherwise seed row (same bcrypt as demo: PayToday123!) — change password after first login. */
+IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE LOWER(LTRIM(RTRIM(email))) = LOWER(LTRIM(RTRIM(N'louis.viljoen@crvw.com.na'))))
+BEGIN
+  INSERT INTO dbo.users (id, email, password_hash, full_name, role, notification_channel)
+  VALUES (
+    '55000000-0000-0000-0000-000000000001',
+    N'louis.viljoen@crvw.com.na',
+    N'$2b$10$yHL1enO0hQsVLFZx/1EPsO4D5z4if5.DDx2YR/TKCw5XvmGn4un62',
+    N'Louis Viljoen',
+    N'admin',
+    N'email'
+  );
+END
+ELSE
+BEGIN
+  UPDATE dbo.users
+  SET role = N'admin', updated_at = SYSUTCDATETIME()
+  WHERE LOWER(LTRIM(RTRIM(email))) = LOWER(LTRIM(RTRIM(N'louis.viljoen@crvw.com.na')));
+END;
 
 INSERT INTO dbo.addresses (id, user_id, label, line1, line2, city, region, postal_code, country, is_default)
 VALUES (
@@ -515,28 +586,525 @@ VALUES
    N'https://images.unsplash.com/photo-1563013544-824ae1b704d3?auto=format&fit=crop&w=1400&q=80',
    N'/wallet', 2, 1, NULL, NULL);
 
-/* Payments hub drill-down (GET /api/hub/payment-category-items?category=...) */
-INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active)
+/* ---- Expanded demo catalogue + deposit points (same as migration 016_expand_demo_catalog.sql) ---- */
+IF COL_LENGTH('dbo.categories', 'parent_id') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'groceries')
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'soft-drinks')
+    INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active)
+    VALUES (
+      '7E100001-0000-4000-8000-000000000001',
+      N'soft-drinks',
+      N'Soft drinks',
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      20,
+      1
+    );
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'snacks-pantry')
+    INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active)
+    VALUES (
+      '7E100001-0000-4000-8000-000000000002',
+      N'snacks-pantry',
+      N'Snacks & pantry',
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      30,
+      1
+    );
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'fresh-produce')
+    INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active)
+    VALUES (
+      '7E100001-0000-4000-8000-000000000003',
+      N'fresh-produce',
+      N'Fresh produce',
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      10,
+      1
+    );
+END;
+GO
+
+IF COL_LENGTH('dbo.categories', 'parent_id') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'electronics')
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'accessories')
+    INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active)
+    VALUES (
+      '7E100001-0000-4000-8000-000000000004',
+      N'accessories',
+      N'Phone & laptop accessories',
+      (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      10,
+      1
+    );
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'audio')
+    INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active)
+    VALUES (
+      '7E100001-0000-4000-8000-000000000005',
+      N'audio',
+      N'Audio',
+      (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      20,
+      1
+    );
+END;
+GO
+
+IF COL_LENGTH('dbo.categories', 'parent_id') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'home')
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'cleaning')
+    INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active)
+    VALUES (
+      '7E100001-0000-4000-8000-000000000006',
+      N'cleaning',
+      N'Cleaning & laundry',
+      (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      10,
+      1
+    );
+END;
+GO
+
+DECLARE @p1 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000001';
+DECLARE @v1 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000001';
+DECLARE @p2 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000002';
+DECLARE @v2 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000002';
+DECLARE @p3 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000003';
+DECLARE @v3 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000003';
+DECLARE @p4 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000004';
+DECLARE @v4 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000004';
+DECLARE @p5 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000005';
+DECLARE @v5 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000005';
+DECLARE @p6 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000006';
+DECLARE @v6 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000006';
+DECLARE @p7 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000007';
+DECLARE @v7a UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000007';
+DECLARE @v7b UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000008';
+DECLARE @p8 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000008';
+DECLARE @v8 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000009';
+DECLARE @p9 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000009';
+DECLARE @v9 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000010';
+DECLARE @p10 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000010';
+DECLARE @v10 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000011';
+DECLARE @p11 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000011';
+DECLARE @v11 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000012';
+DECLARE @p12 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000012';
+DECLARE @v12 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000013';
+
+IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'groceries')
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'sparkling-water-500ml')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p1,
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      N'sparkling-water-500ml',
+      N'Sparkling mineral water 500 ml',
+      N'Chilled sparkling water — great with meals.',
+      1,
+      N'aqua-vita',
+      N'Aqua Vita'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, compare_at_price_cents, inventory_policy)
+    VALUES (@v1, @p1, N'WATER-SPK-500', N'500 ml', 1899, N'NAD', 8, 2299, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p1, N'https://images.unsplash.com/photo-1548839140-29a749e1cf4d?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v1, CAST(id AS UNIQUEIDENTIFIER), 200 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'cola-2l-bottle')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p2,
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      N'cola-2l-bottle',
+      N'Cola soft drink 2 L',
+      N'Classic cola — share size.',
+      1,
+      N'fizz-co',
+      N'Fizz Co'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, compare_at_price_cents, inventory_policy)
+    VALUES (@v2, @p2, N'SOFT-COLA-2L', N'2 Litre', 4599, N'NAD', 6, 5299, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p2, N'https://images.unsplash.com/photo-1622483767028-3f66f32c67b6?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v2, CAST(id AS UNIQUEIDENTIFIER), 140 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'long-life-milk-1l')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p3,
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      N'long-life-milk-1l',
+      N'Long life milk 1 L',
+      N'UHT dairy — pantry staple.',
+      1,
+      N'spar',
+      N'Spar'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v3, @p3, N'MILK-UHT-1L', N'1 Litre', 2699, N'NAD', 10, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p3, N'https://images.unsplash.com/photo-1563636619-e9143d4c3b2c?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v3, CAST(id AS UNIQUEIDENTIFIER), 160 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'white-rice-2kg')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p4,
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      N'white-rice-2kg',
+      N'White rice 2 kg',
+      N'Parboiled rice — family pack.',
+      1,
+      N'grain-house',
+      N'Grain House'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v4, @p4, N'RICE-WHT-2KG', N'2 kg', 8999, N'NAD', 5, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p4, N'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v4, CAST(id AS UNIQUEIDENTIFIER), 90 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'potato-chips-150g')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p5,
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      N'potato-chips-150g',
+      N'Potato chips salted 150 g',
+      N'Crunchy snack — party size.',
+      1,
+      N'crisp-co',
+      N'Crisp Co'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, compare_at_price_cents, inventory_policy)
+    VALUES (@v5, @p5, N'SNACK-CHIPS-150', N'150 g', 2499, N'NAD', 12, 2999, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p5, N'https://images.unsplash.com/photo-1566478989037-eec170784d0b?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v5, CAST(id AS UNIQUEIDENTIFIER), 110 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'apples-1-5kg-bag')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p6,
+      (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      N'apples-1-5kg-bag',
+      N'Apples 1.5 kg bag',
+      N'Crisp red apples — sourced locally when available.',
+      1,
+      N'fresh-pick',
+      N'Fresh Pick'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v6, @p6, N'FRUIT-APL-15', N'1.5 kg', 4299, N'NAD', 6, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p6, N'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v6, CAST(id AS UNIQUEIDENTIFIER), 45 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+END;
+
+IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'electronics')
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'usb-c-cable-2m')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p7,
+      (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      N'usb-c-cable-2m',
+      N'USB-C fast charge cable',
+      N'Braided cable for phones and laptops — 60 W rated.',
+      1,
+      N'link-tech',
+      N'Link Tech'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, compare_at_price_cents, inventory_policy)
+    VALUES
+      (@v7a, @p7, N'CABLE-USBC-1M', N'1 m', 19900, N'NAD', 15, 24900, N'track'),
+      (@v7b, @p7, N'CABLE-USBC-2M', N'2 m', 25900, N'NAD', 15, 31900, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p7, N'https://images.unsplash.com/photo-1583863788444-cbe32897a469?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v7a, CAST(id AS UNIQUEIDENTIFIER), 120 FROM dbo.warehouses WHERE code = N'MAIN';
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v7b, CAST(id AS UNIQUEIDENTIFIER), 95 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'bluetooth-speaker-mini')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p8,
+      (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      N'bluetooth-speaker-mini',
+      N'Mini Bluetooth speaker',
+      N'Portable 360° sound — 10 h battery.',
+      1,
+      N'sound-wave',
+      N'Sound Wave'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v8, @p8, N'AUDIO-BT-MINI', N'Black', 89900, N'NAD', 4, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p8, N'https://images.unsplash.com/photo-1608043152269-423dbba4e7e2?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v8, CAST(id AS UNIQUEIDENTIFIER), 35 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'aa-batteries-8-pack')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p9,
+      (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      N'aa-batteries-8-pack',
+      N'AA alkaline batteries 8 pack',
+      N'Long-lasting power for remotes and toys.',
+      1,
+      N'volt-plus',
+      N'Volt Plus'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v9, @p9, N'BATT-AA-8', N'8 pack', 12900, N'NAD', 8, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p9, N'https://images.unsplash.com/photo-1619641805757-1b923f6b4c42?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v9, CAST(id AS UNIQUEIDENTIFIER), 180 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+END;
+
+IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'home')
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'dishwashing-liquid-750ml')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p10,
+      (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      N'dishwashing-liquid-750ml',
+      N'Dishwashing liquid 750 ml',
+      N'Cuts grease — citrus scent.',
+      1,
+      N'shine-home',
+      N'Shine Home'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v10, @p10, N'CLEAN-DISH-750', N'750 ml', 4599, N'NAD', 10, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p10, N'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v10, CAST(id AS UNIQUEIDENTIFIER), 75 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'electric-kettle-1-7l')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p11,
+      (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      N'electric-kettle-1-7l',
+      N'Electric kettle 1.7 L',
+      N'Stainless steel — auto shut-off.',
+      1,
+      N'kitchen-pro',
+      N'Kitchen Pro'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, compare_at_price_cents, inventory_policy)
+    VALUES (@v11, @p11, N'KETTLE-17L-SS', N'1.7 L stainless', 59900, N'NAD', 3, 69900, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p11, N'https://images.unsplash.com/photo-1574269909862-7e1d70bb8077?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v11, CAST(id AS UNIQUEIDENTIFIER), 28 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'cotton-bath-towel')
+  BEGIN
+    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    VALUES (
+      @p12,
+      (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      N'cotton-bath-towel',
+      N'Premium cotton bath towel',
+      N'Plush 600 GSM — quick dry.',
+      1,
+      N'linen-co',
+      N'Linen Co'
+    );
+    INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold, inventory_policy)
+    VALUES (@v12, @p12, N'TOWEL-BATH-WHT', N'White', 34900, N'NAD', 5, N'track');
+    INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES
+      (@p12, N'https://images.unsplash.com/photo-1584345604476-8ec5e82e1aa5?auto=format&fit=crop&w=800&q=80', 0);
+    INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity)
+    SELECT @v12, CAST(id AS UNIQUEIDENTIFIER), 40 FROM dbo.warehouses WHERE code = N'MAIN';
+  END;
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_locations WHERE id = '7D100001-0000-4000-8000-000000000001')
+  INSERT INTO dbo.deposit_locations (id, name, address_summary)
+  VALUES (
+    '7D100001-0000-4000-8000-000000000001',
+    N'Swakopmund seafront locker',
+    N'Sam Nujoma Ave — near jetty parking'
+  );
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_locations WHERE id = '7D100001-0000-4000-8000-000000000002')
+  INSERT INTO dbo.deposit_locations (id, name, address_summary)
+  VALUES (
+    '7D100001-0000-4000-8000-000000000002',
+    N'Ongwediva PayToday hub',
+    N'Evululuko complex — main entrance'
+  );
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_locations WHERE id = '7D100001-0000-4000-8000-000000000003')
+  INSERT INTO dbo.deposit_locations (id, name, address_summary)
+  VALUES (
+    '7D100001-0000-4000-8000-000000000003',
+    N'Walvis Bay harbour kiosk',
+    N'Port road — pickup lane B'
+  );
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_boxes WHERE code = N'SWK-BOX-01')
+  INSERT INTO dbo.deposit_boxes (id, location_id, code, capacity, current_load)
+  VALUES ('7D200001-0000-4000-8000-000000000001', '7D100001-0000-4000-8000-000000000001', N'SWK-BOX-01', 48, 0);
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_boxes WHERE code = N'SWK-BOX-02')
+  INSERT INTO dbo.deposit_boxes (id, location_id, code, capacity, current_load)
+  VALUES ('7D200001-0000-4000-8000-000000000002', '7D100001-0000-4000-8000-000000000001', N'SWK-BOX-02', 48, 0);
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_boxes WHERE code = N'ONG-BOX-01')
+  INSERT INTO dbo.deposit_boxes (id, location_id, code, capacity, current_load)
+  VALUES ('7D200001-0000-4000-8000-000000000003', '7D100001-0000-4000-8000-000000000002', N'ONG-BOX-01', 36, 0);
+
+IF NOT EXISTS (SELECT 1 FROM dbo.deposit_boxes WHERE code = N'WVB-BOX-01')
+  INSERT INTO dbo.deposit_boxes (id, location_id, code, capacity, current_load)
+  VALUES ('7D200001-0000-4000-8000-000000000004', '7D100001-0000-4000-8000-000000000003', N'WVB-BOX-01', 30, 0);
+GO
+
+IF OBJECT_ID(N'dbo.store_promotions', N'U') IS NOT NULL
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM dbo.store_promotions WHERE slug = N'weekend-snacks')
+    INSERT INTO dbo.store_promotions (slug, title, subtitle, image_url, link_path, sort_order, is_active, starts_at, ends_at)
+    VALUES (
+      N'weekend-snacks',
+      N'Snack smarter',
+      N'Chips, drinks & treats for movie night.',
+      N'https://images.unsplash.com/photo-1599490659213-e2b9527bd087?auto=format&fit=crop&w=1200&q=80',
+      N'/shop',
+      15,
+      1,
+      NULL,
+      NULL
+    );
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.store_promotions WHERE slug = N'home-essentials')
+    INSERT INTO dbo.store_promotions (slug, title, subtitle, image_url, link_path, sort_order, is_active, starts_at, ends_at)
+    VALUES (
+      N'home-essentials',
+      N'Home essentials',
+      N'Cleaning, kitchen & comfort picks.',
+      N'https://images.unsplash.com/photo-1556911220-e15b29be8c8f?auto=format&fit=crop&w=1200&q=80',
+      N'/shop',
+      25,
+      1,
+      NULL,
+      NULL
+    );
+END;
+GO
+
+/* Payments hub drill-down (GET /api/hub/payment-category-items?category=...) — richer demo data */
+INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, payment_method, sort_order, is_active)
 VALUES
   /* businesses */
-  (N'businesses', N'business', N'Okahandja Traders', NULL, 10, 1),
-  (N'businesses', N'business', N'Windhoek Fresh Market', NULL, 20, 1),
-  (N'businesses', N'business', N'Namibia Auto Parts', NULL, 30, 1),
+  (N'businesses', N'business', N'Okahandja Traders', NULL, N'Wallet · Card · EFT ref', 10, 1),
+  (N'businesses', N'business', N'Windhoek Fresh Market', NULL, N'Wallet · Tap to pay · QR', 20, 1),
+  (N'businesses', N'business', N'Namibia Auto Parts', NULL, N'Wallet · Card · invoice ref', 30, 1),
+  (N'businesses', N'business', N'Coastal Coffee Co.', NULL, N'Wallet · loyalty stamps', 40, 1),
+  (N'businesses', N'business', N'Desert Bloom Pharmacy', NULL, N'Wallet · medical aid · card', 50, 1),
+  (N'businesses', N'business', N'Katutura Hardware & Paint', NULL, N'Wallet · bulk quote ref', 60, 1),
+  (N'businesses', N'business', N'Walvis Bay Marine Supplies', NULL, N'Wallet · PO number', 70, 1),
+  (N'businesses', N'business', N'Oshakati Electronics Hub', NULL, N'Wallet · lay-by ref', 80, 1),
   /* contacts */
-  (N'contacts', N'contact', N'Anna Nghipondoka', N'AN', 10, 1),
-  (N'contacts', N'contact', N'Johan van Wyk', N'JW', 20, 1),
-  (N'contacts', N'contact', N'Lisa #Shapumba', N'LS', 30, 1),
-  /* sample billers per category */
-  (N'airtime', N'business', N'MTC Prepaid', NULL, 10, 1),
-  (N'airtime', N'business', N'TN Mobile', NULL, 20, 1),
-  (N'electricity', N'business', N'Nampower Prepaid', NULL, 10, 1),
-  (N'bills', N'business', N'Municipality — Windhoek', NULL, 10, 1),
-  (N'food', N'business', N'Local Eats Collective', NULL, 10, 1),
-  (N'fuel', N'business', N'Engen Rewards', NULL, 10, 1),
-  (N'parking', N'business', N'CBD Parking Zone A', NULL, 10, 1),
-  (N'vouchers', N'business', N'National Bookstore', NULL, 10, 1),
-  (N'stay', N'business', N'Coastal Guesthouse', NULL, 10, 1),
-  (N'services', N'business', N'PayToday Service Desk', NULL, 10, 1);
+  (N'contacts', N'contact', N'Anna Nghipondoka', N'AN', N'Wallet only · P2P', 10, 1),
+  (N'contacts', N'contact', N'Johan van Wyk', N'JW', N'Wallet · request money', 20, 1),
+  (N'contacts', N'contact', N'Lisa #Shapumba', N'LS', N'Wallet only · P2P', 30, 1),
+  (N'contacts', N'contact', N'Tomas Hamutenya', N'TH', N'Wallet · split bill', 40, 1),
+  (N'contacts', N'contact', N'Helvi Ndapandula', N'HN', N'Wallet only', 50, 1),
+  (N'contacts', N'contact', N'Petro #Kahimise', N'PK', N'Wallet · request link', 60, 1),
+  (N'contacts', N'contact', N'Chrizelle du Preez', N'CD', N'Wallet · P2P', 70, 1),
+  /* airtime */
+  (N'airtime', N'business', N'MTC Prepaid', NULL, N'Wallet · MTC app · *682#', 10, 1),
+  (N'airtime', N'business', N'TN Mobile', NULL, N'Wallet · TN voucher · USSD', 20, 1),
+  (N'airtime', N'business', N'RechargeNow Namibia', NULL, N'Wallet · MSISDN lookup', 30, 1),
+  (N'airtime', N'business', N'Corporate airtime pool', NULL, N'Wallet · company account ref', 40, 1),
+  (N'airtime', N'business', N'Tourist SIM top-up', NULL, N'Card · passport ref on file', 50, 1),
+  /* electricity */
+  (N'electricity', N'business', N'Nampower Prepaid', NULL, N'Meter · wallet · card', 10, 1),
+  (N'electricity', N'business', N'City of Windhoek prepaid', NULL, N'Meter · wallet · USSD', 20, 1),
+  (N'electricity', N'business', N'Erongo RED prepaid', NULL, N'Meter · wallet', 30, 1),
+  (N'electricity', N'business', N'Omaheke municipal prepaid', NULL, N'Meter · wallet · branch code', 40, 1),
+  /* bills */
+  (N'bills', N'business', N'City of Windhoek — rates & refuse', NULL, N'Account · wallet · ref', 10, 1),
+  (N'bills', N'business', N'MultiChoice Namibia (DStv)', NULL, N'Smartcard · wallet · card', 20, 1),
+  (N'bills', N'business', N'NamWater — municipal bulk', NULL, N'Account · wallet', 30, 1),
+  (N'bills', N'business', N'School fees — Khomas cluster', NULL, N'Learner ID · wallet', 40, 1),
+  (N'bills', N'business', N'Namibia Medical Aid (demo)', NULL, N'Member no. · wallet · card', 50, 1),
+  /* food */
+  (N'food', N'business', N'Joe''s Beerhouse — Windhoek', NULL, N'Wallet · table QR', 10, 1),
+  (N'food', N'business', N'The Stellenbosch — Klein Windhoek', NULL, N'Wallet · booking ref', 20, 1),
+  (N'food', N'business', N'Local Eats Collective', NULL, N'Wallet · rider tip', 30, 1),
+  (N'food', N'business', N'Swakopmund Jetty Restaurant', NULL, N'Wallet · split bill', 40, 1),
+  (N'food', N'business', N'Oshakati open-market vendors', NULL, N'Wallet · stall code', 50, 1),
+  /* fuel */
+  (N'fuel', N'business', N'Engen — Independence Ave', NULL, N'Rewards · wallet · card', 10, 1),
+  (N'fuel', N'business', N'Puma Energy — B1 stop', NULL, N'Fleet card · wallet', 20, 1),
+  (N'fuel', N'business', N'Shell V-Power — Hosea Kutako', NULL, N'Card · wallet', 30, 1),
+  (N'fuel', N'business', N'TotalEnergies — coastal route', NULL, N'Loyalty · wallet', 40, 1),
+  (N'fuel', N'business', N'Truck diesel — Walvis corridor', NULL, N'Fleet ref · wallet', 50, 1),
+  /* parking */
+  (N'parking', N'business', N'Grove Mall — underground P1', NULL, N'Plate · wallet · QR', 10, 1),
+  (N'parking', N'business', N'Hosea Kutako short stay', NULL, N'Ticket · wallet', 20, 1),
+  (N'parking', N'business', N'CBD Zone A — street meters', NULL, N'Bay code · wallet', 30, 1),
+  (N'parking', N'business', N'Swakopmund plaza parking', NULL, N'SMS code · wallet', 40, 1),
+  /* vouchers */
+  (N'vouchers', N'business', N'National Bookstore', NULL, N'Voucher SKU · wallet · card', 10, 1),
+  (N'vouchers', N'business', N'Pick n Pay gift cards', NULL, N'Barcode · wallet', 20, 1),
+  (N'vouchers', N'business', N'Woermann Brock — grocery voucher', NULL, N'Store ref · wallet', 30, 1),
+  (N'vouchers', N'business', N'Cinema combo — Grove', NULL, N'Showtime · wallet', 40, 1),
+  /* stay */
+  (N'stay', N'business', N'Coastal Guesthouse — Swakop', NULL, N'Booking ref · wallet · card', 10, 1),
+  (N'stay', N'business', N'Hilton Windhoek (demo)', NULL, N'Confirmation no. · wallet', 20, 1),
+  (N'stay', N'business', N'Etosha lodge partners', NULL, N'Park permit ref · wallet', 30, 1),
+  (N'stay', N'business', N'Farm stay — Khomas Hochland', NULL, N'Host code · wallet', 40, 1),
+  (N'stay', N'business', N'Airbnb-style host payout', NULL, N'Listing ID · wallet', 50, 1),
+  /* services */
+  (N'services', N'business', N'PayToday Service Desk', NULL, N'Wallet · case ref', 10, 1),
+  (N'services', N'business', N'NamPost parcel COD', NULL, N'Waybill · wallet', 20, 1),
+  (N'services', N'business', N'Courier Namibia — same day', NULL, N'Pickup code · wallet', 30, 1),
+  (N'services', N'business', N'IT support — Windhoek SME', NULL, N'Ticket no. · wallet', 40, 1),
+  (N'services', N'business', N'Plumbing 24 — emergency', NULL, N'Call-out ref · wallet', 50, 1),
+  (N'services', N'business', N'Laundry & dry-clean — CBD', NULL, N'Bag tag · wallet', 60, 1);
 
 /* Hub grids — same slugs/link paths as former static data */
 INSERT INTO dbo.hub_navigation_tiles (hub_kind, slug, label, icon_key, list_style, link_path, sort_order, is_active)
@@ -585,3 +1153,4 @@ PRINT N'paytoday schema + seed complete.';
 PRINT N'Demo user: demo@paytoday.local / PayToday123!';
 PRINT N'Seeded dbo.notification_outbox: hub_demo_pending_payment, hub_demo_payment_completed (worker + NOTIFY_SERVICE_API_KEY).';
 GO
+

@@ -42,8 +42,10 @@ export function isPaymentIntentMode(pt?: PayTodayRuntimeConfig): boolean {
   return asPt(pt).paymentIntentUrl.length > 0
 }
 
-function apiReturnUrl(pt: PayTodayRuntimeConfig, reference: string, orderId: string): string {
+function apiReturnUrl(pt: PayTodayRuntimeConfig, reference: string, orderId: string, payerEmail?: string | null): string {
   const q = new URLSearchParams({ reference, orderId })
+  const em = payerEmail?.trim()
+  if (em) q.set('payer_email', em)
   return `${pt.publicApiUrl}/api/payments/return?${q.toString()}`
 }
 
@@ -56,7 +58,7 @@ function buildQueryStringRedirect(pt: PayTodayRuntimeConfig, p: PaymentRedirectP
     })
     return { redirectUrl: `${pt.publicStoreUrl}/checkout/complete?${qp.toString()}` }
   }
-  const successUrl = apiReturnUrl(pt, p.reference, p.orderId)
+  const successUrl = apiReturnUrl(pt, p.reference, p.orderId, p.userEmail)
   const cancelUrl = `${pt.publicStoreUrl}${p.cancelPath ?? '/checkout/failure'}?orderId=${encodeURIComponent(p.orderId)}`
   const q = new URLSearchParams({
     amount: (p.totalCents / 100).toFixed(2),
@@ -107,7 +109,7 @@ async function resolveOfficialPaymentIntent(
     console.warn('[paytoday] Payment intent email examples use NAD; currency is', p.currency)
   }
 
-  const returnUrl = apiReturnUrl(pt, p.reference, p.orderId)
+  const returnUrl = apiReturnUrl(pt, p.reference, p.orderId, p.userEmail)
   const body: Record<string, string | number> = {
     vi,
     amount,
@@ -173,7 +175,7 @@ async function resolveLegacyFormsApi(
   p: PaymentRedirectParams,
 ): Promise<PaymentRedirectResolution> {
   const apiUrl = pt.formsApiUrl.trim()
-  const successUrl = apiReturnUrl(pt, p.reference, p.orderId)
+  const successUrl = apiReturnUrl(pt, p.reference, p.orderId, p.userEmail)
   const cancelUrl = `${pt.publicStoreUrl}${p.cancelPath ?? '/checkout/failure'}?orderId=${encodeURIComponent(p.orderId)}`
   const body = {
     vendorId: pt.vendorId || undefined,

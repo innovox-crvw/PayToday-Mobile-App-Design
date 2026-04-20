@@ -9,10 +9,12 @@ import { cartRouter } from './cart.js'
 import { checkoutRouter } from './checkout.js'
 import { addressesRouter } from './addresses.js'
 import { adminProductsRouter } from './adminProducts.js'
+import { adminCategoriesRouter } from './adminCategories.js'
 import { depositRouter } from './deposit.js'
 import { fulfillmentRouter } from './fulfillment.js'
 import { ordersRouter } from './orders.js'
 import { paymentReturnRouter } from './paymentReturn.js'
+import { paymentsIntentRouter } from './paymentsIntent.js'
 import { adminOrdersRouter } from './adminOrders.js'
 import { adminDepositRouter } from './adminDeposit.js'
 import { adminInventoryRouter } from './adminInventory.js'
@@ -71,6 +73,8 @@ apiRouter.use('/payments', paymentReturnRouter)
 
 apiRouter.use(verifyCsrf)
 
+apiRouter.use('/payments', paymentsIntentRouter)
+
 apiRouter.use('/auth', authRouter)
 apiRouter.use('/notifications', notificationsRouter)
 apiRouter.use('/wallet', walletRouter)
@@ -80,6 +84,7 @@ apiRouter.use('/cart', cartRouter)
 apiRouter.use('/checkout', checkoutRouter)
 apiRouter.use('/addresses', addressesRouter)
 apiRouter.use('/admin/products', adminProductsRouter)
+apiRouter.use('/admin/categories', adminCategoriesRouter)
 apiRouter.use('/deposit', depositRouter)
 apiRouter.use('/fulfillment', fulfillmentRouter)
 apiRouter.use('/orders', ordersRouter)

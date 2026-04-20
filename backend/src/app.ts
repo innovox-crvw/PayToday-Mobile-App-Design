@@ -41,6 +41,13 @@ export function createApp(): express.Express {
     paytodayWebhookRouter,
   )
 
+  /** Alias: same handler as /api/webhooks/paytoday (raw body + HMAC). */
+  app.use(
+    '/api/payments/webhook',
+    express.raw({ type: '*/*', limit: '2mb' }),
+    paytodayWebhookRouter,
+  )
+
   app.use(express.json({ limit: '1mb' }))
 
   app.use('/api', apiRouter)

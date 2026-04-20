@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
+import type { InventoryPolicy } from '../../types/catalogue'
 import {
   Alert,
   Box,
@@ -25,6 +26,20 @@ import { formatMoney } from '../../lib/money'
 
 type CategoryOpt = { id: string; slug: string; name: string }
 
+function optionsToLines(opts: { name: string; value: string }[] | undefined): string {
+  return (opts ?? []).map((o) => `${o.name}: ${o.value}`).join('\n')
+}
+
+function parseOptionsLines(s: string): { name: string; value: string }[] {
+  return s
+    .split('\n')
+    .map((line) => {
+      const m = line.trim().match(/^([^:=]+)[:=]\s*(.+)$/)
+      return m ? { name: m[1].trim(), value: m[2].trim() } : null
+    })
+    .filter((x): x is { name: string; value: string } => Boolean(x))
+}
+
 export function AdminProductsPage() {
   const [items, setItems] = useState<ProductDto[]>([])
   const [categories, setCategories] = useState<CategoryOpt[]>([])
@@ -36,12 +51,29 @@ export function AdminProductsPage() {
   const [priceCents, setPriceCents] = useState('19900')
   const [initialStock, setInitialStock] = useState('10')
   const [imageUrl, setImageUrl] = useState('')
+  const [compareAtCreate, setCompareAtCreate] = useState('')
+  const [inventoryPolicyCreate, setInventoryPolicyCreate] = useState<InventoryPolicy>('track')
+  const [variantOptionsCreate, setVariantOptionsCreate] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [editProduct, setEditProduct] = useState<
     Record<string, { name: string; slug: string; description: string; isActive: boolean; categoryId: string }>
   >({})
-  const [editVariant, setEditVariant] = useState<Record<string, { sku: string; variantName: string; priceCents: string; currency: string }>>({})
+  const [editVariant, setEditVariant] = useState<
+    Record<
+      string,
+      {
+        sku: string
+        variantName: string
+        priceCents: string
+        currency: string
+        compareAtPriceCents: string
+        inventoryPolicy: InventoryPolicy
+        optionsText: string
+      }
+    >
+  >({})
   const [imageAdd, setImageAdd] = useState<Record<string, string>>({})
+  const [imageVariantId, setImageVariantId] = useState<Record<string, string>>({})
 
   async function load() {
     setError(null)
@@ -74,6 +106,9 @@ export function AdminProductsPage() {
             variantName: v.name,
             priceCents: String(v.priceCents),
             currency: v.currency,
+            compareAtPriceCents: v.compareAtPriceCents != null ? String(v.compareAtPriceCents) : '',
+            inventoryPolicy: v.inventoryPolicy ?? 'track',
+            optionsText: optionsToLines(v.options),
           }
         }
       }
@@ -110,6 +145,9 @@ export function AdminProductsPage() {
           currency: 'NAD',
           categoryId: categoryId.trim() || null,
           imageUrl: imageUrl.trim() || null,
+          compareAtPriceCents: compareAtCreate.trim() ? Number(compareAtCreate) : null,
+          inventoryPolicy: inventoryPolicyCreate,
+          variantOptions: parseOptionsLines(variantOptionsCreate),
         }),
       })
       if (!res.ok) {
@@ -121,6 +159,9 @@ export function AdminProductsPage() {
       setDescription('')
       setSku('')
       setImageUrl('')
+      setCompareAtCreate('')
+      setInventoryPolicyCreate('track')
+      setVariantOptionsCreate('')
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Create failed')
@@ -165,6 +206,9 @@ export function AdminProductsPage() {
           variantName: e.variantName,
           priceCents: Number(e.priceCents),
           currency: e.currency,
+          compareAtPriceCents: e.compareAtPriceCents.trim() ? Number(e.compareAtPriceCents) : null,
+          inventoryPolicy: e.inventoryPolicy,
+          variantOptions: parseOptionsLines(e.optionsText),
         }),
       })
       if (!res.ok) throw new Error(await res.text())
@@ -183,13 +227,15 @@ export function AdminProductsPage() {
     }
     try {
       await fetchCsrfToken()
+      const vid = (imageVariantId[productId] ?? '').trim()
       const res = await apiFetch(`/api/admin/products/${productId}/images`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, sortOrder: 0 }),
+        body: JSON.stringify({ url, sortOrder: 0, ...(vid ? { variantId: vid } : {}) }),
       })
       if (!res.ok) throw new Error(await res.text())
       setImageAdd((m) => ({ ...m, [productId]: '' }))
+      setImageVariantId((m) => ({ ...m, [productId]: '' }))
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Image add failed')
@@ -236,6 +282,33 @@ export function AdminProductsPage() {
             onChange={(ev) => setImageUrl(ev.target.value)}
             fullWidth
             placeholder="https://…"
+          />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <TextField
+              label="Compare-at (cents, optional)"
+              value={compareAtCreate}
+              onChange={(ev) => setCompareAtCreate(ev.target.value)}
+              fullWidth
+            />
+            <TextField
+              select
+              label="Inventory policy"
+              value={inventoryPolicyCreate}
+              onChange={(ev) => setInventoryPolicyCreate(ev.target.value as InventoryPolicy)}
+              fullWidth
+            >
+              <MenuItem value="track">Track (block when out of stock)</MenuItem>
+              <MenuItem value="continue">Continue (allow oversell / backorder)</MenuItem>
+              <MenuItem value="not_tracked">Not tracked (no stock deduction)</MenuItem>
+            </TextField>
+          </Stack>
+          <TextField
+            label="Variant options (optional, one per line: Size: Large)"
+            value={variantOptionsCreate}
+            onChange={(ev) => setVariantOptionsCreate(ev.target.value)}
+            fullWidth
+            multiline
+            minRows={2}
           />
           <TextField
             select
@@ -376,26 +449,40 @@ export function AdminProductsPage() {
               <Typography variant="subtitle2" fontWeight={700}>
                 Images
               </Typography>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-                <TextField
-                  size="small"
-                  fullWidth
-                  label="Add image URL"
-                  value={imageAdd[p.id] ?? ''}
-                  onChange={(ev) => setImageAdd((m) => ({ ...m, [p.id]: ev.target.value }))}
-                />
-                <Button variant="contained" size="small" onClick={() => void addImage(p.id)}>
-                  Add
-                </Button>
+              <Stack spacing={1}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    label="Add image URL"
+                    value={imageAdd[p.id] ?? ''}
+                    onChange={(ev) => setImageAdd((m) => ({ ...m, [p.id]: ev.target.value }))}
+                  />
+                  <TextField
+                    size="small"
+                    sx={{ minWidth: 220 }}
+                    label="Variant ID (optional)"
+                    placeholder="For variant-specific image"
+                    value={imageVariantId[p.id] ?? ''}
+                    onChange={(ev) => setImageVariantId((m) => ({ ...m, [p.id]: ev.target.value }))}
+                  />
+                  <Button variant="contained" size="small" onClick={() => void addImage(p.id)}>
+                    Add
+                  </Button>
+                </Stack>
+                <Typography variant="caption" color="text.secondary">
+                  Copy a variant UUID from the row below to attach the image to that SKU in the storefront gallery.
+                </Typography>
               </Stack>
 
               <Typography variant="subtitle2" fontWeight={700}>
                 Variants
               </Typography>
-              <TableContainer>
+              <TableContainer sx={{ overflowX: 'auto' }}>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
+                      <TableCell>Variant id</TableCell>
                       <TableCell>SKU</TableCell>
                       <TableCell>Name</TableCell>
                       <TableCell>Price</TableCell>
@@ -413,73 +500,132 @@ export function AdminProductsPage() {
                           variantName: v.name,
                           priceCents: String(v.priceCents),
                           currency: v.currency,
+                          compareAtPriceCents: v.compareAtPriceCents != null ? String(v.compareAtPriceCents) : '',
+                          inventoryPolicy: v.inventoryPolicy ?? 'track',
+                          optionsText: optionsToLines(v.options),
                         } as const)
                       return (
-                        <TableRow key={v.id}>
-                          <TableCell sx={{ minWidth: 120 }}>
-                            <TextField
-                              size="small"
-                              value={ev?.sku ?? v.sku}
-                              onChange={(e) =>
-                                setEditVariant((m) => ({
-                                  ...m,
-                                  [v.id]: { ...(m[v.id] ?? vDraft), sku: e.target.value },
-                                }))
-                              }
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TextField
-                              size="small"
-                              fullWidth
-                              value={ev?.variantName ?? v.name}
-                              onChange={(e) =>
-                                setEditVariant((m) => ({
-                                  ...m,
-                                  [v.id]: { ...(m[v.id] ?? vDraft), variantName: e.target.value },
-                                }))
-                              }
-                            />
-                          </TableCell>
-                          <TableCell sx={{ minWidth: 200 }}>
-                            <Stack direction="row" spacing={1}>
+                        <Fragment key={v.id}>
+                          <TableRow>
+                            <TableCell>
+                              <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                                {v.id}
+                              </Typography>
+                            </TableCell>
+                            <TableCell sx={{ minWidth: 120 }}>
                               <TextField
                                 size="small"
-                                label="cents"
-                                type="number"
-                                value={ev?.priceCents ?? String(v.priceCents)}
+                                value={ev?.sku ?? v.sku}
                                 onChange={(e) =>
                                   setEditVariant((m) => ({
                                     ...m,
-                                    [v.id]: { ...(m[v.id] ?? vDraft), priceCents: e.target.value },
+                                    [v.id]: { ...(m[v.id] ?? vDraft), sku: e.target.value },
                                   }))
                                 }
-                                sx={{ width: 110 }}
                               />
+                            </TableCell>
+                            <TableCell>
                               <TextField
                                 size="small"
-                                label="ccy"
-                                value={ev?.currency ?? v.currency}
+                                fullWidth
+                                value={ev?.variantName ?? v.name}
                                 onChange={(e) =>
                                   setEditVariant((m) => ({
                                     ...m,
-                                    [v.id]: { ...(m[v.id] ?? vDraft), currency: e.target.value },
+                                    [v.id]: { ...(m[v.id] ?? vDraft), variantName: e.target.value },
                                   }))
                                 }
-                                sx={{ width: 72 }}
                               />
-                            </Stack>
-                            <Typography variant="caption" color="text.secondary" display="block">
-                              {formatMoney(v.priceCents, v.currency)} list
-                            </Typography>
-                          </TableCell>
-                          <TableCell>{v.stockQuantity}</TableCell>
-                          <TableCell>
-                            <Button size="small" variant="outlined" onClick={() => void saveVariant(p.id, v.id)}>
-                              Save
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+                            </TableCell>
+                            <TableCell sx={{ minWidth: 200 }}>
+                              <Stack direction="row" spacing={1}>
+                                <TextField
+                                  size="small"
+                                  label="cents"
+                                  type="number"
+                                  value={ev?.priceCents ?? String(v.priceCents)}
+                                  onChange={(e) =>
+                                    setEditVariant((m) => ({
+                                      ...m,
+                                      [v.id]: { ...(m[v.id] ?? vDraft), priceCents: e.target.value },
+                                    }))
+                                  }
+                                  sx={{ width: 110 }}
+                                />
+                                <TextField
+                                  size="small"
+                                  label="ccy"
+                                  value={ev?.currency ?? v.currency}
+                                  onChange={(e) =>
+                                    setEditVariant((m) => ({
+                                      ...m,
+                                      [v.id]: { ...(m[v.id] ?? vDraft), currency: e.target.value },
+                                    }))
+                                  }
+                                  sx={{ width: 72 }}
+                                />
+                              </Stack>
+                              <Typography variant="caption" color="text.secondary" display="block">
+                                {formatMoney(v.priceCents, v.currency)} list
+                              </Typography>
+                            </TableCell>
+                            <TableCell>{v.stockQuantity}</TableCell>
+                            <TableCell>
+                              <Button size="small" variant="outlined" onClick={() => void saveVariant(p.id, v.id)}>
+                                Save
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell colSpan={6} sx={{ borderTop: 0, pt: 0, pb: 2 }}>
+                              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ md: 'flex-start' }}>
+                                <TextField
+                                  size="small"
+                                  label="Compare-at (cents)"
+                                  value={ev?.compareAtPriceCents ?? (v.compareAtPriceCents != null ? String(v.compareAtPriceCents) : '')}
+                                  onChange={(e) =>
+                                    setEditVariant((m) => ({
+                                      ...m,
+                                      [v.id]: { ...(m[v.id] ?? vDraft), compareAtPriceCents: e.target.value },
+                                    }))
+                                  }
+                                  sx={{ width: 160 }}
+                                />
+                                <TextField
+                                  size="small"
+                                  select
+                                  label="Inventory policy"
+                                  value={ev?.inventoryPolicy ?? v.inventoryPolicy ?? 'track'}
+                                  onChange={(e) =>
+                                    setEditVariant((m) => ({
+                                      ...m,
+                                      [v.id]: { ...(m[v.id] ?? vDraft), inventoryPolicy: e.target.value as InventoryPolicy },
+                                    }))
+                                  }
+                                  sx={{ minWidth: 220 }}
+                                >
+                                  <MenuItem value="track">Track</MenuItem>
+                                  <MenuItem value="continue">Continue</MenuItem>
+                                  <MenuItem value="not_tracked">Not tracked</MenuItem>
+                                </TextField>
+                                <TextField
+                                  size="small"
+                                  label="Options (Size: M one per line)"
+                                  value={ev?.optionsText ?? optionsToLines(v.options)}
+                                  onChange={(e) =>
+                                    setEditVariant((m) => ({
+                                      ...m,
+                                      [v.id]: { ...(m[v.id] ?? vDraft), optionsText: e.target.value },
+                                    }))
+                                  }
+                                  fullWidth
+                                  multiline
+                                  minRows={2}
+                                />
+                              </Stack>
+                            </TableCell>
+                          </TableRow>
+                        </Fragment>
                       )
                     })}
                   </TableBody>

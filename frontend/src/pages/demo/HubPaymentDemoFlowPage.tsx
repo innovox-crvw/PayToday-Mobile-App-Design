@@ -80,8 +80,53 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
   const [paymentOk, setPaymentOk] = useState(true)
   const [session, setSession] = useState<'unknown' | 'in' | 'out'>('unknown')
   const pipelineLock = useRef(false)
+  /** When the service slug matches hub drill-down data (e.g. airtime, electricity), user picks a provider like on Payments. */
+  const [serviceProviders, setServiceProviders] = useState<HubPaymentCategoryItemDto[]>([])
+  const [selectedServiceItemId, setSelectedServiceItemId] = useState<string | null>(null)
+  const [walletBalanceCents, setWalletBalanceCents] = useState<number | null>(null)
+  const [walletBalanceKnown, setWalletBalanceKnown] = useState(false)
+  /** Required for services `water` and `electricity` — sent on demo payment pending/complete. */
+  const [meterOrAccountRef, setMeterOrAccountRef] = useState('')
 
   const categoryKey = variant === 'services' ? serviceSlug : categoryId
+
+  const needsMeterOrAccountRef = useMemo(
+    () => variant === 'services' && (serviceSlug === 'water' || serviceSlug === 'electricity'),
+    [variant, serviceSlug],
+  )
+
+  const effectivePayee = useMemo(() => {
+    if (!payee) return null
+    if (variant !== 'services' || serviceProviders.length === 0) return payee
+    const row = selectedServiceItemId
+      ? serviceProviders.find((p) => p.id === selectedServiceItemId)
+      : undefined
+    if (!row) return payee
+    return {
+      ...payee,
+      name: row.displayName,
+      paymentMethodHint: row.paymentMethod?.trim() || payee.paymentMethodHint,
+    }
+  }, [payee, variant, serviceProviders, selectedServiceItemId])
+
+  const flowProgress = useMemo(() => {
+    switch (step) {
+      case 'review':
+        return 16
+      case 'amount':
+        return 36
+      case 'method':
+        return 56
+      case 'pin':
+        return 76
+      case 'processing':
+        return 90
+      case 'done':
+        return 100
+      default:
+        return 8
+    }
+  }, [step])
 
   const notificationsHref = pathPrefix ? `${pathPrefix}/notifications` : '/notifications'
 
@@ -101,10 +146,41 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
   }, [])
 
   useEffect(() => {
+    if (session !== 'in') {
+      setWalletBalanceCents(null)
+      setWalletBalanceKnown(false)
+      return
+    }
+    if (!['amount', 'method', 'pin'].includes(step)) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetch(apiUrl('/api/wallet/balance'), { credentials: 'include' })
+        if (!r.ok || cancelled) return
+        const j = (await r.json()) as { balanceCents?: number }
+        if (cancelled) return
+        setWalletBalanceCents(typeof j.balanceCents === 'number' ? j.balanceCents : 0)
+        setWalletBalanceKnown(true)
+      } catch {
+        if (!cancelled) {
+          setWalletBalanceCents(null)
+          setWalletBalanceKnown(false)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [session, step])
+
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
       setLoading(true)
       setLoadError(null)
+      setServiceProviders([])
+      setSelectedServiceItemId(null)
+      setMeterOrAccountRef('')
       try {
         if (variant === 'payments') {
           if (!categoryId || !itemId) {
@@ -154,6 +230,23 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             setPayee(null)
             return
           }
+          let providers: HubPaymentCategoryItemDto[] = []
+          try {
+            const itemsRes = await fetch(
+              apiUrl(`/api/hub/payment-category-items?category=${encodeURIComponent(serviceSlug)}`),
+            )
+            if (itemsRes.ok) {
+              const itemsData = (await itemsRes.json()) as HubPaymentCategoryItemsResponse
+              providers = itemsData.items ?? []
+            }
+          } catch {
+            /* optional drill-down */
+          }
+          if (cancelled) return
+          setServiceProviders(providers)
+          if (providers.length === 1) {
+            setSelectedServiceItemId(providers[0].id)
+          }
           setPayee({
             name: tile.label,
             paymentMethodHint: tile.paymentMethodsCaption?.trim() || 'Wallet · Card · USSD · EFT',
@@ -194,7 +287,8 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
   }, [session])
 
   const startProcessing = useCallback(async () => {
-    if (!payee || amountCents == null || pipelineLock.current) return
+    const who = effectivePayee
+    if (!who || amountCents == null || pipelineLock.current) return
     pipelineLock.current = true
     setLoadError(null)
     const ref = `PT-${Date.now().toString(36).toUpperCase()}`
@@ -216,8 +310,11 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
       let correlationId = ''
 
       if (s === 'in') {
+        const meterTrim = meterOrAccountRef.trim()
+        const servicesMeterPayload =
+          variant === 'services' && meterTrim ? { meterOrAccountRef: meterTrim } : {}
         const base = {
-          payeeName: payee.name,
+          payeeName: who.name,
           amountCents,
           payMethod,
           reference: ref,
@@ -225,7 +322,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
         const pendingBody =
           variant === 'payments'
             ? { variant: 'payments' as const, ...base, categorySlug: categoryId, itemId }
-            : { variant: 'services' as const, ...base, serviceSlug }
+            : { variant: 'services' as const, ...base, serviceSlug, ...servicesMeterPayload }
         try {
           const res = await apiFetch('/api/hub/demo-payment/pending', {
             method: 'POST',
@@ -273,13 +370,16 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
       await sleep(400)
 
       if (s === 'in' && correlationId) {
+        const meterTrim = meterOrAccountRef.trim()
+        const servicesMeterPayload =
+          variant === 'services' && meterTrim ? { meterOrAccountRef: meterTrim } : {}
         const completeBody =
           variant === 'payments'
             ? {
                 variant: 'payments' as const,
                 categorySlug: categoryId,
                 itemId,
-                payeeName: payee.name,
+                payeeName: who.name,
                 amountCents,
                 payMethod,
                 reference: ref,
@@ -288,11 +388,12 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             : {
                 variant: 'services' as const,
                 serviceSlug,
-                payeeName: payee.name,
+                payeeName: who.name,
                 amountCents,
                 payMethod,
                 reference: ref,
                 correlationId,
+                ...servicesMeterPayload,
               }
         let walletOutcomeSet = false
         try {
@@ -357,13 +458,14 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
       pipelineLock.current = false
     }
   }, [
-    payee,
+    effectivePayee,
     amountCents,
     payMethod,
     variant,
     categoryId,
     itemId,
     serviceSlug,
+    meterOrAccountRef,
     ensureSession,
   ])
 
@@ -373,6 +475,14 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
     const n = Number.parseFloat(raw)
     if (!Number.isFinite(n) || n <= 0) return null
     return Math.round(n * 100)
+  }
+
+  /** Align with `hubDemoPayment` meterOrAccountRef validation. */
+  function meterRefValidationMessage(raw: string): string | null {
+    const t = raw.trim()
+    if (t.length < 4) return 'Enter at least 4 characters.'
+    if (!/^[\d\w\s./-]+$/u.test(t)) return 'Use only letters, digits, spaces, dots, slashes, or hyphens.'
+    return null
   }
 
   function goAmountNext() {
@@ -420,7 +530,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
     return <Navigate to={shop} replace />
   }
 
-  if (!payee) {
+  if (!payee || !effectivePayee) {
     return null
   }
 
@@ -429,6 +539,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
     return <Navigate to={p} replace />
   }
 
+  const displayPayee = effectivePayee
   const railLabel = RAILS.find((r) => r.value === payMethod)?.label ?? payMethod
 
   return (
@@ -467,7 +578,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
               {variant === 'services' ? 'Services' : 'Business payment'}
             </Typography>
             <Typography fontWeight={850} sx={{ fontSize: '1.2rem', letterSpacing: -0.25, lineHeight: 1.2 }} noWrap>
-              {payee.name}
+              {displayPayee.name}
             </Typography>
           </Box>
           <Box sx={{ textAlign: 'right', minWidth: 86 }}>
@@ -480,7 +591,19 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
           </Box>
         </Stack>
 
-        {loadError && step !== 'review' ? <Alert severity="warning" sx={{ mt: 2 }}>{loadError}</Alert> : null}
+        <LinearProgress
+          variant="determinate"
+          value={flowProgress}
+          sx={{
+            mt: 1.75,
+            height: 4,
+            borderRadius: 2,
+            bgcolor: 'rgba(255,255,255,0.18)',
+            '& .MuiLinearProgress-bar': { borderRadius: 2, bgcolor: 'rgba(255,255,255,0.92)' },
+          }}
+        />
+
+        {loadError ? <Alert severity="warning" sx={{ mt: 2 }}>{loadError}</Alert> : null}
 
         <Paper
           elevation={0}
@@ -504,7 +627,83 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                   {payee.categoryLabel}
                   {variant === 'payments' ? ` · item ${itemId.slice(0, 8)}…` : ''}
                 </Typography>
-                <Button fullWidth variant="contained" size="large" sx={{ py: 1.25, fontWeight: 850 }} onClick={() => setStep('amount')}>
+                <Chip size="small" label={displayPayee.paymentMethodHint} sx={{ alignSelf: 'flex-start', fontWeight: 600 }} />
+                {variant === 'services' && serviceProviders.length > 0 ? (
+                  <FormControl component="fieldset" fullWidth>
+                    <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.75 }}>
+                      Choose provider
+                    </Typography>
+                    <RadioGroup
+                      value={selectedServiceItemId ?? ''}
+                      onChange={(e) => {
+                        setLoadError(null)
+                        setSelectedServiceItemId(e.target.value)
+                      }}
+                    >
+                      {serviceProviders.map((p) => (
+                        <Paper key={p.id} variant="outlined" sx={{ mb: 1, p: 1.1, borderRadius: 2 }}>
+                          <FormControlLabel
+                            value={p.id}
+                            control={<Radio />}
+                            label={
+                              <Box>
+                                <Typography variant="body2" fontWeight={750}>
+                                  {p.displayName}
+                                </Typography>
+                                {p.paymentMethod ? (
+                                  <Typography variant="caption" color="text.secondary">
+                                    {p.paymentMethod}
+                                  </Typography>
+                                ) : null}
+                              </Box>
+                            }
+                            sx={{ alignItems: 'flex-start', ml: 0 }}
+                          />
+                        </Paper>
+                      ))}
+                    </RadioGroup>
+                  </FormControl>
+                ) : null}
+                {variant === 'services' && needsMeterOrAccountRef ? (
+                  <TextField
+                    fullWidth
+                    required
+                    label={serviceSlug === 'electricity' ? 'Prepaid meter number' : 'Water account number'}
+                    placeholder={serviceSlug === 'electricity' ? 'e.g. 04123456789' : 'e.g. 12345678'}
+                    value={meterOrAccountRef}
+                    onChange={(e) => {
+                      setLoadError(null)
+                      setMeterOrAccountRef(e.target.value)
+                    }}
+                    helperText={
+                      serviceSlug === 'electricity'
+                        ? 'Number from your prepaid meter card or keypad (often 9–13 digits).'
+                        : 'Municipal account or customer number from your water bill.'
+                    }
+                    inputProps={{ maxLength: 80, autoComplete: 'off' }}
+                  />
+                ) : null}
+                <Button
+                  fullWidth
+                  variant="contained"
+                  size="large"
+                  sx={{ py: 1.25, fontWeight: 850 }}
+                  onClick={() => {
+                    if (variant === 'services' && serviceProviders.length > 0 && !selectedServiceItemId) {
+                      setLoadError('Choose a provider to continue.')
+                      return
+                    }
+                    if (needsMeterOrAccountRef) {
+                      const err = meterRefValidationMessage(meterOrAccountRef)
+                      if (err) {
+                        setLoadError(err)
+                        return
+                      }
+                    }
+                    setLoadError(null)
+                    setStep('amount')
+                  }}
+                >
                   Continue
                 </Button>
                 {session === 'out' ? (
@@ -520,6 +719,19 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                 <Typography fontWeight={850} sx={{ fontSize: '1.05rem', letterSpacing: -0.2 }}>
                   Enter amount
                 </Typography>
+                {needsMeterOrAccountRef && meterOrAccountRef.trim() ? (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {serviceSlug === 'electricity' ? 'Meter' : 'Account'}:{' '}
+                    <Box component="span" fontWeight={750} sx={{ fontFamily: 'monospace' }}>
+                      {meterOrAccountRef.trim()}
+                    </Box>
+                  </Typography>
+                ) : null}
+                {session === 'in' && walletBalanceKnown && walletBalanceCents != null ? (
+                  <Alert severity="info" sx={{ py: 0.5 }}>
+                    PayToday Wallet balance: <strong>{formatNadFromCents(walletBalanceCents)}</strong>
+                  </Alert>
+                ) : null}
                 <Stack direction="row" flexWrap="wrap" gap={1}>
                   {presets.map((c) => (
                     <Chip
@@ -557,6 +769,24 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                 <Typography fontWeight={850} sx={{ fontSize: '1.05rem', letterSpacing: -0.2 }}>
                   Payment method
                 </Typography>
+                {needsMeterOrAccountRef && meterOrAccountRef.trim() ? (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {serviceSlug === 'electricity' ? 'Meter' : 'Account'}:{' '}
+                    <Box component="span" fontWeight={750} sx={{ fontFamily: 'monospace' }}>
+                      {meterOrAccountRef.trim()}
+                    </Box>
+                  </Typography>
+                ) : null}
+                {session === 'in' && walletBalanceKnown && walletBalanceCents != null ? (
+                  <Alert severity="info" sx={{ py: 0.5 }}>
+                    Wallet balance: <strong>{formatNadFromCents(walletBalanceCents)}</strong>
+                    {payMethod === 'wallet' && amountCents > walletBalanceCents ? (
+                      <Typography component="span" display="block" sx={{ mt: 0.75, fontWeight: 650 }}>
+                        This amount is above your balance — pick another method or lower the amount.
+                      </Typography>
+                    ) : null}
+                  </Alert>
+                ) : null}
                 <FormControl component="fieldset" fullWidth>
                   <RadioGroup value={payMethod} onChange={(e) => setPayMethod(e.target.value as PayRail)}>
                     {RAILS.map((r) => (
@@ -586,12 +816,26 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                   size="large"
                   sx={{ py: 1.25, fontWeight: 850 }}
                   onClick={() => {
-                    setPin('')
-                    setPinError(null)
-                    setStep('pin')
+                    if (payMethod === 'wallet') {
+                      if (
+                        walletBalanceKnown &&
+                        walletBalanceCents != null &&
+                        amountCents > walletBalanceCents
+                      ) {
+                        setLoadError('Amount exceeds your PayToday Wallet balance. Choose card, USSD, EFT, or a lower amount.')
+                        return
+                      }
+                      setLoadError(null)
+                      setPin('')
+                      setPinError(null)
+                      setStep('pin')
+                    } else {
+                      setLoadError(null)
+                      void startProcessing()
+                    }
                   }}
                 >
-                  Pay {formatNadFromCents(amountCents)}
+                  {payMethod === 'wallet' ? `Continue to PIN · ${formatNadFromCents(amountCents)}` : `Pay ${formatNadFromCents(amountCents)}`}
                 </Button>
               </Stack>
             ) : null}
@@ -599,7 +843,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             {step === 'pin' && amountCents != null ? (
               <Stack spacing={2}>
                 <Typography fontWeight={850} sx={{ fontSize: '1.05rem', letterSpacing: -0.2 }}>
-                  Enter PIN
+                  Wallet PIN
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {railLabel} · {formatNadFromCents(amountCents)}
@@ -753,7 +997,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                   {formatNadFromCents(amountCents)}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                  {payee.name}
+                  {displayPayee.name}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                   {railLabel}

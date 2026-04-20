@@ -58,6 +58,18 @@ export function CartPage() {
     return () => window.removeEventListener('pt-cart-updated', onUpd)
   }, [refresh])
 
+  async function clearEntireCart() {
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/cart', { method: 'DELETE' })
+      if (!res.ok) throw new Error(await res.text())
+      void refresh()
+      window.dispatchEvent(new Event('pt-cart-updated'))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not clear cart')
+    }
+  }
+
   async function removeLine(variantId: string) {
     try {
       await fetchCsrfToken()
@@ -150,6 +162,9 @@ export function CartPage() {
         <Card variant="outlined" sx={{ borderColor: 'divider', bgcolor: 'action.hover' }}>
           <CardContent sx={{ py: 2.5 }}>
             <Stack spacing={2}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                Prices are captured when each item is added; catalogue changes won&apos;t change these line amounts.
+              </Typography>
               <Stack direction="row" justifyContent="space-between" alignItems="baseline">
                 <Typography fontWeight={700} color="text.secondary">
                   Subtotal
@@ -158,6 +173,16 @@ export function CartPage() {
                   {formatMoney(subtotal, currency)}
                 </Typography>
               </Stack>
+              {tp && (tp.discountCents ?? 0) > 0 ? (
+                <Stack direction="row" justifyContent="space-between" alignItems="baseline">
+                  <Typography fontWeight={700} color="text.secondary">
+                    Discounts
+                  </Typography>
+                  <Typography fontWeight={800} color="success.main">
+                    −{formatMoney(tp.discountCents ?? 0, tp.currency)}
+                  </Typography>
+                </Stack>
+              ) : null}
               {showShippingRow ? (
                 <>
                   <Stack direction="row" justifyContent="space-between" alignItems="baseline">
@@ -189,9 +214,20 @@ export function CartPage() {
                   </Typography>
                 </>
               ) : null}
-              <Button component={RouterLink} to={`${pathPrefix}/checkout`} variant="contained" size="large" fullWidth>
-                Checkout
-              </Button>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                <Button
+                  type="button"
+                  variant="outlined"
+                  color="inherit"
+                  fullWidth
+                  onClick={() => void clearEntireCart()}
+                >
+                  Clear cart
+                </Button>
+                <Button component={RouterLink} to={`${pathPrefix}/checkout`} variant="contained" size="large" fullWidth>
+                  Checkout
+                </Button>
+              </Stack>
             </Stack>
           </CardContent>
         </Card>

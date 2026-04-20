@@ -39,6 +39,9 @@ export function OrdersListPage() {
       {items.map((o) => (
         <Card key={o.orderId} variant="outlined">
           <CardActionArea component={RouterLink} to={`${pathPrefix}/orders/${o.orderId}`} sx={{ p: 2 }}>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+              Order {o.orderId}
+            </Typography>
             <Typography fontWeight={700}>
               {(o.total_cents / 100).toFixed(2)} {o.currency}
             </Typography>

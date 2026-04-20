@@ -7,10 +7,13 @@ import {
   Button,
   ButtonBase,
   Card,
+  CircularProgress,
   IconButton,
   InputBase,
   Paper,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useMediaQuery,
   useTheme,
@@ -26,8 +29,8 @@ import PhoneIphoneOutlinedIcon from '@mui/icons-material/PhoneIphoneOutlined'
 import CheckroomOutlinedIcon from '@mui/icons-material/CheckroomOutlined'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import LocalGroceryStoreOutlinedIcon from '@mui/icons-material/LocalGroceryStoreOutlined'
-import type { StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
-import { apiUrl } from '../../lib/apiOrigin'
+import type { PopularStoreDto, StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
+import { apiUrl, readApiError } from '../../lib/apiOrigin'
 import { getRecentVisits, MAX_RECENT_VISIT_ITEMS, recentVisitLink, type RecentVisitRecord } from '../../lib/recentVisits'
 import { SurfaceSection } from '../../components/page/SurfaceSection'
 import {
@@ -43,13 +46,26 @@ import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined'
 
 type Brand = { id: string; abbr: string; bg: string; color?: string }
 
-const popularBrands: Brand[] = [
+/** Shown when SQL is off, the popular-stores query errors, or there are no qualifying orders in the window. */
+const STATIC_POPULAR_BRANDS: Brand[] = [
   { id: 'fresh', abbr: 'FM', bg: '#2563EB', color: '#fff' },
   { id: 'fuel', abbr: 'CF', bg: '#0D9488', color: '#fff' },
   { id: 'grove', abbr: 'GM', bg: '#37474F' },
   { id: 'mtc', abbr: 'MT', bg: '#0D47A1', color: '#E3F2FD' },
   { id: 'paratus', abbr: 'PR', bg: '#1565C0' },
 ]
+
+function formatPopularDateRange(fromIso: string | null | undefined, toIso: string | null | undefined): string {
+  if (!fromIso?.trim() || !toIso?.trim()) return ''
+  try {
+    const from = new Date(fromIso)
+    const to = new Date(toIso)
+    const df = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    return `${df.format(from)} – ${df.format(to)}`
+  } catch {
+    return ''
+  }
+}
 
 /** Stock-style placement art when `image_url` is empty (Unsplash, free to use). */
 const HERO_PLACEHOLDER_IMAGES: Record<string, string> = {
@@ -266,6 +282,67 @@ function BrandChip({ b, to }: { b: Brand; to: string }) {
   )
 }
 
+function PopularStoreChip({ item, to }: { item: PopularStoreDto; to: string }) {
+  const label = (item.brandName?.trim() || item.brandSlug).trim()
+  const abbr = twoLetterAbbr(label)
+  const bg = recentShortcutAccent(label)
+  const stats = `${item.unitsSold} sold · ${item.orderCount} orders`
+  return (
+    <Box sx={{ flexShrink: 0, width: 76, textAlign: 'center' }}>
+      <Box
+        component={RouterLink}
+        to={to}
+        aria-label={`${label}, ${stats}`}
+        sx={{
+          textDecoration: 'none',
+          color: 'inherit',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 0.65,
+        }}
+      >
+        <Box
+          sx={{
+            width: 64,
+            height: 64,
+            borderRadius: 1,
+            background: bg,
+            color: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 4px 14px rgba(15,23,42,0.12)',
+            fontWeight: 900,
+            fontSize: '1.1rem',
+            lineHeight: 1,
+            letterSpacing: 0.5,
+          }}
+        >
+          {abbr}
+        </Box>
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 700,
+            lineHeight: 1.2,
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            maxWidth: '100%',
+          }}
+        >
+          {label}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.58rem', lineHeight: 1.2, fontWeight: 600 }}>
+          {stats}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
 export function StoreHomePage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
@@ -290,6 +367,13 @@ export function StoreHomePage() {
   const [categories, setCategories] = useState<StoreCategoryDto[]>([])
   const [promotions, setPromotions] = useState<StorePromotionDto[]>([])
   const [recentVisits, setRecentVisits] = useState<RecentVisitRecord[]>(() => getRecentVisits())
+  const [popularDays, setPopularDays] = useState<7 | 30 | 90>(30)
+  const [popularItems, setPopularItems] = useState<PopularStoreDto[]>([])
+  const [popularRangeFrom, setPopularRangeFrom] = useState<string | null>(null)
+  const [popularRangeTo, setPopularRangeTo] = useState<string | null>(null)
+  const [popularSource, setPopularSource] = useState<string | null>(null)
+  const [popularLoading, setPopularLoading] = useState(true)
+  const [popularError, setPopularError] = useState<string | null>(null)
 
   const welcomeTitle =
     memberGreeting === undefined
@@ -423,6 +507,54 @@ export function StoreHomePage() {
       }
     })()
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setPopularLoading(true)
+      setPopularError(null)
+      try {
+        const res = await fetch(
+          apiUrl(`/api/storefront/popular-stores?days=${popularDays}&limit=12`),
+        )
+        if (!res.ok) {
+          const msg = await readApiError(res)
+          if (!cancelled) {
+            setPopularItems([])
+            setPopularRangeFrom(null)
+            setPopularRangeTo(null)
+            setPopularSource('error')
+            setPopularError(msg)
+          }
+          return
+        }
+        const data = (await res.json()) as {
+          source?: string
+          items?: PopularStoreDto[]
+          rangeFromIso?: string | null
+          rangeToIso?: string | null
+        }
+        if (cancelled) return
+        setPopularItems(Array.isArray(data.items) ? data.items : [])
+        setPopularRangeFrom(data.rangeFromIso ?? null)
+        setPopularRangeTo(data.rangeToIso ?? null)
+        setPopularSource(data.source ?? null)
+      } catch (e) {
+        if (!cancelled) {
+          setPopularItems([])
+          setPopularRangeFrom(null)
+          setPopularRangeTo(null)
+          setPopularSource('error')
+          setPopularError(e instanceof Error ? e.message : 'Could not load popular stores')
+        }
+      } finally {
+        if (!cancelled) setPopularLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [popularDays])
 
   /** Popular + categories + recent: horizontal strips; `minWidth: 0` so flex doesn’t swallow overflow on mobile. */
   const homeHorizontalStripSx = useMemo(
@@ -746,21 +878,89 @@ export function StoreHomePage() {
         </Stack>
 
         <SurfaceSection title="Popular">
-          <Box role="region" aria-label="Popular brands — swipe left or right on the tiles to scroll" sx={homeHorizontalStripSx}>
-            {popularBrands.map((b) => (
-              <Box
-                key={`pop-${b.id}`}
-                sx={{
-                  flexShrink: 0,
-                  scrollSnapAlign: 'start',
-                  display: 'flex',
-                  justifyContent: 'center',
+          <Stack spacing={1.25}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              flexWrap="wrap"
+              gap={1}
+              sx={{ pr: { xs: 0, sm: 0.5 } }}
+            >
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, maxWidth: '100%' }}>
+                {popularLoading
+                  ? 'Loading top stores…'
+                  : popularItems.length > 0 && popularSource === 'database'
+                    ? `Top stores by units sold (${formatPopularDateRange(popularRangeFrom, popularRangeTo) || `last ${popularDays} days`})`
+                    : popularSource === 'database' && popularItems.length === 0
+                      ? `No paid orders in the last ${popularDays} days yet — sample stores below`
+                      : popularError
+                        ? 'Could not load rankings — sample stores below'
+                        : 'Sample stores — connect SQL and complete orders to see live rankings'}
+              </Typography>
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={popularDays}
+                onChange={(_e, v) => {
+                  if (v === 7 || v === 30 || v === 90) setPopularDays(v)
                 }}
+                aria-label="Date range for popular stores"
               >
-                <BrandChip b={b} to={shop} />
+                <ToggleButton value={7} sx={{ px: 1.25, fontWeight: 700 }}>
+                  7d
+                </ToggleButton>
+                <ToggleButton value={30} sx={{ px: 1.25, fontWeight: 700 }}>
+                  30d
+                </ToggleButton>
+                <ToggleButton value={90} sx={{ px: 1.25, fontWeight: 700 }}>
+                  90d
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Stack>
+            {popularLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
+                <CircularProgress size={28} aria-label="Loading popular stores" />
               </Box>
-            ))}
-          </Box>
+            ) : (
+              <Box
+                role="region"
+                aria-label="Popular stores — swipe left or right on the tiles to scroll"
+                sx={homeHorizontalStripSx}
+              >
+                {popularItems.length > 0
+                  ? popularItems.map((item) => (
+                      <Box
+                        key={item.brandSlug}
+                        sx={{
+                          flexShrink: 0,
+                          scrollSnapAlign: 'start',
+                          display: 'flex',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <PopularStoreChip
+                          item={item}
+                          to={`${shop}?store=${encodeURIComponent(item.brandSlug)}`}
+                        />
+                      </Box>
+                    ))
+                  : STATIC_POPULAR_BRANDS.map((b) => (
+                      <Box
+                        key={`pop-${b.id}`}
+                        sx={{
+                          flexShrink: 0,
+                          scrollSnapAlign: 'start',
+                          display: 'flex',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <BrandChip b={b} to={`${shop}?store=${encodeURIComponent(b.id)}`} />
+                      </Box>
+                    ))}
+              </Box>
+            )}
+          </Stack>
         </SurfaceSection>
 
         {categories.length > 0 ? (

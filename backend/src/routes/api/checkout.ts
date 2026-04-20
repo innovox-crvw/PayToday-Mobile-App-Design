@@ -4,7 +4,11 @@ import crypto from 'node:crypto'
 import { env } from '../../config/env.js'
 import { getSqlPool } from '../../db/pool.js'
 import { optionalAuth, requireAuth } from '../../middleware/auth.js'
-import { CART_COOKIE, getOrCreateCartId, getCartLines } from '../../services/cartService.js'
+import { CART_COOKIE, getCartLines, getOrCreateCartId } from '../../services/cartService.js'
+import {
+  validateDepositLocationExists,
+  validateShippingAddressComplete,
+} from '../../services/checkoutValidation.js'
 import { tryDebitWalletStoreCheckout } from '../../services/demoWalletService.js'
 import { cancelUnshippedOrderAdmin, createOrderFromCart } from '../../services/orderService.js'
 import { confirmOrderPaid } from '../../services/paymentConfirmation.js'
@@ -19,6 +23,7 @@ import { getIntegrationSettingsMap } from '../../services/integrationSettingsCac
 import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js'
 import { shippingCentsForDelivery, taxCentsForSubtotal } from '../../services/shipping.js'
 import { findUserById } from '../../repos/usersRepo.js'
+import { setPaymentProcessing, updatePaymentReference } from '../../repos/paymentsRepo.js'
 import type { NextFunction, Request, Response } from 'express'
 
 export const checkoutRouter = Router()
@@ -170,6 +175,12 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
             console.warn('[checkout] could not store paytoday_payment_intent_token (run db:migrate?)', e)
           }
         }
+        try {
+          await updatePaymentReference(pool, row.id, reference)
+          await setPaymentProcessing(pool, row.id)
+        } catch (e) {
+          console.warn('[checkout] payment lifecycle update (run db:migrate 015?)', e)
+        }
         res.json({
           orderId: row.id,
           redirectUrl,
@@ -220,12 +231,31 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       res.status(400).json({ error: 'That shipping address is not on your account' })
       return
     }
+    try {
+      await validateShippingAddressComplete(pool, req.user.sub, shippingAddressId.trim())
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'Invalid delivery address' })
+      return
+    }
+  }
+
+  if (deliveryMethod === 'deposit_box' && depositLocationId) {
+    try {
+      await validateDepositLocationExists(pool, depositLocationId.trim())
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'Invalid pickup location' })
+      return
+    }
   }
 
   const sessionToken = req.cookies[CART_COOKIE] as string | undefined
   const { cartId } = await getOrCreateCartId(pool, sessionToken, req.user?.sub)
 
   const lines = await getCartLines(pool, cartId)
+  if (lines.length === 0) {
+    res.status(400).json({ error: 'Cart is empty' })
+    return
+  }
   let subtotalCents = 0
   let currency = 'NAD'
   for (const l of lines) {
@@ -259,17 +289,18 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     totalCents = o.totalCents
     currency = o.currency
 
+    reference = `PTSTORE-${orderId}`
     const paymentIdemKey = crypto.randomUUID()
     await pool
       .request()
       .input('orderId', orderId)
       .input('status', 'pending')
       .input('key', paymentIdemKey)
+      .input('ref', reference)
       .query(`
-      INSERT INTO dbo.payments (order_id, status, idempotency_key) VALUES (@orderId, @status, @key)
+      INSERT INTO dbo.payments (order_id, status, idempotency_key, payment_reference) VALUES (@orderId, @status, @key, @ref)
     `)
 
-    reference = `PTSTORE-${orderId}`
     await pool
       .request()
       .input('ref', reference)
@@ -322,6 +353,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       subtotalCents,
       shippingCents,
       taxCents,
+      discountCents: 0,
       paidWithDemoWallet: true,
       walletBalanceAfterCents: debit.balanceAfter,
     })
@@ -368,6 +400,12 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
         console.warn('[checkout] could not store paytoday_payment_intent_token (run db:migrate?)', e)
       }
     }
+    try {
+      await updatePaymentReference(pool, orderId, reference)
+      await setPaymentProcessing(pool, orderId)
+    } catch (e) {
+      console.warn('[checkout] payment lifecycle update (run db:migrate 015?)', e)
+    }
   } catch (e) {
     if (e instanceof PayTodayPaymentIntentError) {
       res.status(e.statusCode).json({ error: e.message })
@@ -385,5 +423,16 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     payload: JSON.stringify({ orderId, totalCents, currency }),
   })
 
-  res.json({ orderId, redirectUrl, reference, totalCents, currency, subtotalCents, shippingCents, taxCents })
+  res.json({
+    orderId,
+    redirectUrl,
+    payment_url: redirectUrl,
+    reference,
+    totalCents,
+    currency,
+    subtotalCents,
+    shippingCents,
+    taxCents,
+    discountCents: 0,
+  })
 })

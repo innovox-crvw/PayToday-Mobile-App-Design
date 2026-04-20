@@ -1,6 +1,7 @@
 import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '../backend/src/app.js'
+import { env } from '../backend/src/config/env.js'
 import { clearWebhookIdempotencyForTests } from '../backend/src/routes/webhooks/paytoday.js'
 
 describe('PayToday Store API', () => {
@@ -29,10 +30,18 @@ describe('PayToday Store API', () => {
     expect(typeof res.body.checkoutRequireSignIn).toBe('boolean')
   })
 
-  it('GET /api/auth/keycloak/status includes ropcLoginEnabled boolean', async () => {
+  it('GET /api/storefront/popular-stores returns items array and days', async () => {
+    const res = await request(app).get('/api/storefront/popular-stores').query({ days: 30, limit: 5 })
+    expect(res.status).toBe(200)
+    expect(['database', 'off', 'error']).toContain(res.body.source)
+    expect(typeof res.body.days).toBe('number')
+    expect(Array.isArray(res.body.items)).toBe(true)
+  })
+
+  it('GET /api/auth/keycloak/status returns paytodaySignInEnabled + localPasswordLoginAllowed booleans', async () => {
     const res = await request(app).get('/api/auth/keycloak/status')
     expect(res.status).toBe(200)
-    expect(typeof res.body.ropcLoginEnabled).toBe('boolean')
+    expect(typeof res.body.paytodaySignInEnabled).toBe('boolean')
     expect(typeof res.body.localPasswordLoginAllowed).toBe('boolean')
   })
 
@@ -42,16 +51,30 @@ describe('PayToday Store API', () => {
     expect(res.body).toBeTypeOf('object')
   })
 
-  it('POST /api/auth/login with authSource paytoday returns 400 when ROPC disabled', async () => {
-    const agent = request.agent(app)
-    const csrf = await agent.get('/api/csrf')
-    const token = csrf.body.csrfToken as string
-    const res = await agent
-      .post('/api/auth/login')
-      .set('X-CSRF-Token', token)
-      .send({ email: 'u@example.com', password: 'x', authSource: 'paytoday' })
-    expect(res.status).toBe(400)
-    expect(res.body.code).toBe('paytoday_login_failed')
+  it('POST /api/auth/login with authSource paytoday returns 400 when Keycloak unconfigured', async () => {
+    const prev = {
+      baseUrl: env.keycloakBaseUrl,
+      realm: env.keycloakRealm,
+      clientId: env.keycloakClientId,
+    }
+    env.keycloakBaseUrl = ''
+    env.keycloakRealm = ''
+    env.keycloakClientId = ''
+    try {
+      const agent = request.agent(app)
+      const csrf = await agent.get('/api/csrf')
+      const token = csrf.body.csrfToken as string
+      const res = await agent
+        .post('/api/auth/login')
+        .set('X-CSRF-Token', token)
+        .send({ email: 'u@example.com', password: 'x', authSource: 'paytoday' })
+      expect(res.status).toBe(400)
+      expect(res.body.code).toBe('paytoday_login_failed')
+    } finally {
+      env.keycloakBaseUrl = prev.baseUrl
+      env.keycloakRealm = prev.realm
+      env.keycloakClientId = prev.clientId
+    }
   })
 
   it('GET /api/auth/keycloak/routes lists Keycloak auth endpoints', async () => {
@@ -63,15 +86,30 @@ describe('PayToday Store API', () => {
     expect(res.body.endpoints.some((e: { path?: string }) => e.path?.endsWith('/keycloak/status'))).toBe(true)
   })
 
-  it('POST /api/auth/keycloak/ro-password is 404 when ROPC disabled', async () => {
+  it('GET /api/auth/keycloak/start is 404 (PKCE front-channel removed)', async () => {
+    const res = await request(app).get('/api/auth/keycloak/start')
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /api/auth/keycloak/callback is 404 (PKCE front-channel removed)', async () => {
     const agent = request.agent(app)
     const csrf = await agent.get('/api/csrf')
     const token = csrf.body.csrfToken as string
     const res = await agent
-      .post('/api/auth/keycloak/ro-password')
+      .post('/api/auth/keycloak/callback')
       .set('X-CSRF-Token', token)
-      .send({ username: 'u@example.com', password: 'secret' })
+      .send({ code: 'x', redirect_uri: 'https://example.com/cb', code_verifier: 'x', state: 'x' })
     expect(res.status).toBe(404)
+  })
+
+  it('GET /api/auth/keycloak/status does not expose legacy fields', async () => {
+    const res = await request(app).get('/api/auth/keycloak/status')
+    expect(res.status).toBe(200)
+    expect(res.body.enabled).toBeUndefined()
+    expect(res.body.keycloakOnly).toBeUndefined()
+    expect(res.body.keycloakReady).toBeUndefined()
+    expect(res.body.ropcLoginEnabled).toBeUndefined()
+    expect(res.body.clientId).toBeUndefined()
   })
 
   it('GET /api/payments/return redirects to storefront success (no SQL: demo path)', async () => {
@@ -80,6 +118,7 @@ describe('PayToday Store API', () => {
     expect(res.status).toBe(302)
     expect(res.headers.location).toContain('/checkout/success')
     expect(res.headers.location).toContain(encodeURIComponent(orderId))
+    expect(res.headers.location).toContain('awaitingWebhook=1')
   })
 
   it('GET /api/payments/return derives orderId from PTSTORE- reference when orderId omitted', async () => {
@@ -90,6 +129,7 @@ describe('PayToday Store API', () => {
     expect(res.status).toBe(302)
     expect(res.headers.location).toContain('/checkout/success')
     expect(res.headers.location).toContain(encodeURIComponent(orderId))
+    expect(res.headers.location).toContain('awaitingWebhook=1')
   })
 
   it('POST /api/webhooks/paytoday accepts signed body and dedupes by event id (no SQL)', async () => {

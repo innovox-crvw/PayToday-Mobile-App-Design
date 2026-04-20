@@ -1,28 +1,29 @@
 # Keycloak integration API (this application)
 
-These routes are implemented by the **PayToday Store API** (`backend/src/routes/api/auth.ts`). They orchestrate **Keycloak’s** OpenID Connect endpoints; they are not a proxy to the full Keycloak Admin REST API.
+These routes are implemented by the **PayToday Store API** (`backend/src/routes/api/auth.ts`). They let the store API talk to **Keycloak's** token endpoint server-side on behalf of users; they are not a proxy to the full Keycloak Admin REST API.
 
 All paths are prefixed with your API origin (e.g. `http://localhost:4000`). Mutating requests under `/api/*` (except documented exceptions) require **CSRF**: call `GET /api/csrf`, send the returned token in header `X-CSRF-Token` and keep the `pt_csrf` cookie. Use `credentials: 'include'` from the browser.
+
+> **The SPA never redirects the user to Keycloak.** PayToday sign-in is performed entirely by
+> `POST /api/auth/login` with `authSource: "paytoday"` — the backend calls the Keycloak token
+> endpoint using the OAuth 2.0 Resource Owner Password Credentials grant and sets the same app
+> session cookies as a local sign-in. No PKCE, no redirect URIs, no `/keycloak/callback`.
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
 | `GET` | `/api/auth/public-config` | No | Public hints (e.g. `paytodayForgotPasswordUrl`); no secrets. |
-| `POST` | `/api/auth/login` | Yes | Store sign-in. Body: `{ email, password, authSource?: "local" \| "paytoday" }`. Default `local` uses SQL + bcrypt; `paytoday` uses Keycloak ROPC when enabled (same session cookies as OIDC). |
-| `GET` | `/api/auth/keycloak/routes` | No | Machine-readable list of Keycloak-related routes (this doc’s index). |
-| `GET` | `/api/auth/keycloak/status` | No | Whether OIDC is configured, Keycloak-only mode, optional ROPC flag. |
-| `GET` | `/api/auth/keycloak/start` | No | Returns `{ url }` — Keycloak authorize URL for PKCE sign-in. |
-| `POST` | `/api/auth/keycloak/callback` | Yes | Exchanges authorization `code` for app session cookies. |
-| `POST` | `/api/auth/keycloak/ro-password` | Yes | Optional resource-owner password grant → session cookies (disabled by default). |
+| `POST` | `/api/auth/login` | Yes | Store sign-in. Body: `{ email, password, authSource?: "local" \| "paytoday" }`. Default `local` uses SQL + bcrypt; `paytoday` calls Keycloak server-side. |
+| `POST` | `/api/auth/register` | Yes | Creates a local (bcrypt) store account. Returns `409 paytoday_account_exists` when the email is already a PayToday user. |
+| `GET` | `/api/auth/keycloak/routes` | No | Machine-readable list of Keycloak-related routes (this doc's index). |
+| `GET` | `/api/auth/keycloak/status` | No | Which `/api/auth/login` methods the SPA may use right now. |
 
-For **auth model** (OIDC vs ROPC) and PayToday alignment, see [KEYCLOAK_AUTH_MODEL.md](./KEYCLOAK_AUTH_MODEL.md). For **env vars**, see [`.env.example`](../.env.example).
+For the **auth model** and PayToday alignment, see [KEYCLOAK_AUTH_MODEL.md](./KEYCLOAK_AUTH_MODEL.md). For **env vars**, see [`.env.example`](../.env.example).
 
 ---
 
 ## `GET /api/auth/keycloak/routes`
 
 Returns JSON describing the Keycloak-related API surface (no secrets).
-
-**Example**
 
 ```bash
 curl -s http://localhost:4000/api/auth/keycloak/routes | jq .
@@ -32,18 +33,14 @@ curl -s http://localhost:4000/api/auth/keycloak/routes | jq .
 
 ## `GET /api/auth/keycloak/status`
 
+Tells the SPA which `authSource` values are currently accepted by `POST /api/auth/login`.
+
 **Response** (`200`, JSON):
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `enabled` | boolean | OIDC sign-in is usable (`KEYCLOAK_ISSUER` + `KEYCLOAK_CLIENT_ID` at minimum). |
-| `clientId` | string? | OIDC client id exposed to the UI (not the secret). |
-| `keycloakOnly` | boolean | Mirrors `KEYCLOAK_SIGN_IN_ONLY`. |
-| `keycloakReady` | boolean? | When `keycloakOnly` is true: whether OIDC is actually configured. |
-| `ropcLoginEnabled` | boolean | Whether `POST .../ro-password` and `POST .../login` with `authSource: "paytoday"` are allowed (feature flag + env-complete). |
-| `localPasswordLoginAllowed` | boolean | `false` only when `KEYCLOAK_SIGN_IN_ONLY` is on and `KEYCLOAK_ALLOW_LOCAL_PASSWORD_LOGIN` is off; otherwise SQL email/password login/register stay available. |
-
-**Example**
+| `paytodaySignInEnabled` | boolean | `authSource: "paytoday"` works. `true` when `KEYCLOAK_BASE_URL`, `KEYCLOAK_REALM`, and `KEYCLOAK_CLIENT_ID` are all non-empty. |
+| `localPasswordLoginAllowed` | boolean | Always `true`. Local store sign-in and registration are always available; role-based gating lives in `users.role`. |
 
 ```bash
 curl -s http://localhost:4000/api/auth/keycloak/status | jq .
@@ -57,18 +54,27 @@ Returns JSON only (no authentication). Example fields:
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `paytodayForgotPasswordUrl` | string? | From `PAYTODAY_FORGOT_PASSWORD_URL` — optional link for the storefront “Forgot password (PayToday)” control. |
+| `paytodayForgotPasswordUrl` | string? | From `PAYTODAY_FORGOT_PASSWORD_URL` — optional link for the SPA's "Forgot password (PayToday)" control. |
 
 ---
 
-## `POST /api/auth/login` (`authSource`)
+## `POST /api/auth/login`
 
-Same CSRF rules as other `POST /api/*` routes. Supports NedAccess-style dual paths:
+Same CSRF rules as other `POST /api/*` routes. Supports two `authSource` values — the SPA picks one based on the login form toggle and the result of `/api/auth/keycloak/status`.
 
-- Omit `authSource` or send `authSource: "local"` — existing database bcrypt flow (unless Keycloak-only mode blocks it).
-- `authSource: "paytoday"` — Keycloak resource-owner password grant, then the same app session cookies as other sign-in methods. Requires `KEYCLOAK_ROPC_LOGIN_ENABLED=true` and token URL + confidential client env (see `.env.example`).
+- Omit `authSource` or send `authSource: "local"` — database bcrypt flow.
+- `authSource: "paytoday"` — Keycloak Resource Owner Password Credentials grant, then the same app session cookies. Requires `KEYCLOAK_BASE_URL`, `KEYCLOAK_REALM`, and `KEYCLOAK_CLIENT_ID` (plus optional `KEYCLOAK_CLIENT_SECRET` for confidential clients).
 
-**Example**
+PayToday users are always provisioned in `dbo.users` as `role = 'customer'`. Staff/admin access is granted by an administrator editing `users.role` in-app (see the admin users page).
+
+**Error codes** (JSON body includes `code`):
+
+| HTTP | `code` | Meaning |
+|------|--------|---------|
+| `409` | `use_paytoday_account` | The email is linked to a PayToday (Keycloak-backed) user. The SPA should switch the toggle to PayToday and retry. |
+| `423` | `account_locked` | Too many failed sign-in attempts for this email (local bcrypt uses `users.failed_login_count`; pre-provisioned Keycloak users use `dbo.keycloak_login_throttle` — see migration `017_keycloak_login_throttle`). |
+| `400` | `paytoday_login_failed` | `authSource: "paytoday"` but Keycloak is not configured (base URL / realm / client id missing). |
+| `401`/`502` | `paytoday_login_failed` | Keycloak rejected the credentials or the token / userinfo request failed. |
 
 ```bash
 curl -s -X POST http://localhost:4000/api/auth/login \
@@ -79,97 +85,29 @@ curl -s -X POST http://localhost:4000/api/auth/login \
 
 ---
 
-## `GET /api/auth/keycloak/start`
+## `POST /api/auth/register`
 
-Starts the **authorization code + PKCE** flow. The SPA should generate PKCE verifier/challenge (see `frontend/src/lib/oauthPkce.ts`), then request this URL.
+Creates a local (bcrypt) store account. The SPA's registration form only ever creates local accounts — PayToday users sign up in PayToday, not here.
 
-**Query parameters** (all required unless noted):
-
-| Name | Value |
-|------|--------|
-| `redirect_uri` | Absolute callback URL on an **allowed origin** (`PUBLIC_STORE_URL` / `CORS_ORIGINS`). Example: `http://localhost:5173/account/keycloak/callback` |
-| `code_challenge` | PKCE S256 challenge (base64url) |
-| `code_challenge_method` | Must be `S256` |
-| `after_login` | Optional. Path starting with `/` (max 256 chars). Default `/account`. |
-
-**Response** (`200`): `{ "url": "<Keycloak authorize URL>" }`
-
-**Errors**: `400` / `503` with `{ "error": "..." }` (`KeycloakAuthError` messages).
-
-**Example** (challenge value is illustrative only):
-
-```bash
-curl -sG http://localhost:4000/api/auth/keycloak/start \
-  --data-urlencode "redirect_uri=http://localhost:5173/account/keycloak/callback" \
-  --data-urlencode "code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" \
-  --data-urlencode "code_challenge_method=S256" \
-  --data-urlencode "after_login=/account" | jq .
-```
-
----
-
-## `POST /api/auth/keycloak/callback`
-
-Completes the OIDC flow. Requires **MS SQL** (user provisioning).
-
-**Headers**: `Content-Type: application/json`, `X-CSRF-Token`, session cookies from `GET /api/csrf`.
-
-**Body** (JSON):
-
-| Field | Description |
-|-------|-------------|
-| `code` | Authorization code from Keycloak redirect |
-| `redirect_uri` | Same value passed to `/keycloak/start` |
-| `code_verifier` | PKCE verifier |
-| `state` | Opaque `state` returned by Keycloak (signed by this API) |
-
-**Response** (`200`): `{ "ok": true, "user": { "id", "email", "role" }, "next": "/account" }`  
-Sets **httpOnly** auth cookies (`pt_session`, refresh).
-
-**Example** (with CSRF agent — use real values from the browser flow):
-
-```bash
-# Obtain CSRF (cookie jar)
-curl -s -c cookies.txt http://localhost:4000/api/csrf
-TOKEN=$(jq -r .csrfToken < csrf.json)  # save body to file in practice
-
-curl -s -b cookies.txt -c cookies.txt -X POST http://localhost:4000/api/auth/keycloak/callback \
-  -H "Content-Type: application/json" \
-  -H "X-CSRF-Token: $TOKEN" \
-  -d '{"code":"...","redirect_uri":"...","code_verifier":"...","state":"..."}'
-```
-
----
-
-## `POST /api/auth/keycloak/ro-password`
-
-**Optional.** Returns `404` when `KEYCLOAK_ROPC_LOGIN_ENABLED` is not `true`. Does **not** return Keycloak access tokens in JSON — only sets the same session cookies as the callback on success.
-
-**Body** (JSON):
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `username` | Yes | Keycloak username (often email) |
-| `password` | Yes | Password |
-| `audience` | No | `"frontend"` (default) or `"mobile"` — selects client credentials from env |
-
-**Response** (`200`): `{ "ok": true, "user": { "id", "email", "role" } }`
-
-**Errors**: `400`, `401`, `503`, `404` (feature off).
+| HTTP | `code` | Meaning |
+|------|--------|---------|
+| `409` | `paytoday_account_exists` | The email is already a PayToday (Keycloak) user. The SPA should point them at the sign-in page with the PayToday tab selected. |
+| `409` | _(unset)_ | A local account already exists for this email. |
 
 ---
 
 ## Keycloak server URLs (external)
 
-Your realm’s **well-known** document is typically:
+Given `KEYCLOAK_BASE_URL` and `KEYCLOAK_REALM`, the store API calls exactly two realm endpoints:
 
-`{KEYCLOAK_ISSUER}/.well-known/openid-configuration`
+- **Token**: `{KEYCLOAK_BASE_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token`
+- **Userinfo**: `{KEYCLOAK_BASE_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/userinfo`
 
-Example issuer:
+Your realm's **well-known** document is available at `{KEYCLOAK_BASE_URL}/realms/{KEYCLOAK_REALM}/.well-known/openid-configuration` — useful for verifying the token endpoint from a browser.
 
-`https://keycloak.example.com/realms/your-realm`
+In Keycloak Admin → your realm → **Clients** → your client: set **Direct access grants** to ON. If the client is confidential, copy **Credentials → Client secret** into `KEYCLOAK_CLIENT_SECRET`. No callback / redirect URIs are required for this app.
 
-The store API reads that document server-side for `authorization_endpoint`, `token_endpoint`, and `userinfo_endpoint`. You do not call those from the SPA except by redirecting the user to the authorize URL returned by **`/keycloak/start`**.
+**Staging:** Point `KEYCLOAK_BASE_URL` and `KEYCLOAK_REALM` in `.env` (or `dbo.integration_settings`) at your **staging** realm for local development; production uses the same variable names with production Keycloak. Application code loads hosts only via `mergeKeycloakRuntime` — no hardcoded Keycloak URLs in routes.
 
 ---
 
@@ -177,12 +115,12 @@ The store API reads that document server-side for `authorization_endpoint`, `tok
 
 | Area | File |
 |------|------|
-| Store sign-in + Keycloak button | `frontend/src/pages/store/AccountPage.tsx` |
-| Admin Keycloak button | `frontend/src/pages/admin/AdminLoginPage.tsx` |
-| OIDC callback page | `frontend/src/pages/store/KeycloakCallbackPage.tsx` |
+| Storefront / onboarding sign-in + register (app-native UI) | `frontend/src/pages/onboarding/OnboardingLoginPage.tsx` |
+| Admin sign-in (app-native UI) | `frontend/src/pages/admin/AdminLoginPage.tsx` |
+| Shared `/api/auth/keycloak/status` hook | `frontend/src/hooks/useAuthMethods.ts` |
 
 ---
 
 ## Tests
 
-Smoke coverage includes `GET /api/auth/keycloak/routes`, `GET /api/auth/keycloak/status`, and disabled ROPC behaviour: `tests/api.smoke.test.ts`.
+Smoke coverage includes `GET /api/auth/keycloak/routes`, `GET /api/auth/keycloak/status` (shape check), `authSource: "paytoday"` behaviour when Keycloak is unconfigured, and regression checks that the old PKCE endpoints respond 404: `tests/api.smoke.test.ts`.

@@ -76,14 +76,18 @@ export function inAppCopyForTemplate(templateKey: string, payloadJson: string): 
   if (templateKey === 'hub_demo_pending_payment') {
     const ref = String(payload.reference ?? '').trim()
     const payee = String(payload.payeeName ?? '').trim()
+    const meter = String((payload as { meterOrAccountRef?: string }).meterOrAccountRef ?? '').trim()
     const cents = typeof payload.amountCents === 'number' ? payload.amountCents : Number(payload.amountCents)
     const currency = typeof payload.currency === 'string' && payload.currency.trim() ? payload.currency.trim() : 'NAD'
     const total =
       Number.isFinite(cents) && cents >= 0 ? `${currency} ${(cents / 100).toFixed(2)}` : `${currency} —`
     const hub = payload.variant === 'services' ? 'Service payment (demo)' : 'Hub payment (demo)'
+    const meterBit = meter ? ` · Meter/account ${meter}` : ''
     return {
       title: 'Complete your demo payment',
-      body: ref ? `${hub} · ${payee || 'Payee'} · ${total} · Ref ${ref}` : `${hub} · ${payee || 'Payee'} · ${total}`,
+      body: ref
+        ? `${hub} · ${payee || 'Payee'} · ${total} · Ref ${ref}${meterBit}`
+        : `${hub} · ${payee || 'Payee'} · ${total}${meterBit}`,
     }
   }
 
@@ -111,12 +115,14 @@ export function inAppCopyForTemplate(templateKey: string, payloadJson: string): 
   if (templateKey === 'hub_demo_payment_completed') {
     const ref = String(payload.reference ?? '').trim()
     const payee = String(payload.payeeName ?? '').trim()
+    const meter = String((payload as { meterOrAccountRef?: string }).meterOrAccountRef ?? '').trim()
     const hub = payload.variant === 'services' ? 'Service payment' : 'Hub payment'
+    const meterBit = meter ? ` Meter/account ${meter}.` : ''
     return {
       title: 'Demo payment received',
       body: ref
-        ? `${hub} confirmed for ${payee || 'payee'}. Reference ${ref}.`
-        : `${hub} confirmed for ${payee || 'payee'}.`,
+        ? `${hub} confirmed for ${payee || 'payee'}. Reference ${ref}.${meterBit}`
+        : `${hub} confirmed for ${payee || 'payee'}.${meterBit}`,
     }
   }
 

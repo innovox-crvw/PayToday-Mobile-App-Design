@@ -6,6 +6,7 @@ import {
   createProductSimple,
   insertProductImage,
   listProductsAdmin,
+  normalizeInventoryPolicy,
   updateProductAdmin,
   updateVariantAdmin,
 } from '../../repos/productsRepo.js'
@@ -41,6 +42,25 @@ adminProductsRouter.post('/', async (req, res) => {
   const brandSlug = typeof req.body?.brandSlug === 'string' ? req.body.brandSlug.trim() : null
   const brandName = typeof req.body?.brandName === 'string' ? req.body.brandName.trim() : null
   const imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : null
+  const compareRaw = req.body?.compareAtPriceCents
+  const compareAtPriceCents =
+    compareRaw === null || compareRaw === undefined || compareRaw === ''
+      ? null
+      : Number(compareRaw)
+  const inventoryPolicy =
+    typeof req.body?.inventoryPolicy === 'string' ? normalizeInventoryPolicy(req.body.inventoryPolicy) : undefined
+  let variantOptions: { name: string; value: string }[] | undefined
+  if (Array.isArray(req.body?.variantOptions)) {
+    variantOptions = (req.body.variantOptions as unknown[])
+      .map((row) => {
+        if (!row || typeof row !== 'object') return null
+        const o = row as Record<string, unknown>
+        const n = typeof o.name === 'string' ? o.name : ''
+        const v = typeof o.value === 'string' ? o.value : ''
+        return n.trim() && v.trim() ? { name: n.trim(), value: v.trim() } : null
+      })
+      .filter((x): x is { name: string; value: string } => Boolean(x))
+  }
   if (!slug || !name || !sku || !Number.isFinite(priceCents)) {
     res.status(400).json({ error: 'slug, name, sku, priceCents required' })
     return
@@ -59,6 +79,12 @@ adminProductsRouter.post('/', async (req, res) => {
       currency,
       initialStock: Number.isFinite(initialStock) ? initialStock : 0,
       imageUrl: imageUrl || null,
+      compareAtPriceCents:
+        compareAtPriceCents != null && Number.isFinite(compareAtPriceCents) && Number.isInteger(compareAtPriceCents)
+          ? compareAtPriceCents
+          : null,
+      inventoryPolicy,
+      variantOptions,
     })
     res.status(201).json(ids)
   } catch (e) {
@@ -133,6 +159,25 @@ adminProductsRouter.patch('/:productId/variants/:variantId', async (req, res) =>
   if (Object.prototype.hasOwnProperty.call(body, 'currency') && typeof body.currency === 'string') {
     patch.currency = body.currency
   }
+  if (Object.prototype.hasOwnProperty.call(body, 'compareAtPriceCents')) {
+    const c = body.compareAtPriceCents
+    patch.compareAtPriceCents =
+      c === null ? null : typeof c === 'number' ? c : typeof c === 'string' && c.trim() ? Number(c) : null
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'inventoryPolicy') && typeof body.inventoryPolicy === 'string') {
+    patch.inventoryPolicy = normalizeInventoryPolicy(body.inventoryPolicy)
+  }
+  if (Array.isArray(body?.variantOptions)) {
+    patch.options = (body.variantOptions as unknown[])
+      .map((row) => {
+        if (!row || typeof row !== 'object') return null
+        const o = row as Record<string, unknown>
+        const n = typeof o.name === 'string' ? o.name : ''
+        const v = typeof o.value === 'string' ? o.value : ''
+        return n.trim() && v.trim() ? { name: n.trim(), value: v.trim() } : null
+      })
+      .filter((x): x is { name: string; value: string } => Boolean(x))
+  }
   try {
     await updateVariantAdmin(pool, productId, variantId, patch)
     res.json({ ok: true })
@@ -159,13 +204,28 @@ adminProductsRouter.post('/:productId/images', async (req, res) => {
   }
   const url = typeof req.body?.url === 'string' ? req.body.url : ''
   const sortOrder = Number(req.body?.sortOrder ?? 0)
+  const variantId =
+    typeof req.body?.variantId === 'string' && req.body.variantId.trim() && isUuidString(req.body.variantId.trim())
+      ? req.body.variantId.trim()
+      : null
   try {
     const chk = await pool.request().input('id', productId).query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.products WHERE id = @id`)
     if (Number(chk.recordset[0]?.c ?? 0) === 0) {
       res.status(404).json({ error: 'Product not found' })
       return
     }
-    await insertProductImage(pool, productId, url, sortOrder)
+    if (variantId) {
+      const vchk = await pool
+        .request()
+        .input('pid', productId)
+        .input('vid', variantId)
+        .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_variants WHERE id = @vid AND product_id = @pid`)
+      if (Number(vchk.recordset[0]?.c ?? 0) === 0) {
+        res.status(400).json({ error: 'variantId does not belong to this product' })
+        return
+      }
+    }
+    await insertProductImage(pool, productId, url, sortOrder, variantId)
     res.status(201).json({ ok: true })
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Insert failed' })

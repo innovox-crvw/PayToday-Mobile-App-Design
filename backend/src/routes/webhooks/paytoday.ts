@@ -6,19 +6,34 @@ import { getSqlPool } from '../../db/pool.js'
 import { getIntegrationSettingsMap } from '../../services/integrationSettingsCache.js'
 import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js'
 import { confirmOrderPaid } from '../../services/paymentConfirmation.js'
+import { cancelUnshippedOrderAdmin } from '../../services/orderService.js'
+import {
+  markPaymentFailedFromWebhook,
+  markPaymentWebhookProcessed,
+} from '../../repos/paymentsRepo.js'
 
 export const paytodayWebhookRouter = Router()
 
 const processedEventIds = new Set<string>()
 
-function extractEventId(body: unknown): string | null {
-  if (!body || typeof body !== 'object') return null
-  const o = body as Record<string, unknown>
-  const id = o.eventId ?? o.id ?? o.paymentId ?? o.reference
-  return typeof id === 'string' && id.length > 0 ? id : null
+function extractEventId(body: unknown, raw: Buffer): string {
+  if (body && typeof body === 'object') {
+    const o = body as Record<string, unknown>
+    const id = o.eventId ?? o.id ?? o.paymentId ?? o.event_id
+    if (typeof id === 'string' && id.length > 0) return id.slice(0, 200)
+    const ref = o.reference
+    const st = o.status ?? o.payment_status ?? o.eventType
+    if (typeof ref === 'string' && ref.length > 0) {
+      return `${ref}:${String(st ?? '')}`.slice(0, 200)
+    }
+  }
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 64)
 }
 
-function extractOrderId(body: Record<string, unknown>): string | null {
+async function resolveOrderId(
+  pool: NonNullable<Awaited<ReturnType<typeof getSqlPool>>>,
+  body: Record<string, unknown>,
+): Promise<string | null> {
   if (typeof body.orderId === 'string' && body.orderId.length > 0) {
     return body.orderId
   }
@@ -26,14 +41,42 @@ function extractOrderId(body: Record<string, unknown>): string | null {
   if (typeof ref === 'string' && ref.startsWith('PTSTORE-')) {
     return ref.slice('PTSTORE-'.length)
   }
+  const tok = body.payment_intent_token ?? body.paymentIntentToken
+  if (typeof tok === 'string' && tok.trim().length > 0) {
+    try {
+      const r = await pool
+        .request()
+        .input('t', tok.trim())
+        .query<{ id: string }>(
+          `SELECT CAST(id AS NVARCHAR(36)) AS id FROM dbo.orders WHERE paytoday_payment_intent_token = @t`,
+        )
+      const id = r.recordset[0]?.id
+      if (id) return id
+    } catch {
+      /* column may be missing */
+    }
+  }
   return null
 }
 
 function isPaid(body: Record<string, unknown>): boolean {
-  if (body.status === 'paid' || body.status === 'success') return true
+  const s = String(body.status ?? body.payment_status ?? '').toLowerCase()
+  if (['paid', 'success', 'completed', 'captured', 'succeeded'].includes(s)) return true
   if (body.success === true) return true
-  if (body.eventType === 'payment.succeeded') return true
+  const et = String(body.eventType ?? '').toLowerCase()
+  if (et.includes('payment') && et.includes('success')) return true
+  if (et === 'payment.succeeded') return true
   return false
+}
+
+function isFailed(body: Record<string, unknown>): boolean {
+  const s = String(body.status ?? body.payment_status ?? '').toLowerCase()
+  return ['failed', 'declined', 'error', 'rejected'].includes(s)
+}
+
+function isCancelled(body: Record<string, unknown>): boolean {
+  const s = String(body.status ?? body.payment_status ?? '').toLowerCase()
+  return ['cancelled', 'canceled', 'void'].includes(s)
 }
 
 function verifyHmac(
@@ -86,7 +129,42 @@ async function tryPersistEvent(pool: Awaited<ReturnType<typeof getSqlPool>>, eve
   return row?.inserted === 1 ? 'new' : 'dup'
 }
 
-paytodayWebhookRouter.post('/', async (req: Request, res: Response) => {
+async function applyWebhook(
+  pool: NonNullable<Awaited<ReturnType<typeof getSqlPool>>>,
+  parsed: Record<string, unknown>,
+  orderId: string,
+): Promise<{ action: 'paid' | 'failed' | 'cancelled' | 'noop' }> {
+  const st = await pool
+    .request()
+    .input('oid', orderId)
+    .query<{ status: string }>(`SELECT status FROM dbo.orders WHERE id = @oid`)
+  const orderStatus = st.recordset[0]?.status?.toLowerCase() ?? ''
+  const terminalPaid = ['paid', 'shipped', 'delivered'].includes(orderStatus)
+
+  if (isPaid(parsed)) {
+    await confirmOrderPaid(pool, orderId)
+    await markPaymentWebhookProcessed(pool, orderId)
+    return { action: 'paid' }
+  }
+  if (isFailed(parsed) || isCancelled(parsed)) {
+    if (terminalPaid) {
+      return { action: 'noop' }
+    }
+    try {
+      await cancelUnshippedOrderAdmin(pool, orderId)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!/cannot cancel|not found|already|shipped|delivered/i.test(msg)) {
+        console.warn('[paytoday webhook] cancel after failed payment:', msg)
+      }
+    }
+    await markPaymentFailedFromWebhook(pool, orderId)
+    return { action: isCancelled(parsed) ? 'cancelled' : 'failed' }
+  }
+  return { action: 'noop' }
+}
+
+export async function handlePayTodayWebhookRequest(req: Request, res: Response): Promise<void> {
   try {
     const raw = req.body
     if (!Buffer.isBuffer(raw)) {
@@ -110,11 +188,7 @@ paytodayWebhookRouter.post('/', async (req: Request, res: Response) => {
       return
     }
 
-    const eventId = extractEventId(parsed)
-    if (!eventId) {
-      res.status(400).json({ error: 'Missing event id (eventId, id, paymentId, or reference)' })
-      return
-    }
+    const eventId = extractEventId(parsed, raw)
 
     const pool = await getSqlPool()
     const persist = await tryPersistEvent(pool, eventId, JSON.stringify(parsed))
@@ -123,24 +197,24 @@ paytodayWebhookRouter.post('/', async (req: Request, res: Response) => {
       return
     }
 
-    const orderId = extractOrderId(parsed)
-    if (orderId && isPaid(parsed) && pool) {
-      try {
-        await confirmOrderPaid(pool, orderId)
-      } catch (e) {
-        res.status(500).json({ error: e instanceof Error ? e.message : 'Apply failed' })
-        return
-      }
+    const orderId = pool ? await resolveOrderId(pool, parsed) : null
+    if (!orderId || !pool) {
+      res.status(200).json({ ok: true, received: true, eventId, orderId: null, note: 'order not resolved' })
+      return
     }
 
-    res.status(200).json({ ok: true, received: true, eventId, orderId: orderId ?? null })
+    const result = await applyWebhook(pool, parsed, orderId)
+
+    res.status(200).json({ ok: true, received: true, eventId, orderId, action: result.action })
   } catch (e) {
     console.error(e)
     if (!res.headersSent) {
       res.status(500).json({ error: 'Webhook error' })
     }
   }
-})
+}
+
+paytodayWebhookRouter.post('/', handlePayTodayWebhookRequest)
 
 export function clearWebhookIdempotencyForTests(): void {
   processedEventIds.clear()

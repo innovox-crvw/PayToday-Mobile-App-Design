@@ -377,6 +377,16 @@ async function loadOrderDetail(
   } | null
   lines: { variantId: string; quantity: number; unitPriceCents: number; sku: string; productName: string }[]
   fulfillment: { stage: string; carrier_name: string | null; tracking_reference: string | null } | null
+  /** Snapshot from `addresses` at read time (lineup with shipping_address_id). */
+  shippingAddress: {
+    label: string | null
+    line1: string
+    line2: string | null
+    city: string
+    region: string | null
+    postal_code: string | null
+    country: string
+  } | null
   /** True when there is no unused, unexpired pickup code (legacy field name). */
   pickupMasked: boolean
   activePickupCodes: number
@@ -399,6 +409,13 @@ async function loadOrderDetail(
       paytoday_reference: string | null
       deposit_location_id: string | null
       deposit_location_name: string | null
+      ship_label: string | null
+      ship_line1: string | null
+      ship_line2: string | null
+      ship_city: string | null
+      ship_region: string | null
+      ship_postal: string | null
+      ship_country: string | null
     }>(`
       SELECT CAST(o.id AS NVARCHAR(36)) AS id, o.status,
         ISNULL(o.subtotal_cents, o.total_cents) AS subtotal_cents,
@@ -407,13 +424,30 @@ async function loadOrderDetail(
         o.total_cents, o.currency, o.delivery_method, o.guest_email,
         CAST(o.user_id AS NVARCHAR(36)) AS user_id, o.created_at, o.paytoday_reference,
         CAST(o.deposit_location_id AS NVARCHAR(36)) AS deposit_location_id,
-        (SELECT TOP 1 dl.name FROM dbo.deposit_locations dl WHERE dl.id = o.deposit_location_id) AS deposit_location_name
-      FROM dbo.orders o WHERE o.id = @oid
+        (SELECT TOP 1 dl.name FROM dbo.deposit_locations dl WHERE dl.id = o.deposit_location_id) AS deposit_location_name,
+        sa.label AS ship_label, sa.line1 AS ship_line1, sa.line2 AS ship_line2, sa.city AS ship_city,
+        sa.region AS ship_region, sa.postal_code AS ship_postal, sa.country AS ship_country
+      FROM dbo.orders o
+      LEFT JOIN dbo.addresses sa ON sa.id = o.shipping_address_id
+      WHERE o.id = @oid
     `)
   const row = o.recordset[0]
   if (!row) {
-    return { order: null, lines: [], fulfillment: null, pickupMasked: true, activePickupCodes: 0 }
+    return { order: null, lines: [], fulfillment: null, shippingAddress: null, pickupMasked: true, activePickupCodes: 0 }
   }
+
+  const shippingAddress =
+    row.ship_line1 && row.ship_city
+      ? {
+          label: row.ship_label,
+          line1: row.ship_line1,
+          line2: row.ship_line2,
+          city: row.ship_city,
+          region: row.ship_region,
+          postal_code: row.ship_postal,
+          country: row.ship_country ?? 'NA',
+        }
+      : null
 
   const linesR = await pool
     .request()
@@ -479,6 +513,7 @@ async function loadOrderDetail(
           tracking_reference: f.recordset[0].tracking_reference,
         }
       : null,
+    shippingAddress,
     pickupMasked: activePickupCodes === 0,
     activePickupCodes,
   }

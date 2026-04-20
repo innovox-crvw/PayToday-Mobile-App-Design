@@ -1,4 +1,4 @@
-import type { ProductDto } from '../types/catalogue'
+import type { ProductDto, ProductVariantDto } from '../types/catalogue'
 
 /** Sum of stock across every variant (can exceed what the default PDP line shows). */
 export function totalListedStock(product: ProductDto): number {
@@ -25,4 +25,37 @@ export function storefrontVariantPriceRange(product: ProductDto): { min: number;
     max = Math.max(max, v.priceCents)
   }
   return { min, max, currency: v0.currency }
+}
+
+const UI_MAX_QTY = 999
+
+/** Max quantity the PDP allows to add to cart (policy-aware). */
+export function effectiveSellableMax(variant: ProductVariantDto): number {
+  const pol = variant.inventoryPolicy ?? 'track'
+  if (pol === 'not_tracked' || pol === 'continue') {
+    return UI_MAX_QTY
+  }
+  return Math.min(UI_MAX_QTY, Math.max(0, variant.stockQuantity))
+}
+
+/** Whether the variant can be purchased from the storefront (policy + stock). */
+export function variantIsPurchasable(variant: ProductVariantDto): boolean {
+  const pol = variant.inventoryPolicy ?? 'track'
+  if (pol === 'not_tracked' || pol === 'continue') {
+    return true
+  }
+  return variant.stockQuantity > 0
+}
+
+/** Copy shown on tiles / PDP for stock messaging. */
+export function stockLabelForVariant(variant: ProductVariantDto): string {
+  const pol = variant.inventoryPolicy ?? 'track'
+  if (pol === 'not_tracked') {
+    return 'Always available'
+  }
+  if (pol === 'continue' && variant.stockQuantity <= 0) {
+    return 'Backorder'
+  }
+  const n = Math.max(0, variant.stockQuantity)
+  return `${n} in stock`
 }

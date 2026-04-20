@@ -4,19 +4,27 @@ import {
   Alert,
   Box,
   Button,
-  Divider,
+  Chip,
+  CircularProgress,
+  IconButton,
+  InputAdornment,
   Paper,
   Stack,
+  Tab,
+  Tabs,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
-import { apiFetch, fetchCsrfToken } from '../../api/client'
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
+import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined'
+import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
-import { createPkcePair, PKCE_VERIFIER_STORAGE_KEY } from '../../lib/oauthPkce'
 import { SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
+import { useAuthMethods } from '../../hooks/useAuthMethods'
+import { SIGNIN_PAGE_BACKDROP, SURFACE_SHADOW } from '../../theme/branding'
+
+type Method = 'local' | 'paytoday'
 
 function safeReturnTo(raw: string | null): string {
   if (!raw || !raw.startsWith('/admin')) return '/admin'
@@ -28,65 +36,34 @@ function isStaffRole(role: string | undefined): boolean {
   return role === 'admin' || role === 'ops' || role === 'fulfillment'
 }
 
+type ApiError = {
+  error?: string
+  code?: string
+}
+
 export function AdminLoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const returnTo = useMemo(() => safeReturnTo(searchParams.get('returnTo')), [searchParams])
   const needStaff = searchParams.get('needStaff') === '1'
 
+  const { paytodaySignInEnabled, loaded: methodsLoaded } = useAuthMethods()
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [signInMethod, setSignInMethod] = useState<Method>('local')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [keycloakEnabled, setKeycloakEnabled] = useState(false)
-  const [keycloakOnlyMode, setKeycloakOnlyMode] = useState(false)
-  const [ropcLoginEnabled, setRopcLoginEnabled] = useState(false)
-  const [localPasswordLoginAllowed, setLocalPasswordLoginAllowed] = useState(true)
-  const [signInMethod, setSignInMethod] = useState<'local' | 'paytoday'>('local')
   const [paytodayForgotUrl, setPaytodayForgotUrl] = useState<string | null>(null)
-  const [keycloakStatusLoaded, setKeycloakStatusLoaded] = useState(false)
-  const [keycloakStatusFetchFailed, setKeycloakStatusFetchFailed] = useState(false)
-
-  useEffect(() => {
-    void (async () => {
-      setKeycloakStatusLoaded(false)
-      setKeycloakStatusFetchFailed(false)
-      try {
-        const res = await fetch(apiUrl('/api/auth/keycloak/status'), { credentials: 'include' })
-        setKeycloakStatusLoaded(true)
-        if (!res.ok) {
-          setKeycloakStatusFetchFailed(true)
-          setKeycloakEnabled(false)
-          setKeycloakOnlyMode(false)
-          return
-        }
-        const data = (await res.json()) as {
-          enabled?: boolean
-          keycloakOnly?: boolean
-          ropcLoginEnabled?: boolean
-          localPasswordLoginAllowed?: boolean
-        }
-        setKeycloakEnabled(Boolean(data.enabled))
-        setKeycloakOnlyMode(Boolean(data.keycloakOnly))
-        setRopcLoginEnabled(Boolean(data.ropcLoginEnabled))
-        setLocalPasswordLoginAllowed(data.localPasswordLoginAllowed !== false)
-      } catch {
-        setKeycloakStatusLoaded(true)
-        setKeycloakStatusFetchFailed(true)
-        setKeycloakEnabled(false)
-        setKeycloakOnlyMode(false)
-        setRopcLoginEnabled(false)
-        setLocalPasswordLoginAllowed(true)
-      }
-    })()
-  }, [])
 
   useEffect(() => {
     void (async () => {
       try {
         const res = await fetch(apiUrl('/api/auth/public-config'), { credentials: 'include' })
         if (!res.ok) return
-        const data = (await res.json()) as { paytodayForgotPasswordUrl?: string }
+        const data = await readResponseJson<{ paytodayForgotPasswordUrl?: string }>(res)
         if (data.paytodayForgotPasswordUrl) setPaytodayForgotUrl(data.paytodayForgotPasswordUrl)
       } catch {
         /* optional */
@@ -96,11 +73,11 @@ export function AdminLoginPage() {
 
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
+    void (async () => {
       try {
         const res = await apiFetch('/api/auth/me')
         if (cancelled || !res.ok) return
-        const data = (await res.json()) as { user?: { role?: string } }
+        const data = await readResponseJson<{ user?: { role?: string } }>(res)
         if (isStaffRole(data.user?.role)) {
           navigate(returnTo, { replace: true })
         }
@@ -113,51 +90,38 @@ export function AdminLoginPage() {
     }
   }, [navigate, returnTo])
 
-  async function startKeycloakAdminSignIn() {
-    setError(null)
-    try {
-      const { codeVerifier, codeChallenge } = await createPkcePair()
-      sessionStorage.setItem(PKCE_VERIFIER_STORAGE_KEY, codeVerifier)
-      const redirectUri = `${window.location.origin}/admin/login/keycloak/callback`
-      const q = new URLSearchParams({
-        redirect_uri: redirectUri,
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256',
-        after_login: returnTo,
-      })
-      const res = await fetch(apiUrl(`/api/auth/keycloak/start?${q.toString()}`), { credentials: 'include' })
-      const data = (await res.json()) as { url?: string; error?: string }
-      if (!res.ok) {
-        setError(data.error ?? 'Could not start Keycloak sign-in')
-        return
-      }
-      if (data.url) window.location.href = data.url
-      else setError('Keycloak did not return a redirect URL.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Keycloak sign-in failed')
-    }
-  }
-
   async function submit() {
     setError(null)
+    setNotice(null)
     setSubmitting(true)
     try {
       await fetchCsrfToken()
       const body =
         signInMethod === 'paytoday'
           ? { email, password, authSource: 'paytoday' as const }
-          : { email, password }
+          : { email, password, authSource: 'local' as const }
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const data = (await res.json()) as {
-        ok?: boolean
-        error?: string
-        user?: { role?: string }
-      }
+      const data = await readResponseJson<ApiError & { ok?: boolean; user?: { role?: string } }>(res)
       if (!res.ok) {
+        if (data.code === 'account_locked') {
+          setError(
+            data.error ?? 'Account temporarily locked due to failed sign-in attempts. Try again later.',
+          )
+          return
+        }
+        if (data.code === 'use_paytoday_account') {
+          setSignInMethod('paytoday')
+          setNotice('This email uses a PayToday account — switched to PayToday sign-in.')
+          return
+        }
+        if (data.code === 'paytoday_login_failed') {
+          setError("PayToday sign-in isn't available right now. Try again later or use your staff password.")
+          return
+        }
         setError(data.error ?? 'Sign in failed')
         return
       }
@@ -183,8 +147,24 @@ export function AdminLoginPage() {
     }
   }
 
-  const keycloakMisconfigured = keycloakOnlyMode && !keycloakEnabled && !localPasswordLoginAllowed
-  const keycloakExclusiveUi = keycloakOnlyMode && keycloakEnabled && !localPasswordLoginAllowed
+  const paytodayDisabled = !paytodaySignInEnabled
+  const paytodayHint =
+    signInMethod === 'paytoday' && methodsLoaded && paytodayDisabled
+      ? "PayToday sign-in isn't available right now. Use your staff password instead."
+      : null
+
+  const passwordAdornment = (
+    <InputAdornment position="end">
+      <IconButton
+        edge="end"
+        onClick={() => setShowPassword((v) => !v)}
+        aria-label={showPassword ? 'Hide password' : 'Show password'}
+        size="small"
+      >
+        {showPassword ? <VisibilityOffOutlinedIcon fontSize="small" /> : <VisibilityOutlinedIcon fontSize="small" />}
+      </IconButton>
+    </InputAdornment>
+  )
 
   return (
     <Box
@@ -193,7 +173,7 @@ export function AdminLoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: 'background.default',
+        background: SIGNIN_PAGE_BACKDROP,
         px: 2,
         py: 4,
       }}
@@ -207,7 +187,7 @@ export function AdminLoginPage() {
           borderRadius: 3,
           border: '1px solid',
           borderColor: 'divider',
-          boxShadow: '0 8px 32px rgba(15, 23, 42, 0.08)',
+          boxShadow: SURFACE_SHADOW,
         }}
       >
         <Stack spacing={2.5}>
@@ -218,35 +198,9 @@ export function AdminLoginPage() {
             </Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-            {keycloakExclusiveUi ? (
-              <>
-                Operations portal — sign in with Keycloak. Staff roles are taken from realm roles when{' '}
-                <code>KEYCLOAK_REALM_ROLE_*</code> matches your Keycloak configuration. Customer accounts cannot access
-                this area.
-              </>
-            ) : (
-              <>
-                Operations portal — use credentials for an <strong>admin</strong>, <strong>ops</strong>, or{' '}
-                <strong>fulfillment</strong> user in your database. Customer storefront accounts cannot access this area.
-              </>
-            )}
+            Operations portal — sign in with an <strong>admin</strong>, <strong>ops</strong>, or{' '}
+            <strong>fulfillment</strong> account. Customer storefront accounts cannot access this area.
           </Typography>
-
-          {keycloakMisconfigured ? (
-            <Alert severity="error">
-              Keycloak-only mode is on but Keycloak is not configured on the API, and local password login is not
-              allowed. Fix <code>KEYCLOAK_ISSUER</code> and <code>KEYCLOAK_CLIENT_ID</code>, set{' '}
-              <code>KEYCLOAK_SIGN_IN_ONLY=false</code>, or set <code>KEYCLOAK_ALLOW_LOCAL_PASSWORD_LOGIN=true</code> for dual
-              sign-in while you finish Keycloak setup.
-            </Alert>
-          ) : null}
-
-          {keycloakOnlyMode && !keycloakEnabled && localPasswordLoginAllowed ? (
-            <Alert severity="warning">
-              Keycloak OIDC is not fully configured; you can still use a database staff password if the API allows it.
-              Finish Keycloak env for “Continue with Keycloak” and optional PayToday password grant.
-            </Alert>
-          ) : null}
 
           {needStaff ? (
             <Alert severity="warning">
@@ -259,146 +213,113 @@ export function AdminLoginPage() {
               {error}
             </Alert>
           ) : null}
-
-          {!keycloakExclusiveUi ? (
-            <Stack spacing={1.25}>
-              <Typography variant="subtitle2" fontWeight={700} color="text.secondary">
-                Organization sign-in (Keycloak)
-              </Typography>
-              <Button
-                type="button"
-                variant="contained"
-                size="large"
-                fullWidth
-                sx={{ py: 1.25, fontWeight: 700 }}
-                disabled={!keycloakEnabled}
-                onClick={() => void startKeycloakAdminSignIn()}
-              >
-                Continue with Keycloak
-              </Button>
-              {!keycloakStatusLoaded ? (
-                <Typography variant="caption" color="text.secondary">
-                  Checking Keycloak status from the API…
-                </Typography>
-              ) : null}
-              {keycloakStatusFetchFailed ? (
-                <Alert severity="warning">
-                  Could not load Keycloak status. Check the API is running and <code>VITE_API_BASE_URL</code> / CORS.
-                </Alert>
-              ) : null}
-              {keycloakStatusLoaded && !keycloakStatusFetchFailed && !keycloakEnabled ? (
-                <Alert severity="info">
-                  Keycloak is not configured on the API yet. Add <code>KEYCLOAK_ISSUER</code> (or{' '}
-                  <code>KEYCLOAK_TOKEN_URL</code>) and <code>KEYCLOAK_CLIENT_ID</code> to the API <code>.env</code>,
-                  restart the API, then this button will activate. See <code>.env.example</code>.
-                </Alert>
-              ) : null}
-              {keycloakEnabled ? (
-                <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-                  Staff roles map from realm roles when <code>KEYCLOAK_REALM_ROLE_*</code> matches your Keycloak realm.
-                </Typography>
-              ) : null}
-              <Divider sx={{ my: 0.5 }} />
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-                Or use a database staff password
-              </Typography>
-            </Stack>
-          ) : (
-            <Stack spacing={1}>
-              <Button
-                type="button"
-                variant="contained"
-                size="large"
-                fullWidth
-                sx={{ py: 1.25, fontWeight: 700 }}
-                onClick={() => void startKeycloakAdminSignIn()}
-              >
-                Continue with Keycloak
-              </Button>
-              <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5, display: 'block' }}>
-                Staff roles are mapped from Keycloak realm roles when <code>KEYCLOAK_REALM_ROLE_*</code> env vars match
-                your realm configuration.
-              </Typography>
-            </Stack>
-          )}
-
-          {!keycloakExclusiveUi ? (
-            <Stack spacing={2} component="form" onSubmit={(e) => { e.preventDefault(); void submit() }}>
-              {localPasswordLoginAllowed ? (
-                <ToggleButtonGroup
-                  exclusive
-                  fullWidth
-                  size="small"
-                  value={signInMethod}
-                  onChange={(_, v) => {
-                    if (v) setSignInMethod(v)
-                    setError(null)
-                  }}
-                  sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600 } }}
-                >
-                  <ToggleButton value="local">Database staff</ToggleButton>
-                  <ToggleButton value="paytoday" disabled={!ropcLoginEnabled}>
-                    PayToday (Keycloak password)
-                  </ToggleButton>
-                </ToggleButtonGroup>
-              ) : null}
-              {signInMethod === 'paytoday' && !ropcLoginEnabled ? (
-                <Alert severity="info">
-                  PayToday password grant is not enabled or env is incomplete on the API. Use “Continue with Keycloak” or
-                  set <code>KEYCLOAK_ROPC_LOGIN_ENABLED</code> and ROPC client variables (see <code>.env.example</code>).
-                </Alert>
-              ) : null}
-              <TextField
-                label="Email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                fullWidth
-                required
-                autoComplete="username"
-              />
-              <TextField
-                label="Password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                fullWidth
-                required
-                autoComplete="current-password"
-              />
-              {signInMethod === 'paytoday' && paytodayForgotUrl ? (
-                <Typography variant="caption">
-                  <Button
-                    component="a"
-                    href={paytodayForgotUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    size="small"
-                    sx={{ p: 0, minWidth: 0, textTransform: 'none', fontWeight: 600 }}
-                  >
-                    Forgot password (PayToday)
-                  </Button>
-                </Typography>
-              ) : null}
-              <Button
-                type="submit"
-                variant="contained"
-                size="large"
-                disabled={submitting || (signInMethod === 'paytoday' && !ropcLoginEnabled)}
-                sx={{ py: 1.25, fontWeight: 700 }}
-              >
-                {submitting
-                  ? signInMethod === 'paytoday'
-                    ? 'Authenticating with PayToday…'
-                    : 'Signing in…'
-                  : 'Sign in to admin'}
-              </Button>
-            </Stack>
+          {notice ? (
+            <Alert severity="info" onClose={() => setNotice(null)}>
+              {notice}
+            </Alert>
           ) : null}
 
-          <Button component={RouterLink} to="/" variant="text" color="inherit" sx={{ fontWeight: 600 }}>
-            ← Back to storefront
-          </Button>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs
+              value={signInMethod}
+              onChange={(_, v: Method) => {
+                setSignInMethod(v)
+                setError(null)
+                setNotice(null)
+              }}
+              variant="fullWidth"
+            >
+              <Tab value="local" label="Staff password" />
+              <Tab
+                value="paytoday"
+                disabled={paytodayDisabled}
+                label={
+                  <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="center">
+                    <span>PayToday staff</span>
+                    {methodsLoaded && paytodayDisabled ? (
+                      <Chip label="Unavailable" size="small" sx={{ height: 18, fontSize: 10, fontWeight: 700 }} />
+                    ) : null}
+                  </Stack>
+                }
+              />
+            </Tabs>
+          </Box>
+
+          {paytodayHint ? <Alert severity="info">{paytodayHint}</Alert> : null}
+
+          <Stack
+            component="form"
+            spacing={2}
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submit()
+            }}
+          >
+            <TextField
+              label="Work email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              fullWidth
+              required
+              autoComplete="username"
+            />
+            <TextField
+              label="Password"
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              fullWidth
+              required
+              autoComplete="current-password"
+              InputProps={{ endAdornment: passwordAdornment }}
+            />
+            <Button
+              type="submit"
+              variant="contained"
+              size="large"
+              disabled={submitting || (signInMethod === 'paytoday' && paytodayDisabled)}
+              sx={{ py: 1.25, fontWeight: 700 }}
+            >
+              {submitting ? (
+                <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
+                  <CircularProgress size={18} thickness={5} sx={{ color: 'common.white' }} />
+                  <span>{signInMethod === 'paytoday' ? 'Verifying with PayToday…' : 'Signing in…'}</span>
+                </Stack>
+              ) : (
+                'Sign in to admin'
+              )}
+            </Button>
+
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              {signInMethod === 'paytoday' && paytodayForgotUrl ? (
+                <Button
+                  component="a"
+                  href={paytodayForgotUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  size="small"
+                  sx={{ textTransform: 'none', fontWeight: 600 }}
+                >
+                  Forgot password (PayToday)
+                </Button>
+              ) : signInMethod === 'local' ? (
+                <Button
+                  component={RouterLink}
+                  to="/forgot-password"
+                  size="small"
+                  sx={{ textTransform: 'none', fontWeight: 600 }}
+                >
+                  Forgot password
+                </Button>
+              ) : (
+                <Box />
+              )}
+              <Button component={RouterLink} to="/" variant="text" color="inherit" size="small" sx={{ fontWeight: 600 }}>
+                ← Back to storefront
+              </Button>
+            </Stack>
+          </Stack>
         </Stack>
       </Paper>
     </Box>

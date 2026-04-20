@@ -17,9 +17,13 @@ export function apiUrl(path: string): string {
 export async function readApiError(res: Response): Promise<string> {
   const text = await res.text()
   try {
-    const j = JSON.parse(text) as { error?: string; message?: string }
-    if (typeof j.error === 'string') return j.error
-    if (typeof j.message === 'string') return j.message
+    const j = JSON.parse(text) as { error?: string; message?: string; detail?: string }
+    const base =
+      typeof j.error === 'string' ? j.error : typeof j.message === 'string' ? j.message : ''
+    const detail = typeof j.detail === 'string' ? j.detail.trim() : ''
+    if (base && detail) return `${base} — ${detail}`
+    if (base) return base
+    if (detail) return detail
   } catch {
     /* ignore */
   }

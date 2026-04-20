@@ -234,48 +234,54 @@ export function buildFallbackEmail(
   if (templateKey === 'hub_demo_pending_payment') {
     const ref = String(payload.reference ?? '')
     const payee = String(payload.payeeName ?? '')
+    const meter = String((payload as { meterOrAccountRef?: string }).meterOrAccountRef ?? '').trim()
     const total = moneyLine(payload.amountCents, payload.currency)
     const hub = payload.variant === 'services' ? 'service' : 'hub'
     const subject = `Demo ${hub} payment — action required`
+    const details: { label: string; value: string }[] = [
+      { label: 'Payee', value: payee || '—' },
+      { label: 'Amount', value: total },
+      { label: 'Reference', value: ref || '—' },
+    ]
+    if (meter) details.splice(2, 0, { label: 'Meter / account', value: meter })
     const html = wrapStoreTransactionalEmail(
       {
         preheader: `Demo ${hub} — ${total} — reference ${ref}`,
         title: `Demo ${hub} payment`,
         intro:
           'This is a sandbox / client demonstration. No real funds are moved. In production the customer would complete checkout on the PayToday hosted flow.',
-        details: [
-          { label: 'Payee', value: payee || '—' },
-          { label: 'Amount', value: total },
-          { label: 'Reference', value: ref || '—' },
-        ],
+        details,
         cta: { label: 'Open store', href: store },
       },
       store,
     )
-    const text = `Demo ${hub} payment pending.\nPayee: ${payee}\nTotal: ${total}\nRef: ${ref}`
+    const text = `Demo ${hub} payment pending.\nPayee: ${payee}\nTotal: ${total}\nRef: ${ref}${meter ? `\nMeter/account: ${meter}` : ''}`
     return { subject, html, text }
   }
   if (templateKey === 'hub_demo_payment_completed') {
     const ref = String(payload.reference ?? '')
     const payee = String(payload.payeeName ?? '')
+    const meter = String((payload as { meterOrAccountRef?: string }).meterOrAccountRef ?? '').trim()
     const total = moneyLine(payload.amountCents, payload.currency)
     const hub = payload.variant === 'services' ? 'Service demo' : 'Hub demo'
     const subject = `Demo payment received — ${hub}`
+    const details: { label: string; value: string }[] = [
+      { label: 'Payee', value: payee || '—' },
+      { label: 'Amount', value: total },
+      { label: 'Reference', value: ref || '—' },
+    ]
+    if (meter) details.splice(2, 0, { label: 'Meter / account', value: meter })
     const html = wrapStoreTransactionalEmail(
       {
         preheader: `Demo payment confirmed — ${ref}`,
         title: 'Demo payment received',
         intro: `We simulated a successful ${hub} payment in the demo environment.`,
-        details: [
-          { label: 'Payee', value: payee || '—' },
-          { label: 'Amount', value: total },
-          { label: 'Reference', value: ref || '—' },
-        ],
+        details,
         cta: { label: 'Open store', href: store },
       },
       store,
     )
-    const text = `Demo payment confirmed.\nPayee: ${payee}\nTotal: ${total}\nRef: ${ref}`
+    const text = `Demo payment confirmed.\nPayee: ${payee}\nTotal: ${total}\nRef: ${ref}${meter ? `\nMeter/account: ${meter}` : ''}`
     return { subject, html, text }
   }
   const subject = `PayToday Store — ${templateKey}`

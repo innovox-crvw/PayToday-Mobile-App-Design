@@ -26,6 +26,7 @@ const DRAWER_WIDTH = 264
 const LINKS = [
   { to: '/admin', label: 'Overview' },
   { to: '/admin/products', label: 'Products & catalogue' },
+  { to: '/admin/categories', label: 'Categories' },
   { to: '/admin/orders', label: 'Orders' },
   { to: '/admin/returns', label: 'Returns' },
   { to: '/admin/inventory', label: 'Inventory' },

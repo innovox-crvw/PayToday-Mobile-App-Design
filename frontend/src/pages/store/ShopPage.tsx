@@ -8,11 +8,22 @@ import { apiUrl, readApiError } from '../../lib/apiOrigin'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { friendlyFetchError } from '../../lib/fetchErrors'
 import { formatMoney } from '../../lib/money'
-import { storefrontVariantPriceRange, totalListedStock } from '../../lib/productStock'
+import { storefrontVariantPriceRange, totalListedStock, variantIsPurchasable } from '../../lib/productStock'
 import { ProductImage } from '../../components/store/ProductImage'
 import { DEMO_STORES, getDemoStoreBySlug, getDemoStoreSlugForProduct, getDemoStoreForProduct } from '../../data/demoStores'
 
 type SortKey = 'name' | 'price_asc' | 'price_desc'
+
+function categoryDepth(c: StoreCategoryDto, all: StoreCategoryDto[]): number {
+  let d = 0
+  let cur: string | null | undefined = c.parentId
+  const byId = new Map(all.map((x) => [x.id, x]))
+  while (cur && d < 32) {
+    d += 1
+    cur = byId.get(cur)?.parentId ?? undefined
+  }
+  return d
+}
 
 function resolvePromoHref(linkPath: string | null, pathPrefix: string, shop: string): string {
   if (!linkPath?.trim()) return shop
@@ -132,9 +143,10 @@ export function ShopPage() {
     setSearchParams(nextParams, { replace: true })
   }
 
-  const categoryChips = useMemo(() => {
-    const list = categories.length ? categories : []
-    return list
+  const sortedCategories = useMemo(() => {
+    return [...categories].sort(
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
+    )
   }, [categories])
 
   const displayItems = useMemo(() => {
@@ -233,16 +245,20 @@ export function ShopPage() {
           variant={!categorySlug ? 'filled' : 'outlined'}
           sx={{ fontWeight: 600 }}
         />
-        {categoryChips.map((c) => (
-          <Chip
-            key={c.slug}
-            label={c.name}
-            onClick={() => setCategory(c.slug)}
-            color={categorySlug === c.slug ? 'primary' : 'default'}
-            variant={categorySlug === c.slug ? 'filled' : 'outlined'}
-            sx={{ fontWeight: 600 }}
-          />
-        ))}
+        {sortedCategories.map((c) => {
+          const depth = categoryDepth(c, sortedCategories)
+          const label = `${depth > 0 ? `${'\u203A '.repeat(Math.min(depth, 6))}` : ''}${c.name}`
+          return (
+            <Chip
+              key={c.slug}
+              label={label}
+              onClick={() => setCategory(c.slug)}
+              color={categorySlug === c.slug ? 'primary' : 'default'}
+              variant={categorySlug === c.slug ? 'filled' : 'outlined'}
+              sx={{ fontWeight: 600 }}
+            />
+          )
+        })}
       </Stack>
 
       <Stack spacing={0.75}>
@@ -272,7 +288,7 @@ export function ShopPage() {
         <Typography color="text.secondary">No products are listed under this store in the current catalogue. Try another store or clear the filter.</Typography>
       ) : null}
 
-      <Grid container spacing={2}>
+      <Grid container spacing={{ xs: 1.25, sm: 1.5 }}>
         {displayItems.map((p) => {
           const v0 = p.variants[0]
           const range = storefrontVariantPriceRange(p)
@@ -284,8 +300,9 @@ export function ShopPage() {
                 : '—'
           const demoStore = getDemoStoreForProduct(p.slug)
           const stockTotal = totalListedStock(p)
+          const anyBuy = p.variants.some((v) => variantIsPurchasable(v))
           return (
-            <Grid key={p.id} size={{ xs: 6, sm: 6, md: 4 }}>
+            <Grid key={p.id} size={{ xs: 4, sm: 3, md: 3, lg: 2 }}>
               <Card
                 variant="outlined"
                 sx={{
@@ -305,16 +322,18 @@ export function ShopPage() {
                   sx={{ height: '100%', alignItems: 'stretch', display: 'block' }}
                 >
                   <ProductImage imageUrl={p.imageUrl} alt={p.name} ratio="1" />
-                  <CardContent sx={{ pt: 2, pb: 2 }}>
-                    <Stack direction="row" gap={0.5} flexWrap="wrap" sx={{ mb: 1 }}>
+                  <CardContent sx={{ pt: 1, pb: 1.25, px: 1.25, '&:last-child': { pb: 1.25 } }}>
+                    <Stack direction="row" gap={0.35} flexWrap="wrap" sx={{ mb: 0.5, rowGap: 0.35 }}>
                       <Chip
                         label={p.categoryName || p.categorySlug || '—'}
                         size="small"
                         sx={{
-                          height: 22,
-                          fontSize: '0.65rem',
+                          height: 20,
+                          maxWidth: '100%',
+                          fontSize: '0.58rem',
                           fontWeight: 700,
                           bgcolor: 'action.hover',
+                          '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' },
                         }}
                       />
                       {demoStore ? (
@@ -323,35 +342,49 @@ export function ShopPage() {
                           size="small"
                           color="secondary"
                           variant="outlined"
-                          sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700 }}
+                          sx={{
+                            height: 20,
+                            maxWidth: '100%',
+                            fontSize: '0.58rem',
+                            fontWeight: 700,
+                            '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' },
+                          }}
                           component={RouterLink}
                           to={`${shop}?store=${encodeURIComponent(demoStore.slug)}`}
                           clickable
                         />
                       ) : null}
                       <Chip
-                        label={stockTotal <= 0 ? 'Out of stock' : `${stockTotal} in stock`}
+                        label={
+                          !anyBuy
+                            ? 'Out of stock'
+                            : stockTotal > 0
+                              ? `${stockTotal} in stock`
+                              : 'Available'
+                        }
                         size="small"
-                        color={stockTotal <= 0 ? 'error' : stockTotal <= 5 ? 'warning' : 'success'}
-                        variant={stockTotal <= 0 ? 'filled' : 'outlined'}
-                        sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700 }}
+                        color={!anyBuy ? 'error' : stockTotal > 0 && stockTotal <= 5 ? 'warning' : 'success'}
+                        variant={!anyBuy ? 'filled' : 'outlined'}
+                        sx={{ height: 20, fontSize: '0.58rem', fontWeight: 700, '& .MuiChip-label': { px: 0.75 } }}
                       />
                     </Stack>
                     <Typography
                       fontWeight={800}
                       gutterBottom
                       sx={{
-                        lineHeight: 1.25,
-                        minHeight: 40,
+                        fontSize: '0.78rem',
+                        lineHeight: 1.2,
+                        minHeight: 30,
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
                         WebkitBoxOrient: 'vertical',
                         overflow: 'hidden',
+                        mb: 0.25,
                       }}
                     >
                       {p.name}
                     </Typography>
-                    <Typography variant="subtitle1" color="primary" fontWeight={800}>
+                    <Typography variant="body2" color="primary" fontWeight={800} sx={{ fontSize: '0.82rem', lineHeight: 1.2 }}>
                       {price}
                     </Typography>
                   </CardContent>

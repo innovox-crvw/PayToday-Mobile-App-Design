@@ -15,37 +15,38 @@ GO
 IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL
   AND COL_LENGTH(N'dbo.hub_payment_category_items', N'payment_method') IS NOT NULL
 BEGIN
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''PayToday Wallet · Visa / Mastercard''
+  /* Captions aligned with paytoday-full-setup hub drill-down seed (also backfills older display_name variants). */
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Card · EFT ref''
   WHERE category_slug = N''businesses'' AND display_name = N''Okahandja Traders'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Card · SnapScan (demo)''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Tap to pay · QR''
   WHERE category_slug = N''businesses'' AND display_name = N''Windhoek Fresh Market'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''EFT ref · Card · Wallet''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Card · invoice ref''
   WHERE category_slug = N''businesses'' AND display_name = N''Namibia Auto Parts'';');
   EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet only · P2P''
   WHERE category_slug = N''contacts'' AND display_name = N''Anna Nghipondoka'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Instant''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · request money''
   WHERE category_slug = N''contacts'' AND display_name = N''Johan van Wyk'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Card''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet only · P2P''
   WHERE category_slug = N''contacts'' AND display_name = N''Lisa #Shapumba'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · MTC app · USSD''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · MTC app · *682#''
   WHERE category_slug = N''airtime'' AND display_name = N''MTC Prepaid'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Card · TN Mobile voucher''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · TN voucher · USSD''
   WHERE category_slug = N''airtime'' AND display_name = N''TN Mobile'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Meter number · Card · Wallet''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Meter · wallet · card''
   WHERE category_slug = N''electricity'' AND display_name = N''Nampower Prepaid'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Municipal ref · EFT · Card''
-  WHERE category_slug = N''bills'' AND display_name = N''Municipality — Windhoek'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Order link · Card · Wallet''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Account · wallet · ref''
+  WHERE category_slug = N''bills'' AND display_name IN (N''Municipality — Windhoek'', N''City of Windhoek — rates & refuse'');');
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · rider tip''
   WHERE category_slug = N''food'' AND display_name = N''Local Eats Collective'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Engen card · Wallet''
-  WHERE category_slug = N''fuel'' AND display_name = N''Engen Rewards'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Bay code · Wallet''
-  WHERE category_slug = N''parking'' AND display_name = N''CBD Parking Zone A'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Voucher PIN · Card''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Rewards · wallet · card''
+  WHERE category_slug = N''fuel'' AND display_name IN (N''Engen Rewards'', N''Engen — Independence Ave'');');
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Bay code · wallet''
+  WHERE category_slug = N''parking'' AND display_name IN (N''CBD Parking Zone A'', N''CBD Zone A — street meters'');');
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Voucher SKU · wallet · card''
   WHERE category_slug = N''vouchers'' AND display_name = N''National Bookstore'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Booking ref · Card · Wallet''
-  WHERE category_slug = N''stay'' AND display_name = N''Coastal Guesthouse'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Invoice · Card · Wallet''
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Booking ref · wallet · card''
+  WHERE category_slug = N''stay'' AND display_name IN (N''Coastal Guesthouse'', N''Coastal Guesthouse — Swakop'');');
+  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · case ref''
   WHERE category_slug = N''services'' AND display_name = N''PayToday Service Desk'';');
   EXEC (N'IF NOT EXISTS (SELECT 1 FROM dbo.hub_payment_category_items WHERE category_slug = N''airtime'' AND display_name = N''Leap Mobile (demo)'')
   INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active, payment_method)

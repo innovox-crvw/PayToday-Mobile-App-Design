@@ -32,7 +32,16 @@ type Detail = {
     deposit_location_name: string | null
   }
   lines: { productName: string; sku: string; quantity: number; unitPriceCents: number }[]
-  fulfillment: { stage: string; tracking_reference: string | null } | null
+  fulfillment: { stage: string; carrier_name: string | null; tracking_reference: string | null } | null
+  shippingAddress: {
+    label: string | null
+    line1: string
+    line2: string | null
+    city: string
+    region: string | null
+    postal_code: string | null
+    country: string
+  } | null
   pickupMasked: boolean
   activePickupCodes: number
 }
@@ -265,6 +274,9 @@ export function OrderDetailPage() {
       <Typography variant="h5" fontWeight={800}>
         Order
       </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+        {o.orderId}
+      </Typography>
       <Typography color="text.secondary">
         {formatOrderStatusLabel(o.status)} · {o.delivery_method}
       </Typography>
@@ -296,9 +308,24 @@ export function OrderDetailPage() {
           {l.productName} × {l.quantity} @ {(l.unitPriceCents / 100).toFixed(2)}
         </Typography>
       ))}
+      {detail.shippingAddress && o.delivery_method === 'home' ? (
+        <Stack spacing={0.5} sx={{ pt: 1 }}>
+          <Typography variant="subtitle2" fontWeight={700}>
+            Delivery address
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-line' }}>
+            {detail.shippingAddress.label ? `${detail.shippingAddress.label}\n` : ''}
+            {detail.shippingAddress.line1}
+            {detail.shippingAddress.line2 ? `\n${detail.shippingAddress.line2}` : ''}
+            {`\n${detail.shippingAddress.city}${detail.shippingAddress.region ? `, ${detail.shippingAddress.region}` : ''} ${detail.shippingAddress.postal_code ?? ''}`.trim()}
+            {`\n${detail.shippingAddress.country}`}
+          </Typography>
+        </Stack>
+      ) : null}
       {detail.fulfillment && (
         <Typography variant="body2" color="text.secondary">
-          Fulfillment: {detail.fulfillment.stage}
+          Shipment: {detail.fulfillment.stage}
+          {detail.fulfillment.carrier_name ? ` · ${detail.fulfillment.carrier_name}` : ''}
           {detail.fulfillment.tracking_reference ? ` · Tracking: ${detail.fulfillment.tracking_reference}` : ''}
         </Typography>
       )}

@@ -103,48 +103,18 @@ export const env = {
   paytodayVendorId: process.env.PAYTODAY_VENDOR_ID ?? '',
   paytodayBusinessId: process.env.PAYTODAY_BUSINESS_ID ?? '',
   paytodayWebhookSecret: process.env.PAYTODAY_WEBHOOK_SECRET ?? '',
-  /** Keycloak token endpoint (resource-owner or future flows). Secrets only in env, never in client bundles. */
-  keycloakTokenUrl: (process.env.KEYCLOAK_TOKEN_URL ?? '').trim(),
-  keycloakMobileClientId: (process.env.KEYCLOAK_MOBILE_CLIENT_ID ?? '').trim(),
-  keycloakMobileClientSecret: (process.env.KEYCLOAK_MOBILE_CLIENT_SECRET ?? '').trim(),
-  keycloakFrontendClientId: (process.env.KEYCLOAK_FRONTEND_CLIENT_ID ?? '').trim(),
-  keycloakFrontendClientSecret: (process.env.KEYCLOAK_FRONTEND_CLIENT_SECRET ?? '').trim(),
   /**
-   * OIDC issuer (Keycloak), e.g. `https://auth.example.com/realms/myrealm` — no trailing slash.
-   * If unset, derived from `KEYCLOAK_TOKEN_URL` by stripping `/protocol/openid-connect/...`.
+   * Keycloak base URL — scheme + host only, no realm, no trailing slash.
+   * Example: `https://keycloak.today-ww.net`. Realms are appended per-request.
    */
-  keycloakIssuerBase: (() => {
-    const explicit = (process.env.KEYCLOAK_ISSUER ?? '').trim().replace(/\/$/u, '')
-    if (explicit) return explicit
-    const tokenUrl = (process.env.KEYCLOAK_TOKEN_URL ?? '').trim()
-    const i = tokenUrl.indexOf('/protocol/openid-connect')
-    if (i > 0) return tokenUrl.slice(0, i)
-    return ''
-  })(),
-  /** Confidential client id for server-side code exchange (falls back to KEYCLOAK_FRONTEND_CLIENT_ID). */
-  keycloakOidcClientId: (process.env.KEYCLOAK_CLIENT_ID ?? process.env.KEYCLOAK_FRONTEND_CLIENT_ID ?? '').trim(),
-  /** Client secret for confidential clients; omit for public clients that allow code+PKCE without secret. */
-  keycloakOidcClientSecret: (process.env.KEYCLOAK_CLIENT_SECRET ?? process.env.KEYCLOAK_FRONTEND_CLIENT_SECRET ?? '').trim(),
-  /** Map Keycloak realm role → app role (first match wins: admin, ops, fulfillment). */
-  keycloakRealmRoleAdmin: (process.env.KEYCLOAK_REALM_ROLE_ADMIN ?? '').trim(),
-  keycloakRealmRoleOps: (process.env.KEYCLOAK_REALM_ROLE_OPS ?? '').trim(),
-  keycloakRealmRoleFulfillment: (process.env.KEYCLOAK_REALM_ROLE_FULFILLMENT ?? '').trim(),
-  /**
-   * When true, local `POST /api/auth/login` / `POST /api/auth/register` are rejected unless `KEYCLOAK_ALLOW_LOCAL_PASSWORD_LOGIN`.
-   * Requires Keycloak OIDC to be configured (`KEYCLOAK_ISSUER` + client id); otherwise the API returns 503 on blocked routes.
-   */
-  keycloakSignInOnly: parseEnvBool(process.env.KEYCLOAK_SIGN_IN_ONLY, false),
-  /**
-   * When true, `POST /api/auth/keycloak/ro-password` is enabled (Keycloak ROPC → app session cookies).
-   * Requires `KEYCLOAK_TOKEN_URL` and frontend (or mobile) client id + secret. Default false — prefer OIDC + PKCE.
-   */
-  keycloakRocpLoginEnabled: parseEnvBool(process.env.KEYCLOAK_ROPC_LOGIN_ENABLED, false),
-  /**
-   * When `KEYCLOAK_SIGN_IN_ONLY=true`, local email/password login and registration are normally blocked.
-   * Set this to `true` to keep store SQL login/register available alongside Keycloak (dual sign-in).
-   */
-  keycloakAllowLocalPasswordLogin: parseEnvBool(process.env.KEYCLOAK_ALLOW_LOCAL_PASSWORD_LOGIN, false),
-  /** External “forgot password” URL for PayToday/Keycloak users (optional; exposed via GET /api/auth/public-config). */
+  keycloakBaseUrl: (process.env.KEYCLOAK_BASE_URL ?? '').trim().replace(/\/$/u, ''),
+  /** Keycloak realm (tenant) name, e.g. `Nedbank`. */
+  keycloakRealm: (process.env.KEYCLOAK_REALM ?? '').trim(),
+  /** Keycloak OAuth client id used for Resource Owner Password Credentials (ROPC). Direct access grants must be ON. */
+  keycloakClientId: (process.env.KEYCLOAK_CLIENT_ID ?? '').trim(),
+  /** Keycloak client secret for confidential clients. Leave blank for public clients. */
+  keycloakClientSecret: (process.env.KEYCLOAK_CLIENT_SECRET ?? '').trim(),
+  /** External "forgot password" URL for PayToday users (optional; exposed via GET /api/auth/public-config). */
   paytodayForgotPasswordUrl: (process.env.PAYTODAY_FORGOT_PASSWORD_URL ?? '').trim(),
   /** When true, `POST /api/checkout` requires `req.user` (no guest checkout). */
   checkoutRequireSignIn: parseEnvBool(process.env.CHECKOUT_REQUIRE_SIGN_IN, false),
@@ -152,6 +122,9 @@ export const env = {
   publicStoreUrl: (process.env.PUBLIC_STORE_URL ?? 'http://localhost:5173').replace(/\/$/u, ''),
   /** API origin for PayToday returnUrl (browser hits API first, then redirect to SPA). */
   publicApiUrl: (process.env.PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/u, ''),
+  /** Min/max units per cart line (checkout and cart updates enforce this). */
+  cartLineMinQty: Math.max(1, Number(process.env.CART_LINE_MIN_QTY ?? 1) || 1),
+  cartLineMaxQty: Math.min(100_000, Math.max(1, Number(process.env.CART_LINE_MAX_QTY ?? 999) || 999)),
   shippingFlatCents: Math.max(0, Number(process.env.SHIPPING_FLAT_CENTS ?? 0) || 0),
   /** If > 0, home delivery shipping is 0 when subtotal (cents) is >= this (Avo-style free shipping over threshold). */
   shippingFreeSubtotalCents: Math.max(0, Number(process.env.SHIPPING_FREE_SUBTOTAL_CENTS ?? 0) || 0),
@@ -227,4 +200,13 @@ export const env = {
    * When set, this API process also serves the SPA and static assets; `/api/*` stays on the backend.
    */
   spaStaticRoot: process.env.SPA_STATIC_ROOT?.trim() || undefined,
+  /** Failed local password attempts before temporary lockout (login). */
+  authLockoutMaxAttempts: Math.min(100, Math.max(3, Number(process.env.AUTH_LOCKOUT_MAX_ATTEMPTS ?? 5) || 5)),
+  /** Minutes an account stays locked after too many failed logins. */
+  authLockoutMinutes: Math.min(1440, Math.max(5, Number(process.env.AUTH_LOCKOUT_MINUTES ?? 15) || 15)),
+  /**
+   * When true, `POST /api/auth/forgot-password` includes `devResetToken` in JSON (non-production only).
+   * Never enable in production.
+   */
+  devPasswordResetRevealToken: parseEnvBool(process.env.DEV_PASSWORD_RESET_REVEAL_TOKEN, false),
 }
