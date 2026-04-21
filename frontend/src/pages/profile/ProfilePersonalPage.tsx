@@ -21,7 +21,7 @@ import { apiFetch, fetchCsrfToken } from '../../api/client'
 export function ProfilePersonalPage() {
   const prefix = useStorePathPrefix()
   const confirmPath = prefix ? `${prefix}/profile/confirm-email` : '/profile/confirm-email'
-  const accountPath = prefix ? `${prefix}/account` : '/account'
+  const profileHubPath = prefix ? `${prefix}/profile` : '/profile'
 
   const { user, loading } = useAuthMe()
   const [fullName, setFullName] = useState('')
@@ -161,7 +161,7 @@ export function ProfilePersonalPage() {
       }
       const t = data.devVerificationToken
         ? `Verification link uses token (dev): open ${confirmPath}?token=${encodeURIComponent(data.devVerificationToken)}`
-        : 'Use the link sent to your inbox, or open Profile → Confirm email with the token from your email.'
+        : 'Use the link sent to your inbox, or open My account → Confirm email with the token from your email.'
       setMsg({ text: `If your account is eligible, a new verification link was prepared. ${t}`, severity: 'success' })
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Failed', severity: 'error' })
@@ -193,8 +193,8 @@ export function ProfilePersonalPage() {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
               Personal details are available after you sign in.
             </Typography>
-            <Button component={RouterLink} to={accountPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
-              Go to Account
+            <Button component={RouterLink} to={profileHubPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
+              Go to My account
             </Button>
           </CardContent>
         </Card>

@@ -2,13 +2,13 @@
  * Demo wallet helpers. Guest preview balance; signed-in users load `/api/wallet/balance`.
  */
 
+import { formatMoney } from '../lib/money'
+
 /** Shown on wallet overview when the visitor is not signed in. */
 export const WALLET_BALANCE_CENTS = 14355
 
 export function formatNad(cents: number): string {
-  const n = cents / 100
-  const sign = n < 0 ? '-' : ''
-  return `${sign}N$ ${Math.abs(n).toFixed(2)}`
+  return formatMoney(cents, 'NAD')
 }
 
 export interface SavedCard {

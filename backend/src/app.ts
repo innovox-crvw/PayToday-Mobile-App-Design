@@ -50,6 +50,16 @@ export function createApp(): express.Express {
 
   app.use(express.json({ limit: '1mb' }))
 
+  try {
+    fs.mkdirSync(env.productImageUploadDir, { recursive: true })
+  } catch {
+    /* ignore — upload route will retry mkdir */
+  }
+  app.use(
+    '/api/uploads/products',
+    express.static(env.productImageUploadDir, { index: false, maxAge: '1d', fallthrough: false }),
+  )
+
   app.use('/api', apiRouter)
 
   if (spaDist && fs.existsSync(path.join(spaDist, 'index.html'))) {

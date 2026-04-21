@@ -85,7 +85,7 @@ export function PaymentsMobileChrome({
             component={RouterLink}
             to={profilePath}
             sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.35)' }}
-            aria-label="Profile"
+            aria-label="My account"
           >
             <PersonOutlineIcon />
           </IconButton>

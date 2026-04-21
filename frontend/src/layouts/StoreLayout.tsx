@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link as RouterLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { parseLocationForRecent, recordRecentVisit } from '../lib/recentVisits'
 import { readResponseJson } from '../api/client'
 import { apiUrl } from '../lib/apiOrigin'
@@ -12,13 +12,18 @@ import {
   Box,
   BottomNavigation,
   BottomNavigationAction,
+  Button,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
   IconButton,
   InputBase,
-  Menu,
-  MenuItem,
   Paper,
   Stack,
+  Tooltip,
   Toolbar,
   useMediaQuery,
   useTheme,
@@ -30,19 +35,25 @@ import { StoreDesktopNav } from '../components/layout/StoreDesktopNav'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined'
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined'
-import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner'
-import PaymentsIcon from '@mui/icons-material/Payments'
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined'
 import ShoppingBasketOutlinedIcon from '@mui/icons-material/ShoppingBasketOutlined'
 import SearchIcon from '@mui/icons-material/Search'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz'
+import CloseIcon from '@mui/icons-material/Close'
+import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined'
 
 const appBarIconFocus = {
   '&:focus-visible': {
     outline: '2px solid rgba(255,255,255,0.95)',
     outlineOffset: 2,
   },
+} as const
+
+const headerIconBtnSx = {
+  color: '#fff',
+  ...appBarIconFocus,
+  '&:hover': { bgcolor: 'rgba(255,255,255,0.12)' },
 } as const
 
 function storeBasePath(pathname: string): string {
@@ -53,9 +64,9 @@ function storeBasePath(pathname: string): string {
 const navValue = (pathname: string): number => {
   const p = storeBasePath(pathname)
   if (p === '/') return 0
-  if (p.startsWith('/wallet')) return 1
-  if (p.startsWith('/payments')) return 2
-  if (p.startsWith('/scan')) return 3
+  if (p.startsWith('/shop')) return 1
+  if (p.startsWith('/wallet')) return 2
+  if (p.startsWith('/orders')) return 3
   if (p.startsWith('/services')) return 4
   if (p.startsWith('/cart') || p.startsWith('/checkout')) return -1
   return -1
@@ -70,27 +81,29 @@ export function StoreLayout() {
   const homePath = pathPrefix || '/'
   const base = storeBasePath(pathname)
   const isHome = base === '/'
-  const isPaymentsFlow = base === '/payments' || base.startsWith('/payments/')
   const isServicesFlow = base === '/services' || base.startsWith('/services/')
-  const hideChromeAppBar = isMobile && (isHome || isPaymentsFlow || isServicesFlow)
-
-  const mobilePaths = [
-    homePath,
-    pathPrefix ? `${pathPrefix}/wallet` : '/wallet',
-    pathPrefix ? `${pathPrefix}/payments` : '/payments',
-    pathPrefix ? `${pathPrefix}/scan` : '/scan',
-    pathPrefix ? `${pathPrefix}/services` : '/services',
-  ] as const
+  const isOnboardingLoginFullScreen = base === '/onboarding/login'
+  const hideChromeAppBar = isMobile && (isHome || isServicesFlow || isOnboardingLoginFullScreen)
 
   const profilePath = `${pathPrefix}/profile`
   const notificationsPath = `${pathPrefix}/notifications`
+  const ordersPath = `${pathPrefix}/orders`
+
+  const mobilePaths = [
+    homePath,
+    pathPrefix ? `${pathPrefix}/shop` : '/shop',
+    pathPrefix ? `${pathPrefix}/wallet` : '/wallet',
+    ordersPath,
+    pathPrefix ? `${pathPrefix}/services` : '/services',
+  ] as const
   const cartPath = `${pathPrefix}/cart`
   const shopPath = `${pathPrefix}/shop`
 
   const [cartCount, setCartCount] = useState(0)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [searchQ, setSearchQ] = useState('')
-  const [moreAnchor, setMoreAnchor] = useState<null | HTMLElement>(null)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+  const [mobileSearchDraft, setMobileSearchDraft] = useState('')
 
   useEffect(() => {
     const parsed = parseLocationForRecent(pathname, search)
@@ -99,7 +112,9 @@ export function StoreLayout() {
 
   useEffect(() => {
     const sp = new URLSearchParams(search)
-    setSearchQ(sp.get('q') ?? '')
+    const q = sp.get('q') ?? ''
+    setSearchQ(q)
+    setMobileSearchDraft(q)
   }, [search])
 
   useEffect(() => {
@@ -151,16 +166,24 @@ export function StoreLayout() {
   }, [pathname])
 
   const currentNav = navValue(pathname)
-  const showMobileStoreSearch = isMobile && !hideChromeAppBar && base.startsWith('/shop')
 
   function onSearchSubmit(e: FormEvent) {
     e.preventDefault()
     const q = searchQ.trim()
     const dest = q ? `${shopPath}?q=${encodeURIComponent(q)}` : shopPath
     navigate(dest)
+    setMobileSearchOpen(false)
   }
 
-  const desktopChrome = !isMobile && !hideChromeAppBar
+  function onMobileSearchDialogSubmit(e: FormEvent) {
+    e.preventDefault()
+    const q = mobileSearchDraft.trim()
+    const dest = q ? `${shopPath}?q=${encodeURIComponent(q)}` : shopPath
+    navigate(dest)
+    setMobileSearchOpen(false)
+  }
+
+  const desktopChrome = !isMobile && !hideChromeAppBar && !isOnboardingLoginFullScreen
 
   return (
     <Box sx={{ minHeight: '100dvh', bgcolor: desktopChrome ? '#f1f5f9' : 'background.default', display: 'flex', flexDirection: 'column' }}>
@@ -174,59 +197,136 @@ export function StoreLayout() {
             backdropFilter: 'saturate(160%) blur(10px)',
           }}
         >
-          <Toolbar sx={{ gap: 2, flexWrap: 'wrap', width: 1 }}>
-            <StoreAppBarBrand homePath={homePath} />
-            <Box sx={{ flexGrow: 1 }} />
-            {!isHome && !isPaymentsFlow && (
-              <>
-                <IconButton component={RouterLink} to={cartPath} sx={{ color: '#fff', ...appBarIconFocus }} aria-label="Cart">
-                  <Badge badgeContent={cartCount} color="secondary">
-                    <ShoppingCartOutlinedIcon />
-                  </Badge>
-                </IconButton>
-                <IconButton component={RouterLink} to={`${pathPrefix}/wallet`} sx={{ color: '#fff', ...appBarIconFocus }} aria-label="Wallet">
-                  <AccountBalanceWalletOutlinedIcon />
-                </IconButton>
-              </>
-            )}
-          </Toolbar>
-          {showMobileStoreSearch ? (
-            <Box sx={{ px: 2, pb: 1.5, pt: 0 }}>
-              <Paper
-                component="form"
-                onSubmit={onSearchSubmit}
-                elevation={0}
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  px: 1.75,
-                  py: 1,
-                  borderRadius: 2,
-                  bgcolor: 'rgba(255,255,255,0.12)',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  backdropFilter: 'saturate(140%) blur(10px)',
-                }}
-              >
-                <SearchIcon sx={{ color: 'rgba(255,255,255,0.75)', fontSize: 22 }} />
-                <InputBase
-                  placeholder="Search products, services, payments"
-                  value={searchQ}
-                  onChange={(e) => setSearchQ(e.target.value)}
-                  sx={{
-                    flex: 1,
-                    color: '#fff',
-                    fontSize: '0.95rem',
-                    '& .MuiInputBase-input::placeholder': {
-                      color: 'rgba(255,255,255,0.6)',
-                      opacity: 1,
-                    },
-                  }}
-                  inputProps={{ 'aria-label': 'Search store' }}
-                />
-              </Paper>
+          <Toolbar
+            disableGutters
+            sx={{
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 1,
+              width: 1,
+              minHeight: { xs: 52, sm: 54 },
+              px: { xs: 1, sm: 1.5 },
+              py: 0.5,
+            }}
+          >
+            <Box sx={{ flexShrink: 0, minWidth: 0, mr: 0.5 }}>
+              <StoreAppBarBrand homePath={homePath} compact />
             </Box>
-          ) : null}
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0}
+              sx={{ flexShrink: 0, ml: 'auto' }}
+            >
+              <IconButton
+                component={RouterLink}
+                to={profilePath}
+                sx={{ ...headerIconBtnSx, p: 0.85 }}
+                aria-label="My account"
+                size="medium"
+              >
+                <PersonOutlineIcon sx={{ fontSize: 22 }} />
+              </IconButton>
+              <IconButton
+                component={RouterLink}
+                to={notificationsPath}
+                sx={{ ...headerIconBtnSx, p: 0.85 }}
+                aria-label="Notifications"
+                size="medium"
+              >
+                <Badge color="error" variant="dot" invisible={unreadNotifications === 0}>
+                  <NotificationsNoneIcon sx={{ fontSize: 22 }} />
+                </Badge>
+              </IconButton>
+              <IconButton
+                component={RouterLink}
+                to={cartPath}
+                sx={{ ...headerIconBtnSx, p: 0.85 }}
+                aria-label="Cart"
+                size="medium"
+              >
+                <Badge badgeContent={cartCount} color="secondary" max={99}>
+                  <ShoppingCartOutlinedIcon sx={{ fontSize: 22 }} />
+                </Badge>
+              </IconButton>
+              <IconButton
+                onClick={() => {
+                  setMobileSearchDraft(searchQ)
+                  setMobileSearchOpen(true)
+                }}
+                sx={{
+                  color: '#fff',
+                  ...appBarIconFocus,
+                  p: 0.85,
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.12)' },
+                }}
+                aria-label="Open search"
+                size="medium"
+              >
+                <SearchIcon sx={{ fontSize: 22 }} />
+              </IconButton>
+            </Stack>
+          </Toolbar>
+          <Dialog
+            fullWidth
+            maxWidth="sm"
+            open={mobileSearchOpen}
+            onClose={() => setMobileSearchOpen(false)}
+            aria-labelledby="store-mobile-search-title"
+          >
+            <DialogTitle id="store-mobile-search-title" sx={{ pr: 6, pb: 1 }}>
+              Search store
+              <IconButton
+                aria-label="Close"
+                onClick={() => setMobileSearchOpen(false)}
+                sx={{ position: 'absolute', right: 8, top: 8, color: 'text.secondary' }}
+              >
+                <CloseIcon />
+              </IconButton>
+            </DialogTitle>
+            <Box component="form" onSubmit={onMobileSearchDialogSubmit}>
+              <DialogContent sx={{ pt: 0, pb: 1 }}>
+                <Paper
+                  component="div"
+                  elevation={0}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    px: 1.5,
+                    py: 0.5,
+                    borderRadius: 2,
+                    border: '1px solid',
+                    borderColor: 'divider',
+                    bgcolor: 'action.hover',
+                  }}
+                >
+                  <SearchIcon sx={{ color: 'text.secondary', fontSize: 24, flexShrink: 0 }} />
+                  <InputBase
+                    autoFocus
+                    fullWidth
+                    placeholder="Search products and services…"
+                    value={mobileSearchDraft}
+                    onChange={(e) => setMobileSearchDraft(e.target.value)}
+                    sx={{
+                      py: 1,
+                      fontSize: '1rem',
+                      '& .MuiInputBase-input::placeholder': { opacity: 0.75 },
+                    }}
+                    inputProps={{ 'aria-label': 'Search query' }}
+                  />
+                </Paper>
+              </DialogContent>
+              <DialogActions sx={{ px: 3, pb: 2.5, pt: 0 }}>
+                <Button onClick={() => setMobileSearchOpen(false)} color="inherit">
+                  Cancel
+                </Button>
+                <Button type="submit" variant="contained">
+                  Search
+                </Button>
+              </DialogActions>
+            </Box>
+          </Dialog>
         </AppBar>
       )}
 
@@ -234,64 +334,67 @@ export function StoreLayout() {
         <Box
           sx={{
             background: HEADER_APP_GRADIENT,
-            pt: 2,
-            pb: 3.25,
-            px: { md: 2, lg: 3 },
+            pt: { md: 1.5, lg: 1.75 },
+            pb: { md: 1.75, lg: 2 },
             borderBottom: '1px solid rgba(255,255,255,0.1)',
+            boxShadow: '0 12px 40px rgba(15, 23, 42, 0.08)',
           }}
         >
-          <Container maxWidth="lg" disableGutters sx={{ px: { xs: 2, md: 0 } }}>
-            <Stack spacing={2.25}>
-              <Toolbar
-                disableGutters
+          <Box
+            sx={{
+              width: 1,
+              maxWidth: (t) => t.breakpoints.values.xl,
+              mx: 'auto',
+              px: { md: 2.5, lg: 4 },
+              boxSizing: 'border-box',
+            }}
+          >
+            <Box
+              component="header"
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  md: 'auto minmax(0, 1fr) minmax(0, 260px) auto',
+                  lg: 'auto minmax(0, 1fr) minmax(0, 300px) auto',
+                },
+                columnGap: { md: 2, lg: 2.5 },
+                rowGap: 1.25,
+                alignItems: 'center',
+                minHeight: { md: 56, lg: 60 },
+                py: { md: 0.35, lg: 0.5 },
+              }}
+            >
+              <Stack direction="row" alignItems="center" spacing={2} sx={{ justifySelf: 'start', minWidth: 0 }}>
+                <StoreAppBarBrand homePath={homePath} />
+                <Divider
+                  orientation="vertical"
+                  flexItem
+                  sx={{
+                    borderColor: 'rgba(255,255,255,0.22)',
+                    height: { md: 34, lg: 40 },
+                    alignSelf: 'center',
+                  }}
+                />
+              </Stack>
+
+              <Box
                 sx={{
-                  minHeight: { md: 56 },
-                  gap: 1.5,
-                  flexWrap: { md: 'nowrap' },
+                  display: 'flex',
                   alignItems: 'center',
-                  py: { md: 0.5 },
+                  minWidth: 0,
+                  overflowX: 'auto',
+                  overflowY: 'hidden',
+                  WebkitOverflowScrolling: 'touch',
+                  scrollbarWidth: 'thin',
+                  '&::-webkit-scrollbar': { height: 4 },
+                  '&::-webkit-scrollbar-thumb': {
+                    borderRadius: 99,
+                    bgcolor: 'rgba(255,255,255,0.3)',
+                  },
                 }}
               >
-                <StoreAppBarBrand homePath={homePath} />
                 <StoreDesktopNav pathPrefix={pathPrefix} />
-                <Box sx={{ flex: 1 }} />
-                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0 }}>
-                  <IconButton component={RouterLink} to={profilePath} sx={{ color: '#fff', ...appBarIconFocus }} aria-label="Profile">
-                    <PersonOutlineIcon />
-                  </IconButton>
-                  <IconButton component={RouterLink} to={notificationsPath} sx={{ color: '#fff', ...appBarIconFocus }} aria-label="Notifications">
-                    <Badge color="error" variant="dot" invisible={unreadNotifications === 0}>
-                      <NotificationsNoneIcon />
-                    </Badge>
-                  </IconButton>
-                  <IconButton component={RouterLink} to={cartPath} sx={{ color: '#fff', ...appBarIconFocus }} aria-label="Cart">
-                    <Badge badgeContent={cartCount} color="secondary">
-                      <ShoppingCartOutlinedIcon />
-                    </Badge>
-                  </IconButton>
-                  <IconButton
-                    sx={{ color: '#fff', ...appBarIconFocus }}
-                    aria-label="More"
-                    aria-controls={moreAnchor ? 'store-more-menu' : undefined}
-                    aria-haspopup="true"
-                    aria-expanded={moreAnchor ? 'true' : undefined}
-                    onClick={(e) => setMoreAnchor(e.currentTarget)}
-                  >
-                    <MoreHorizIcon />
-                  </IconButton>
-                  <Menu id="store-more-menu" anchorEl={moreAnchor} open={Boolean(moreAnchor)} onClose={() => setMoreAnchor(null)} keepMounted>
-                    <MenuItem component={RouterLink} to={`${pathPrefix}/orders`} onClick={() => setMoreAnchor(null)}>
-                      My orders
-                    </MenuItem>
-                    <MenuItem component={RouterLink} to={`${pathPrefix}/account`} onClick={() => setMoreAnchor(null)}>
-                      Account
-                    </MenuItem>
-                    <MenuItem component={RouterLink} to={shopPath} onClick={() => setMoreAnchor(null)}>
-                      Store
-                    </MenuItem>
-                  </Menu>
-                </Stack>
-              </Toolbar>
+              </Box>
 
               <Paper
                 component="form"
@@ -300,43 +403,92 @@ export function StoreLayout() {
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1,
-                  px: 2,
-                  py: 1.1,
-                  borderRadius: 2,
-                  bgcolor: 'rgba(255,255,255,0.12)',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  backdropFilter: 'saturate(140%) blur(10px)',
-                  maxWidth: 980,
-                  mx: 'auto',
-                  transition: theme.transitions.create(['background-color', 'border-color'], {
+                  gap: 0.75,
+                  px: 1.25,
+                  py: 0.5,
+                  borderRadius: 999,
+                  bgcolor: 'rgba(255,255,255,0.14)',
+                  border: '1px solid rgba(255,255,255,0.22)',
+                  backdropFilter: 'saturate(160%) blur(12px)',
+                  minWidth: 0,
+                  width: 1,
+                  maxWidth: 1,
+                  justifySelf: 'stretch',
+                  transition: theme.transitions.create(['background-color', 'border-color', 'box-shadow'], {
                     duration: theme.transitions.duration.shorter,
                   }),
+                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
                   '&:focus-within': {
-                    bgcolor: 'rgba(255,255,255,0.16)',
-                    borderColor: 'rgba(255,255,255,0.28)',
+                    bgcolor: 'rgba(255,255,255,0.2)',
+                    borderColor: 'rgba(255,255,255,0.35)',
+                    boxShadow: `0 0 0 3px ${alpha('#fff', 0.12)}, inset 0 1px 0 rgba(255,255,255,0.14)`,
                   },
                 }}
               >
-                <SearchIcon sx={{ color: 'rgba(255,255,255,0.75)', fontSize: 22 }} />
+                <SearchIcon sx={{ color: 'rgba(255,255,255,0.82)', fontSize: 19, flexShrink: 0 }} />
                 <InputBase
-                  placeholder="Search products, services, payments"
+                  placeholder="Search…"
                   value={searchQ}
                   onChange={(e) => setSearchQ(e.target.value)}
                   sx={{
                     flex: 1,
+                    minWidth: 0,
                     color: '#fff',
-                    fontSize: '0.95rem',
+                    fontSize: '0.8125rem',
                     '& .MuiInputBase-input::placeholder': {
-                      color: 'rgba(255,255,255,0.6)',
+                      color: 'rgba(255,255,255,0.55)',
                       opacity: 1,
                     },
                   }}
                   inputProps={{ 'aria-label': 'Search store' }}
                 />
               </Paper>
-            </Stack>
-          </Container>
+
+              <Stack direction="row" alignItems="center" spacing={0.5} sx={{ flexShrink: 0, justifySelf: 'end' }}>
+                <Tooltip title="My account" arrow placement="bottom" enterDelay={400}>
+                  <Box component="span" sx={{ display: 'inline-flex' }}>
+                    <IconButton component={RouterLink} to={profilePath} sx={headerIconBtnSx} aria-label="My account" size="medium">
+                      <PersonOutlineIcon />
+                    </IconButton>
+                  </Box>
+                </Tooltip>
+                <Tooltip title="Notifications" arrow placement="bottom" enterDelay={400}>
+                  <Box component="span" sx={{ display: 'inline-flex' }}>
+                    <IconButton component={RouterLink} to={notificationsPath} sx={headerIconBtnSx} aria-label="Notifications" size="medium">
+                      <Badge color="error" variant="dot" invisible={unreadNotifications === 0}>
+                        <NotificationsNoneIcon />
+                      </Badge>
+                    </IconButton>
+                  </Box>
+                </Tooltip>
+                <Tooltip title="My orders" arrow placement="bottom" enterDelay={400}>
+                  <Box component="span" sx={{ display: 'inline-flex' }}>
+                    <IconButton
+                      component={NavLink}
+                      to={ordersPath}
+                      sx={{
+                        ...headerIconBtnSx,
+                        '&.active': { bgcolor: 'rgba(255,255,255,0.16)' },
+                      }}
+                      aria-label="My orders"
+                      size="medium"
+                    >
+                      <ReceiptLongOutlinedIcon />
+                    </IconButton>
+                  </Box>
+                </Tooltip>
+                <Tooltip title="Cart" arrow placement="bottom" enterDelay={400}>
+                  <Box component="span" sx={{ display: 'inline-flex' }}>
+                    <IconButton component={RouterLink} to={cartPath} sx={headerIconBtnSx} aria-label="Cart" size="medium">
+                      <Badge badgeContent={cartCount} color="secondary">
+                        <ShoppingCartOutlinedIcon />
+                      </Badge>
+                    </IconButton>
+                  </Box>
+                </Tooltip>
+              </Stack>
+            </Box>
+          </Box>
         </Box>
       )}
 
@@ -354,38 +506,55 @@ export function StoreLayout() {
             : {}),
         }}
       >
-        <Container
-          maxWidth="xl"
-          sx={{
-            flex: 1,
-            width: 1,
-            minHeight: 0,
-            py: hideChromeAppBar ? { xs: 0, sm: 3, md: 4 } : { xs: 2, sm: 3, md: desktopChrome ? 4 : 4 },
-            px: { xs: 2, sm: 3, md: desktopChrome ? 4 : 4, lg: 5 },
-            // Clear fixed bottom nav (tall bar + labels + optional FAB lift) + home indicator / gesture bar
-            pb: isMobile
-              ? (t) => `calc(${t.spacing(18)} + env(safe-area-inset-bottom, 0px))`
-              : { md: 6 },
-            ...(desktopChrome
-              ? {
-                  bgcolor: 'background.paper',
-                  borderRadius: '6px 6px 0 0',
-                  border: `1px solid ${SURFACE_BORDER}`,
-                  borderBottom: 'none',
-                  mt: 0,
-                  pt: { md: 4 },
-                  boxShadow: '0 -10px 34px rgba(15, 23, 42, 0.06)',
-                  maxWidth: 'lg',
-                  mx: 'auto',
-                }
-              : {}),
-          }}
-        >
-          <Outlet />
-        </Container>
+        {isOnboardingLoginFullScreen ? (
+          <Box
+            sx={{
+              flex: 1,
+              width: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              p: 0,
+              m: 0,
+              pb: isMobile ? 'env(safe-area-inset-bottom, 0px)' : 0,
+            }}
+          >
+            <Outlet />
+          </Box>
+        ) : (
+          <Container
+            maxWidth="xl"
+            sx={{
+              flex: 1,
+              width: 1,
+              minHeight: 0,
+              py: hideChromeAppBar ? { xs: 0, sm: 3, md: 4 } : { xs: 2, sm: 3, md: desktopChrome ? 4 : 4 },
+              px: { xs: 2, sm: 3, md: desktopChrome ? 4 : 4, lg: 5 },
+              // Clear fixed bottom nav (tall bar + labels + optional FAB lift) + home indicator / gesture bar
+              pb: isMobile
+                ? (t) => `calc(${t.spacing(20)} + env(safe-area-inset-bottom, 0px))`
+                : { md: 6 },
+              ...(desktopChrome
+                ? {
+                    bgcolor: 'background.paper',
+                    borderRadius: '6px 6px 0 0',
+                    border: `1px solid ${SURFACE_BORDER}`,
+                    borderBottom: 'none',
+                    mt: 0,
+                    pt: { md: 4 },
+                    boxShadow: '0 -10px 34px rgba(15, 23, 42, 0.06)',
+                    maxWidth: 'lg',
+                    mx: 'auto',
+                  }
+                : {}),
+            }}
+          >
+            <Outlet />
+          </Container>
+        )}
       </Box>
 
-      {isMobile && (
+      {isMobile && !isOnboardingLoginFullScreen && (
         <BottomNavigation
           value={currentNav < 0 ? false : currentNav}
           onChange={(_e, newValue) => {
@@ -401,42 +570,44 @@ export function StoreLayout() {
             borderTop: 1,
             borderColor: 'divider',
             bgcolor: 'background.paper',
-            '& .MuiBottomNavigationAction-root': { minWidth: 56, maxWidth: 80, py: 0.5 },
+            '& .MuiBottomNavigationAction-root': { minWidth: 52, maxWidth: 76, py: 0.5 },
           }}
         >
           <BottomNavigationAction label="Home" icon={<HomeOutlinedIcon />} />
-          <BottomNavigationAction label="Wallet" icon={<AccountBalanceWalletOutlinedIcon />} />
+          <BottomNavigationAction label="Store" icon={<StorefrontOutlinedIcon />} />
           <BottomNavigationAction
-            label="Payments"
+            label="Wallet"
             icon={
               <Box
                 sx={(t) => ({
-                  width: 48,
-                  height: 48,
-                  borderRadius: 2,
+                  width: 50,
+                  height: 50,
+                  borderRadius: 2.25,
                   bgcolor: 'primary.main',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  boxShadow: `0 8px 24px ${alpha(t.palette.primary.main, 0.42)}`,
+                  boxShadow: `0 10px 28px ${alpha(t.palette.primary.main, 0.45)}`,
                   color: '#fff',
                 })}
               >
-                <PaymentsIcon sx={{ fontSize: 26 }} />
+                <AccountBalanceWalletOutlinedIcon sx={{ fontSize: 28 }} />
               </Box>
             }
             sx={{
-              transform: 'translateY(-12px)',
-              minWidth: 68,
-              maxWidth: 88,
+              transform: 'translateY(-14px)',
+              minWidth: 72,
+              maxWidth: 92,
+              px: 0.5,
               '& .MuiBottomNavigationAction-label': {
                 fontSize: '0.65rem',
-                mt: 0.5,
+                mt: 0.75,
                 opacity: 1,
+                fontWeight: 700,
               },
             }}
           />
-          <BottomNavigationAction label="Scan" icon={<QrCodeScannerIcon />} />
+          <BottomNavigationAction label="My orders" icon={<ReceiptLongOutlinedIcon />} />
           <BottomNavigationAction label="Services" icon={<ShoppingBasketOutlinedIcon />} />
         </BottomNavigation>
       )}

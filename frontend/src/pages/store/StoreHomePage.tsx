@@ -678,7 +678,7 @@ export function StoreHomePage() {
                 component={RouterLink}
                 to={profilePath}
                 sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.35)', flexShrink: 0 }}
-                aria-label="Profile"
+                aria-label="My account"
               >
                 <PersonOutlineIcon />
               </IconButton>
@@ -1066,7 +1066,7 @@ export function StoreHomePage() {
                 s.key === 'classifieds'
                   ? href('classifieds')
                   : s.key === 'parking'
-                    ? href('payments/parking')
+                    ? `${href('shop')}#shop-bill-pay`
                     : s.key === 'vouchers' || s.key === 'insurance'
                       ? href('services')
                       : s.key === 'store'

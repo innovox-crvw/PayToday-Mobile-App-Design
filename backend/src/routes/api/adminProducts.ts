@@ -1,18 +1,87 @@
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import { Router } from 'express'
+import multer, { MulterError } from 'multer'
+import { env } from '../../config/env.js'
 import { getSqlPool } from '../../db/pool.js'
 import { requireAuth, requireRole } from '../../middleware/auth.js'
 import { isUuidString } from '../../repos/inventoryRepo.js'
 import {
   createProductSimple,
+  deleteProductImage,
   insertProductImage,
   listProductsAdmin,
   normalizeInventoryPolicy,
+  reorderProductImages,
   updateProductAdmin,
+  updateProductImage,
   updateVariantAdmin,
 } from '../../repos/productsRepo.js'
 
+function tryUnlinkUploadedProductFile(url: string | null | undefined): void {
+  if (!url?.trim()) return
+  const m = /^\/api\/uploads\/products\/([^/?#]+)$/i.exec(url.trim())
+  if (!m?.[1]) return
+  const name = path.basename(decodeURIComponent(m[1]))
+  if (!/^[a-f0-9-]{36}\.[a-z0-9]+$/i.test(name)) return
+  const fp = path.join(env.productImageUploadDir, name)
+  if (!fp.startsWith(path.resolve(env.productImageUploadDir))) return
+  fs.unlink(fp, () => {})
+}
+
 export const adminProductsRouter = Router()
 adminProductsRouter.use(requireAuth, requireRole('admin', 'ops'))
+
+const allowedImageExt = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+
+const productImageMulter = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        fs.mkdirSync(env.productImageUploadDir, { recursive: true })
+      } catch {
+        /* ignore */
+      }
+      cb(null, env.productImageUploadDir)
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase()
+      const useExt = allowedImageExt.has(ext) ? ext : '.jpg'
+      cb(null, `${randomUUID()}${useExt}`)
+    },
+  }),
+  limits: { fileSize: env.productImageUploadMaxBytes },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      cb(new Error('Only image files are allowed'))
+      return
+    }
+    cb(null, true)
+  },
+})
+
+/** Multipart image upload → public URL under `/api/uploads/products/`. */
+adminProductsRouter.post('/upload-image', (req, res) => {
+  productImageMulter.single('image')(req, res, (err: unknown) => {
+    if (err instanceof MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      res.status(400).json({ error: `Image too large (max ${env.productImageUploadMaxBytes} bytes).` })
+      return
+    }
+    if (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed'
+      res.status(400).json({ error: msg })
+      return
+    }
+    const f = req.file
+    if (!f?.filename) {
+      res.status(400).json({ error: 'Missing file field "image"' })
+      return
+    }
+    const url = `/api/uploads/products/${encodeURIComponent(f.filename)}`
+    res.status(201).json({ url })
+  })
+})
 
 adminProductsRouter.get('/', async (_req, res) => {
   const pool = await getSqlPool()
@@ -184,6 +253,120 @@ adminProductsRouter.patch('/:productId/variants/:variantId', async (req, res) =>
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Update failed'
     if (msg === 'Variant not found for product') {
+      res.status(404).json({ error: msg })
+      return
+    }
+    res.status(400).json({ error: msg })
+  }
+})
+
+adminProductsRouter.put('/:productId/images/reorder', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const productId = String(req.params.productId ?? '')
+  if (!isUuidString(productId)) {
+    res.status(400).json({ error: 'Invalid product id' })
+    return
+  }
+  const raw = req.body?.imageIds
+  const imageIds = Array.isArray(raw) ? raw.map((x) => String(x ?? '').trim()).filter((x) => isUuidString(x)) : []
+  if (imageIds.length === 0) {
+    res.status(400).json({ error: 'imageIds must be a non-empty array of UUIDs' })
+    return
+  }
+  try {
+    await reorderProductImages(pool, productId, imageIds)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Reorder failed' })
+  }
+})
+
+adminProductsRouter.patch('/:productId/images/:imageId', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const productId = String(req.params.productId ?? '')
+  const imageId = String(req.params.imageId ?? '')
+  if (!isUuidString(productId) || !isUuidString(imageId)) {
+    res.status(400).json({ error: 'Invalid id' })
+    return
+  }
+  const body = req.body as Record<string, unknown>
+  const patch: { url?: string; variantId?: string | null } = {}
+  if (Object.prototype.hasOwnProperty.call(body, 'url') && typeof body.url === 'string') {
+    patch.url = body.url
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'variantId')) {
+    const v = body.variantId
+    if (v === null || v === undefined) patch.variantId = null
+    else if (typeof v === 'string') patch.variantId = v.trim() ? v.trim() : null
+  }
+  try {
+    const prev = await pool
+      .request()
+      .input('iid', imageId)
+      .input('pid', productId)
+      .query<{ url: string }>(`SELECT TOP 1 url FROM dbo.product_images WHERE id = @iid AND product_id = @pid`)
+    if (!prev.recordset[0]) {
+      res.status(404).json({ error: 'Image not found for product' })
+      return
+    }
+    const oldUrl = prev.recordset[0].url
+    if (patch.variantId != null && patch.variantId) {
+      if (!isUuidString(patch.variantId)) {
+        res.status(400).json({ error: 'variantId must be a UUID or empty' })
+        return
+      }
+      const vchk = await pool
+        .request()
+        .input('pid', productId)
+        .input('vid', patch.variantId)
+        .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_variants WHERE id = @vid AND product_id = @pid`)
+      if (Number(vchk.recordset[0]?.c ?? 0) === 0) {
+        res.status(400).json({ error: 'variantId does not belong to this product' })
+        return
+      }
+    }
+    await updateProductImage(pool, productId, imageId, patch)
+    if (patch.url !== undefined && patch.url.trim() && patch.url.trim() !== oldUrl.trim()) {
+      tryUnlinkUploadedProductFile(oldUrl)
+    }
+    res.json({ ok: true })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Update failed'
+    if (msg === 'Image not found for product') {
+      res.status(404).json({ error: msg })
+      return
+    }
+    res.status(400).json({ error: msg })
+  }
+})
+
+adminProductsRouter.delete('/:productId/images/:imageId', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const productId = String(req.params.productId ?? '')
+  const imageId = String(req.params.imageId ?? '')
+  if (!isUuidString(productId) || !isUuidString(imageId)) {
+    res.status(400).json({ error: 'Invalid id' })
+    return
+  }
+  try {
+    const removedUrl = await deleteProductImage(pool, productId, imageId)
+    tryUnlinkUploadedProductFile(removedUrl)
+    res.json({ ok: true })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Delete failed'
+    if (msg === 'Image not found for product') {
       res.status(404).json({ error: msg })
       return
     }

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom'
-import { Alert, Card, CardActionArea, CardContent, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material'
+import { Alert, Box, Card, CardActionArea, Divider, Snackbar, Stack, Typography } from '@mui/material'
 import Grid from '@mui/material/Grid2'
 import type { ProductDto, ProductListResponse } from '../../types/catalogue'
 import type { StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
@@ -8,9 +8,14 @@ import { apiUrl, readApiError } from '../../lib/apiOrigin'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { friendlyFetchError } from '../../lib/fetchErrors'
 import { formatMoney } from '../../lib/money'
-import { storefrontVariantPriceRange, totalListedStock, variantIsPurchasable } from '../../lib/productStock'
-import { ProductImage } from '../../components/store/ProductImage'
-import { DEMO_STORES, getDemoStoreBySlug, getDemoStoreSlugForProduct, getDemoStoreForProduct } from '../../data/demoStores'
+import { storefrontVariantPriceRange } from '../../lib/productStock'
+import { ShopUtilityHubRow } from '../../components/store/ShopUtilityHubRow'
+import { ShopPageSection } from '../../components/store/ShopPageSection'
+import { ShopCatalogStickyBar } from '../../components/store/ShopCatalogStickyBar'
+import { ShopProductCard } from '../../components/store/ShopProductCard'
+import { getDemoStoreBySlug, getDemoStoreSlugForProduct, getDemoStoreForProduct } from '../../data/demoStores'
+import { addVariantToCart } from '../../lib/cartClient'
+import { SHOP_V2 } from '../../theme/storeV2'
 
 type SortKey = 'name' | 'price_asc' | 'price_desc'
 
@@ -33,6 +38,8 @@ function resolvePromoHref(linkPath: string | null, pathPrefix: string, shop: str
   return `${pathPrefix}/${rel}`.replace(/\/+/g, '/')
 }
 
+const sectionPaperSx = { borderRadius: SHOP_V2.radius }
+
 export function ShopPage() {
   const { pathname } = useLocation()
   const embed = pathname.startsWith('/embed')
@@ -42,7 +49,6 @@ export function ShopPage() {
 
   const q = searchParams.get('q') ?? ''
   const categorySlug = searchParams.get('category') ?? ''
-  /** Retailer filter (`store`); `brand` kept for older links. */
   const storeSlug = (searchParams.get('store') ?? searchParams.get('brand') ?? '').trim().toLowerCase()
   const sort = (searchParams.get('sort') ?? 'name') as SortKey
 
@@ -52,6 +58,7 @@ export function ShopPage() {
   const [error, setError] = useState<string | null>(null)
   const [sqlWarning, setSqlWarning] = useState<string | null>(null)
   const [catalogTick, setCatalogTick] = useState(0)
+  const [cartSnack, setCartSnack] = useState<string | null>(null)
   const productsFetchSeq = useRef(0)
 
   useEffect(() => {
@@ -149,12 +156,31 @@ export function ShopPage() {
     )
   }, [categories])
 
+  const categoryChips = useMemo(
+    () =>
+      sortedCategories.map((c) => {
+        const depth = categoryDepth(c, sortedCategories)
+        const label = `${depth > 0 ? `${'\u203A '.repeat(Math.min(depth, 6))}` : ''}${c.name}`
+        return { slug: c.slug, label }
+      }),
+    [sortedCategories],
+  )
+
   const displayItems = useMemo(() => {
     if (!storeSlug) return items
     return items.filter((p) => getDemoStoreSlugForProduct(p.slug) === storeSlug)
   }, [items, storeSlug])
 
   const activeStoreMeta = useMemo(() => (storeSlug ? getDemoStoreBySlug(storeSlug) : null), [storeSlug])
+
+  const handleQuickAdd = useCallback(async (variantId: string) => {
+    try {
+      await addVariantToCart(variantId, 1)
+      setCartSnack('Added to cart')
+    } catch (e) {
+      setCartSnack(e instanceof Error ? e.message : 'Could not add to cart')
+    }
+  }, [])
 
   if (error) {
     return (
@@ -165,235 +191,165 @@ export function ShopPage() {
   }
 
   return (
-    <Stack spacing={2.5}>
-      {sqlWarning ? (
-        <Alert severity="warning" sx={{ borderRadius: 2 }}>
-          {sqlWarning}
-        </Alert>
-      ) : null}
-      <Stack spacing={0.5}>
-        <Typography variant="h5" component="h1" fontWeight={800} letterSpacing={-0.3}>
-          Shop
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Browse by category, filter by retailer, and sort by price or name. Use the search bar above.
-        </Typography>
-      </Stack>
-
-      {storeSlug ? (
-        <Alert
-          severity="info"
-          icon={false}
-          sx={{ borderRadius: 2, py: 0.5 }}
-          action={
-            <Chip
-              label="All retailers"
-              size="small"
-              onDelete={() => setStoreFilter('')}
-              sx={{ fontWeight: 600 }}
-            />
-          }
-        >
-          <Typography variant="body2" fontWeight={600}>
-            {activeStoreMeta?.name ?? storeSlug}
-            {activeStoreMeta?.shortDescription ? ` — ${activeStoreMeta.shortDescription}` : ''}
+    <Box
+      sx={{
+        bgcolor: SHOP_V2.pageBackground,
+        mx: { xs: -2, sm: -3 },
+        px: { xs: 2, sm: 3 },
+        py: { xs: 0.5, sm: 1 },
+        mb: { xs: -2, sm: -3 },
+        borderRadius: { md: SHOP_V2.radius },
+      }}
+    >
+      <Stack spacing={3}>
+        {sqlWarning ? (
+          <Alert severity="warning" sx={{ borderRadius: SHOP_V2.radius }}>
+            {sqlWarning}
+          </Alert>
+        ) : null}
+        <Stack spacing={0.5}>
+          <Typography variant="h5" component="h1" fontWeight={800} letterSpacing={-0.3}>
+            Shop
           </Typography>
-        </Alert>
-      ) : null}
+          <Typography variant="body2" color="text.secondary">
+            Scroll shortcuts for bills, then filter and browse products — tuned for quick discovery.
+          </Typography>
+        </Stack>
 
-      {promotions.length > 0 ? (
-        <Stack spacing={1}>
-          <Typography sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Promotions</Typography>
-          <Stack direction="row" gap={1.5} sx={{ overflowX: 'auto', pb: 0.5, scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}>
-            {promotions.map((pr) => (
-              <Card
-                key={pr.id}
-                variant="outlined"
-                sx={{ flexShrink: 0, width: 220, borderRadius: 3, borderColor: 'divider' }}
-              >
-                <CardActionArea
-                  component={RouterLink}
-                  to={resolvePromoHref(pr.linkPath, pathPrefix, shop)}
-                  sx={{ p: 2, textAlign: 'left', minHeight: 88 }}
-                >
-                  <Typography fontWeight={800} fontSize="0.9rem">
-                    {pr.title}
+        <ShopPageSection
+          anchorId="shop-bill-pay"
+          accent="primary"
+          title="Instant pay"
+          subtitle="Tap an icon to open that bill-pay category."
+          paperSx={{
+            ...sectionPaperSx,
+            borderLeft: `3px solid ${SHOP_V2.accent}`,
+            bgcolor: 'background.paper',
+          }}
+        >
+          <ShopUtilityHubRow />
+        </ShopPageSection>
+
+        <Divider sx={{ borderColor: 'divider' }} />
+
+        <ShopPageSection
+          anchorId="shop-products"
+          accent="neutral"
+          title="Browse products"
+          subtitle="Featured picks, then filters and catalogue."
+          paperSx={{ ...sectionPaperSx, bgcolor: 'background.paper' }}
+        >
+          <Stack spacing={2.25}>
+            {storeSlug ? (
+              <Alert severity="info" icon={false} sx={{ borderRadius: SHOP_V2.radius, py: 0.5 }}>
+                <Typography variant="body2" fontWeight={600}>
+                  Filtering by {activeStoreMeta?.name ?? storeSlug}
+                  {activeStoreMeta?.shortDescription ? ` — ${activeStoreMeta.shortDescription}` : ''}
+                  {' · '}
+                  <Typography
+                    component="button"
+                    type="button"
+                    variant="body2"
+                    onClick={() => setStoreFilter('')}
+                    sx={{
+                      fontWeight: 700,
+                      border: 'none',
+                      background: 'none',
+                      p: 0,
+                      cursor: 'pointer',
+                      color: 'primary.main',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Clear store
                   </Typography>
-                  {pr.subtitle ? (
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                      {pr.subtitle}
-                    </Typography>
-                  ) : null}
-                </CardActionArea>
-              </Card>
-            ))}
-          </Stack>
-        </Stack>
-      ) : null}
+                </Typography>
+              </Alert>
+            ) : null}
 
-      <TextField select label="Sort" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} size="small" sx={{ maxWidth: 220 }}>
-        <MenuItem value="name">Name</MenuItem>
-        <MenuItem value="price_asc">Price: low to high</MenuItem>
-        <MenuItem value="price_desc">Price: high to low</MenuItem>
-      </TextField>
-
-      <Stack direction="row" gap={1} sx={{ flexWrap: 'wrap' }}>
-        <Chip
-          label="All"
-          onClick={() => setCategory('')}
-          color={!categorySlug ? 'primary' : 'default'}
-          variant={!categorySlug ? 'filled' : 'outlined'}
-          sx={{ fontWeight: 600 }}
-        />
-        {sortedCategories.map((c) => {
-          const depth = categoryDepth(c, sortedCategories)
-          const label = `${depth > 0 ? `${'\u203A '.repeat(Math.min(depth, 6))}` : ''}${c.name}`
-          return (
-            <Chip
-              key={c.slug}
-              label={label}
-              onClick={() => setCategory(c.slug)}
-              color={categorySlug === c.slug ? 'primary' : 'default'}
-              variant={categorySlug === c.slug ? 'filled' : 'outlined'}
-              sx={{ fontWeight: 600 }}
-            />
-          )
-        })}
-      </Stack>
-
-      <Stack spacing={0.75}>
-        <Typography sx={{ fontWeight: 700, fontSize: '0.85rem', color: 'text.secondary' }}>Stores</Typography>
-        <Stack direction="row" gap={1} sx={{ flexWrap: 'wrap' }}>
-          <Chip
-            label="All stores"
-            onClick={() => setStoreFilter('')}
-            color={!storeSlug ? 'secondary' : 'default'}
-            variant={!storeSlug ? 'filled' : 'outlined'}
-            sx={{ fontWeight: 600 }}
-          />
-          {DEMO_STORES.map((s) => (
-            <Chip
-              key={s.slug}
-              label={s.name}
-              onClick={() => setStoreFilter(s.slug)}
-              color={storeSlug === s.slug ? 'secondary' : 'default'}
-              variant={storeSlug === s.slug ? 'filled' : 'outlined'}
-              sx={{ fontWeight: 600 }}
-            />
-          ))}
-        </Stack>
-      </Stack>
-
-      {displayItems.length === 0 && items.length > 0 && storeSlug ? (
-        <Typography color="text.secondary">No products are listed under this store in the current catalogue. Try another store or clear the filter.</Typography>
-      ) : null}
-
-      <Grid container spacing={{ xs: 1.25, sm: 1.5 }}>
-        {displayItems.map((p) => {
-          const v0 = p.variants[0]
-          const range = storefrontVariantPriceRange(p)
-          const price =
-            range && p.variants.length > 1 && range.min !== range.max
-              ? `From ${formatMoney(range.min, range.currency)}`
-              : v0
-                ? formatMoney(v0.priceCents, v0.currency)
-                : '—'
-          const demoStore = getDemoStoreForProduct(p.slug)
-          const stockTotal = totalListedStock(p)
-          const anyBuy = p.variants.some((v) => variantIsPurchasable(v))
-          return (
-            <Grid key={p.id} size={{ xs: 4, sm: 3, md: 3, lg: 2 }}>
-              <Card
-                variant="outlined"
-                sx={{
-                  height: '100%',
-                  overflow: 'hidden',
-                  borderColor: 'divider',
-                  transition: 'transform 0.15s ease, box-shadow 0.15s ease',
-                  '&:hover': {
-                    transform: 'translateY(-2px)',
-                    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.1)',
-                  },
-                }}
-              >
-                <CardActionArea
-                  component={RouterLink}
-                  to={`${pathPrefix}/shop/${p.slug}`}
-                  sx={{ height: '100%', alignItems: 'stretch', display: 'block' }}
-                >
-                  <ProductImage imageUrl={p.imageUrl} alt={p.name} ratio="1" />
-                  <CardContent sx={{ pt: 1, pb: 1.25, px: 1.25, '&:last-child': { pb: 1.25 } }}>
-                    <Stack direction="row" gap={0.35} flexWrap="wrap" sx={{ mb: 0.5, rowGap: 0.35 }}>
-                      <Chip
-                        label={p.categoryName || p.categorySlug || '—'}
-                        size="small"
-                        sx={{
-                          height: 20,
-                          maxWidth: '100%',
-                          fontSize: '0.58rem',
-                          fontWeight: 700,
-                          bgcolor: 'action.hover',
-                          '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' },
-                        }}
-                      />
-                      {demoStore ? (
-                        <Chip
-                          label={demoStore.name}
-                          size="small"
-                          color="secondary"
-                          variant="outlined"
-                          sx={{
-                            height: 20,
-                            maxWidth: '100%',
-                            fontSize: '0.58rem',
-                            fontWeight: 700,
-                            '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis' },
-                          }}
-                          component={RouterLink}
-                          to={`${shop}?store=${encodeURIComponent(demoStore.slug)}`}
-                          clickable
-                        />
-                      ) : null}
-                      <Chip
-                        label={
-                          !anyBuy
-                            ? 'Out of stock'
-                            : stockTotal > 0
-                              ? `${stockTotal} in stock`
-                              : 'Available'
-                        }
-                        size="small"
-                        color={!anyBuy ? 'error' : stockTotal > 0 && stockTotal <= 5 ? 'warning' : 'success'}
-                        variant={!anyBuy ? 'filled' : 'outlined'}
-                        sx={{ height: 20, fontSize: '0.58rem', fontWeight: 700, '& .MuiChip-label': { px: 0.75 } }}
-                      />
-                    </Stack>
-                    <Typography
-                      fontWeight={800}
-                      gutterBottom
-                      sx={{
-                        fontSize: '0.78rem',
-                        lineHeight: 1.2,
-                        minHeight: 30,
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                        mb: 0.25,
-                      }}
+            {promotions.length > 0 ? (
+              <Stack spacing={1}>
+                <Typography component="h3" sx={{ fontWeight: 700, fontSize: '0.9rem' }}>
+                  Featured
+                </Typography>
+                <Stack direction="row" gap={1.5} sx={{ overflowX: 'auto', pb: 0.5, scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}>
+                  {promotions.map((pr) => (
+                    <Card
+                      key={pr.id}
+                      variant="outlined"
+                      sx={{ flexShrink: 0, width: 220, borderRadius: SHOP_V2.radius, borderColor: 'divider' }}
                     >
-                      {p.name}
-                    </Typography>
-                    <Typography variant="body2" color="primary" fontWeight={800} sx={{ fontSize: '0.82rem', lineHeight: 1.2 }}>
-                      {price}
-                    </Typography>
-                  </CardContent>
-                </CardActionArea>
-              </Card>
+                      <CardActionArea
+                        component={RouterLink}
+                        to={resolvePromoHref(pr.linkPath, pathPrefix, shop)}
+                        sx={{ p: 2, textAlign: 'left', minHeight: 88 }}
+                      >
+                        <Typography fontWeight={800} fontSize="0.9rem">
+                          {pr.title}
+                        </Typography>
+                        {pr.subtitle ? (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                            {pr.subtitle}
+                          </Typography>
+                        ) : null}
+                      </CardActionArea>
+                    </Card>
+                  ))}
+                </Stack>
+              </Stack>
+            ) : null}
+
+            <ShopCatalogStickyBar
+              sort={sort}
+              onSortChange={setSort}
+              storeSlug={storeSlug}
+              onStoreFilter={setStoreFilter}
+              categorySlug={categorySlug}
+              onCategory={setCategory}
+              categoryChips={categoryChips}
+            />
+
+            {displayItems.length === 0 && items.length > 0 && storeSlug ? (
+              <Typography color="text.secondary">
+                No products are listed under this store in the current catalogue. Try another store or clear the filter.
+              </Typography>
+            ) : null}
+
+            <Grid container spacing={{ xs: 1.25, sm: 1.5 }}>
+              {displayItems.map((p) => {
+                const v0 = p.variants[0]
+                const range = storefrontVariantPriceRange(p)
+                const price =
+                  range && p.variants.length > 1 && range.min !== range.max
+                    ? `From ${formatMoney(range.min, range.currency)}`
+                    : v0
+                      ? formatMoney(v0.priceCents, v0.currency)
+                      : '—'
+                const demoStore = getDemoStoreForProduct(p.slug)
+                return (
+                  <Grid key={p.id} size={{ xs: 4, sm: 3, md: 3, lg: 2 }}>
+                    <ShopProductCard
+                      product={p}
+                      pathPrefix={pathPrefix}
+                      priceLabel={price}
+                      demoStore={demoStore ? { name: demoStore.name, slug: demoStore.slug } : null}
+                      onQuickAdd={handleQuickAdd}
+                    />
+                  </Grid>
+                )
+              })}
             </Grid>
-          )
-        })}
-      </Grid>
-    </Stack>
+          </Stack>
+        </ShopPageSection>
+      </Stack>
+
+      <Snackbar
+        open={Boolean(cartSnack)}
+        message={cartSnack ?? ''}
+        autoHideDuration={3200}
+        onClose={() => setCartSnack(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
+    </Box>
   )
 }

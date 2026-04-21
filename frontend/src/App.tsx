@@ -25,7 +25,6 @@ import { OrderDetailPage } from './pages/store/OrderDetailPage'
 import { ReturnRequestPage } from './pages/store/ReturnRequestPage'
 import { TrackOrderPage } from './pages/store/TrackOrderPage'
 import { ProductPage } from './pages/store/ProductPage'
-import { PaymentsCategoriesPage } from './pages/payments/PaymentsCategoriesPage'
 import { PaymentsCategoryPage } from './pages/payments/PaymentsCategoryPage'
 import { ScanPage } from './pages/store/ScanPage'
 import { ScanPayCodePage } from './pages/store/ScanPayCodePage'
@@ -71,14 +70,38 @@ import { OnboardingPermissionsPage } from './pages/onboarding/OnboardingPermissi
 import { OnboardingAddCardFlowPage } from './pages/onboarding/OnboardingAddCardFlowPage'
 import { OnboardingAddBankFlowPage } from './pages/onboarding/OnboardingAddBankFlowPage'
 
+function shopBillPayHref(pathPrefix: string) {
+  const base = pathPrefix ? `${pathPrefix}/shop` : '/shop'
+  return `${base}#shop-bill-pay`
+}
+
+/** `/payments` hub removed — land on Store with bill-pay section. */
+function PaymentsRootRedirect() {
+  const { pathname } = useLocation()
+  const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
+  return <Navigate to={shopBillPayHref(pathPrefix)} replace />
+}
+
 /** Old URLs `/payments/category/:slug` → `/payments/:slug` */
 function LegacyPaymentsCategoryRedirect() {
   const { categoryId } = useParams<{ categoryId: string }>()
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const slug = categoryId?.trim() ?? ''
-  if (!slug) return <Navigate to={`${pathPrefix}/payments`} replace />
+  if (!slug) return <Navigate to={shopBillPayHref(pathPrefix)} replace />
   return <Navigate to={`${pathPrefix}/payments/${slug}`} replace />
+}
+
+/** Old `/scan` URLs → `/wallet/scan` (scan lives under Wallet). */
+function ScanLegacyRedirect() {
+  const { pathname } = useLocation()
+  const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
+  const rel = pathname.startsWith('/embed') ? pathname.slice('/embed'.length) || '/' : pathname
+  const m = rel.match(/^\/scan(?:\/(.*))?$/)
+  const tail = (m?.[1] ?? '').replace(/^\/+|\/+$/gu, '')
+  const suffix = tail ? `/${tail}` : ''
+  const dest = (m ? `${pathPrefix}/wallet/scan${suffix}` : `${pathPrefix}/wallet/scan`).replace(/\/+/g, '/')
+  return <Navigate to={dest} replace />
 }
 
 /** Shared storefront routes — must be `<Route>` nodes inside `<Fragment>`, not a custom component (React Router 7). */
@@ -97,10 +120,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="onboarding/add-bank" element={<OnboardingAddBankFlowPage />} />
       <Route path="shop" element={<ShopPage />} />
       <Route path="shop/:slug" element={<ProductPage />} />
-      <Route path="scan" element={<ScanPage />} />
-      <Route path="scan/pay-code" element={<ScanPayCodePage />} />
-      <Route path="scan/receive-qr" element={<ScanReceiveQrPage />} />
-      <Route path="scan/my-qr" element={<ScanMyQrPage />} />
+      <Route path="scan/*" element={<ScanLegacyRedirect />} />
       <Route path="services" element={<ServicesPage />} />
       <Route path="services/insurance" element={<InsuranceFlowPage />} />
       <Route path="services/:slug" element={<HubPaymentDemoFlowPage variant="services" />} />
@@ -120,7 +140,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="classifieds" element={<ClassifiedsHomePage />} />
       <Route path="classifieds/post" element={<ClassifiedsPostAdPage />} />
       <Route path="classifieds/:id" element={<ClassifiedsAdDetailPage />} />
-      <Route path="payments" element={<PaymentsCategoriesPage />} />
+      <Route path="payments" element={<PaymentsRootRedirect />} />
       <Route path="payments/category/:categoryId" element={<LegacyPaymentsCategoryRedirect />} />
       <Route path="payments/:categoryId/pay/:itemId" element={<HubPaymentDemoFlowPage variant="payments" />} />
       <Route path="payments/:categoryId" element={<PaymentsCategoryPage />} />
@@ -134,6 +154,10 @@ function storeRouteElements(withHome: boolean) {
       <Route path="orders/:orderId/return" element={<ReturnRequestPage />} />
       <Route path="orders/:orderId" element={<OrderDetailPage />} />
       <Route path="account" element={<AccountPage />} />
+      <Route path="wallet/scan/pay-code" element={<ScanPayCodePage />} />
+      <Route path="wallet/scan/receive-qr" element={<ScanReceiveQrPage />} />
+      <Route path="wallet/scan/my-qr" element={<ScanMyQrPage />} />
+      <Route path="wallet/scan" element={<ScanPage />} />
       <Route path="wallet" element={<WalletHomePage />} />
       <Route path="wallet/rewards" element={<WalletRewardsPage />} />
       <Route path="wallet/paytoday" element={<WalletPayTodayPage />} />

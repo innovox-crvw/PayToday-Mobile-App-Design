@@ -63,7 +63,7 @@ export function ScanPayCodePage() {
   const { pathname } = useLocation()
   const [searchParams] = useSearchParams()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  const backToScan = `${pathPrefix}/scan`
+  const backToScan = `${pathPrefix}/wallet/scan`
 
   const [tab, setTab] = useState(0)
   const [manualCode, setManualCode] = useState('')

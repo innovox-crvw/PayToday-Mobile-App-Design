@@ -15,6 +15,9 @@ dist
 dist-ssr
 *.local
 
+# Admin-uploaded product images (local disk; see PRODUCT_IMAGE_UPLOAD_DIR in .env)
+data/uploads/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

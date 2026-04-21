@@ -59,3 +59,19 @@ export function stockLabelForVariant(variant: ProductVariantDto): string {
   const n = Math.max(0, variant.stockQuantity)
   return `${n} in stock`
 }
+
+/** Integer percent off when list (compare-at) is above current sale price; null if no meaningful discount. */
+export function variantDiscountPercent(variant: ProductVariantDto): number | null {
+  const c = variant.compareAtPriceCents
+  if (c == null || c <= variant.priceCents) return null
+  const pct = Math.round(((c - variant.priceCents) / c) * 100)
+  if (!(pct > 0)) return null
+  return Math.min(99, pct)
+}
+
+/** Absolute savings in cents when compare-at is above sale price. */
+export function variantSavingsCents(variant: ProductVariantDto): number | null {
+  const c = variant.compareAtPriceCents
+  if (c == null || c <= variant.priceCents) return null
+  return c - variant.priceCents
+}

@@ -209,4 +209,19 @@ export const env = {
    * Never enable in production.
    */
   devPasswordResetRevealToken: parseEnvBool(process.env.DEV_PASSWORD_RESET_REVEAL_TOKEN, false),
+  /**
+   * Folder for admin-uploaded product images (`POST /api/admin/products/upload-image`).
+   * Default: `<cwd>/data/uploads/products`. Served at `GET /api/uploads/products/<filename>`.
+   */
+  productImageUploadDir: (() => {
+    const raw = process.env.PRODUCT_IMAGE_UPLOAD_DIR?.trim()
+    if (raw) return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw)
+    return path.join(process.cwd(), 'data', 'uploads', 'products')
+  })(),
+  /** Max bytes for one product image upload (default 4 MiB, max 12 MiB). */
+  productImageUploadMaxBytes: (() => {
+    const n = Number(process.env.PRODUCT_IMAGE_UPLOAD_MAX_BYTES ?? 4 * 1024 * 1024)
+    if (!Number.isFinite(n) || n < 256 * 1024) return 4 * 1024 * 1024
+    return Math.min(12 * 1024 * 1024, Math.floor(n))
+  })(),
 }

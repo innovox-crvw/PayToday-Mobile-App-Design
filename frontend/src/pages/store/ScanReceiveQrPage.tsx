@@ -18,7 +18,7 @@ function parseAmountCents(raw: string): number | null {
 export function ScanReceiveQrPage() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  const backToScan = `${pathPrefix}/scan`
+  const backToScan = `${pathPrefix}/wallet/scan`
   const { user } = useAuthMe()
 
   const email = user?.email?.trim() || ''
@@ -82,7 +82,7 @@ export function ScanReceiveQrPage() {
       </Card>
 
       <Alert severity="success" variant="outlined">
-        <strong>Tip:</strong> open <RouterLink to={`${pathPrefix}/scan/pay-code`}>Pay by Code</RouterLink> on a second
+        <strong>Tip:</strong> open <RouterLink to={`${pathPrefix}/wallet/scan/pay-code`}>Pay by Code</RouterLink> on a second
         window, use the <strong>Scan</strong> tab, and point it at this QR (or paste the copied line under Enter code).
       </Alert>
 

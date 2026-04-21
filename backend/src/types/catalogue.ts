@@ -6,6 +6,8 @@ export interface VariantOptionDto {
 }
 
 export interface ProductImageDto {
+  /** Row id in `dbo.product_images` (admin edit / reorder / delete). */
+  id?: string
   url: string
   sortOrder: number
   /** When set, this image is shown first for that variant in the gallery. */

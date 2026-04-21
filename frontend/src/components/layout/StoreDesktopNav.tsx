@@ -4,8 +4,6 @@ import Button from '@mui/material/Button'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined'
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined'
-import PaymentOutlinedIcon from '@mui/icons-material/PaymentOutlined'
-import QrCodeScannerOutlinedIcon from '@mui/icons-material/QrCodeScannerOutlined'
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined'
 import { HEADER_TEXT_MUTED, HEADER_TEXT_PRIMARY } from '../../theme/branding'
 
@@ -19,9 +17,9 @@ function storeHref(pathPrefix: string, segment: string): string {
 const navSx = {
   color: HEADER_TEXT_MUTED,
   fontWeight: 600,
-  fontSize: 12.5,
+  fontSize: { md: 11.5, lg: 12.5 },
   textTransform: 'none' as const,
-  px: 0.5,
+  px: { md: 0.35, lg: 0.5 },
   py: 0.45,
   borderRadius: 2,
   minWidth: 0,
@@ -58,8 +56,8 @@ export function StoreDesktopNav(props: { centered?: boolean; pathPrefix?: string
         display: { xs: 'none', md: 'flex' },
         alignItems: 'center',
         justifyContent: centered ? 'center' : 'flex-start',
-        flexWrap: 'wrap',
-        gap: 1.25,
+        flexWrap: 'nowrap',
+        gap: { md: 0.75, lg: 1.25 },
         flex: centered ? 1 : undefined,
         minWidth: 0,
       }}
@@ -72,12 +70,6 @@ export function StoreDesktopNav(props: { centered?: boolean; pathPrefix?: string
       </Button>
       <Button component={NavLink} to={storeHref(pathPrefix, 'wallet')} sx={navSx} startIcon={<AccountBalanceWalletOutlinedIcon sx={{ fontSize: 18 }} />}>
         Wallet
-      </Button>
-      <Button component={NavLink} to={storeHref(pathPrefix, 'payments')} sx={navSx} startIcon={<PaymentOutlinedIcon sx={{ fontSize: 18 }} />}>
-        Payments
-      </Button>
-      <Button component={NavLink} to={storeHref(pathPrefix, 'scan')} sx={navSx} startIcon={<QrCodeScannerOutlinedIcon sx={{ fontSize: 18 }} />}>
-        Scan
       </Button>
       <Button component={NavLink} to={storeHref(pathPrefix, 'services')} sx={navSx} startIcon={<AppsOutlinedIcon sx={{ fontSize: 18 }} />}>
         Services

@@ -184,7 +184,7 @@ export function CheckoutPage() {
   async function submit() {
     setMsg(null)
     if (storefront?.checkoutRequireSignIn && !user?.sub) {
-      setMsg('This store requires a signed-in account to check out. Open Account and sign in, then return here.')
+      setMsg('This store requires a signed-in account to check out. Open My account and sign in, then return here.')
       return
     }
     if (delivery === 'home' && !user?.sub) {
@@ -391,7 +391,7 @@ export function CheckoutPage() {
               helperText={
                 <span>
                   Manage addresses anytime from{' '}
-                  <RouterLink to={`${pathPrefix}/account`}>account</RouterLink>.
+                  <RouterLink to={`${pathPrefix}/profile`}>My account</RouterLink>.
                 </span>
               }
             >

@@ -142,7 +142,7 @@ export function PaymentsCategoryPage() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  const backTo = `${pathPrefix}/payments`
+  const backTo = `${pathPrefix ? `${pathPrefix}/shop` : '/shop'}#shop-bill-pay`
   const hubTiles = useHubNavigationTiles('payments')
 
   const [listItems, setListItems] = useState<PaymentBusinessRow[] | null>(null)

@@ -57,7 +57,7 @@ export function AdminCategoriesPage() {
     try {
       const res = await fetch(apiUrl('/api/admin/categories'), { credentials: 'include' })
       if (res.status === 401 || res.status === 403) {
-        setError('Sign in on /account as a user with admin or ops role.')
+        setError('Sign in under My account (/profile) as a user with admin or ops role.')
         return
       }
       if (!res.ok) throw new Error(await res.text())

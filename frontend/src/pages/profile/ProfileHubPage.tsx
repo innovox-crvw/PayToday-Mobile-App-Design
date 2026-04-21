@@ -1,16 +1,20 @@
-import { useState, type ReactNode } from 'react'
-import { Link as RouterLink, useLocation } from 'react-router-dom'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link as RouterLink } from 'react-router-dom'
 import {
+  Alert,
   Avatar,
   Box,
   Button,
   Card,
+  CardContent,
+  Chip,
   CircularProgress,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
@@ -24,7 +28,7 @@ import HomeWorkOutlinedIcon from '@mui/icons-material/HomeWorkOutlined'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
-import { apiFetch, fetchCsrfToken } from '../../api/client'
+import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
 
 type MenuItem = {
   to: string
@@ -47,11 +51,16 @@ const menu: MenuItem[] = [
 export function ProfileHubPage() {
   const prefix = useStorePathPrefix()
   const base = prefix ? `${prefix}/profile` : '/profile'
-  const { pathname } = useLocation()
-  const accountPath = pathname.startsWith('/embed') ? '/embed/account' : '/account'
   const onboardingSignInPath = `${prefix}/onboarding/login?returnTo=${encodeURIComponent(`${prefix}/profile`)}`
-  const { user, loading } = useAuthMe()
+  const { user, loading, refresh } = useAuthMe()
   const [loggingOut, setLoggingOut] = useState(false)
+  const [fullName, setFullName] = useState('')
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [profileMsg, setProfileMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
+
+  useEffect(() => {
+    if (user?.fullName != null) setFullName(user.fullName || '')
+  }, [user?.fullName, user?.sub])
 
   const visibleMenu = menu.filter((item) => !item.authOnly || user)
 
@@ -74,9 +83,38 @@ export function ProfileHubPage() {
     }
   }
 
+  async function saveDisplayName() {
+    if (!user) return
+    setProfileMsg(null)
+    setSavingProfile(true)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName }),
+      })
+      const data = await readResponseJson<{ ok?: boolean; error?: string }>(res)
+      if (!res.ok) {
+        setProfileMsg({ text: data.error ?? 'Could not save', severity: 'error' })
+        return
+      }
+      setProfileMsg({ text: 'Display name saved.', severity: 'success' })
+      await refresh()
+      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+    } catch (e) {
+      setProfileMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
   return (
     <Stack spacing={{ xs: 2, md: 2.5 }} sx={{ maxWidth: { xs: 480, md: 560 }, mx: 'auto', pb: { xs: 2, md: 4 } }}>
-      <WalletSubheader title="Profile" />
+      <WalletSubheader title="My account" />
+      <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', lineHeight: 1.55, px: 1, mt: -1.5 }}>
+        Sign-in, your store display name, and profile settings — all in one place.
+      </Typography>
 
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
@@ -88,18 +126,51 @@ export function ProfileHubPage() {
             <Avatar sx={{ width: 88, height: 88, bgcolor: 'primary.main', fontSize: '2rem', fontWeight: 800 }}>
               {initial || '?'}
             </Avatar>
-            <Button component={RouterLink} to={accountPath} size="small" variant="text" sx={{ fontWeight: 700 }}>
-              Edit on Account
-            </Button>
-            <Typography variant="h6" fontWeight={800} textAlign="center">
-              {displayName}
-            </Typography>
-            {user.fullName?.trim() ? (
-              <Typography variant="body2" color="text.secondary" textAlign="center">
-                {user.email}
+            <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" justifyContent="center">
+              <Typography variant="h6" fontWeight={800} textAlign="center">
+                {displayName}
               </Typography>
-            ) : null}
+              {user.role && user.role !== 'customer' ? (
+                <Chip label={user.role} size="small" sx={{ height: 24, fontWeight: 600, textTransform: 'capitalize' }} />
+              ) : null}
+            </Stack>
+            <Typography variant="body2" color="text.secondary" textAlign="center">
+              {user.email}
+            </Typography>
           </Stack>
+
+          <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
+            <CardContent sx={{ py: 2.5, px: 2.25 }}>
+              <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.5 }}>
+                Store display name
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2, lineHeight: 1.55 }}>
+                This is how your name appears on orders and receipts. Detailed contact info is under{' '}
+                <RouterLink to={`${base}/personal`}>My personal details</RouterLink>.
+              </Typography>
+              <Stack spacing={2}>
+                <TextField label="Display name" value={fullName} onChange={(e) => setFullName(e.target.value)} fullWidth />
+                <Alert severity="info" sx={{ borderRadius: 2 }}>
+                  In-app alerts are in{' '}
+                  <RouterLink to={`${prefix}/notifications`}>Notifications</RouterLink>. Email vs in-app preferences are under{' '}
+                  <RouterLink to={`${base}/settings`}>Settings</RouterLink>.
+                </Alert>
+                <Button
+                  variant="contained"
+                  onClick={() => void saveDisplayName()}
+                  disabled={savingProfile}
+                  sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+                >
+                  {savingProfile ? 'Saving…' : 'Save display name'}
+                </Button>
+                {profileMsg ? (
+                  <Alert severity={profileMsg.severity} onClose={() => setProfileMsg(null)}>
+                    {profileMsg.text}
+                  </Alert>
+                ) : null}
+              </Stack>
+            </CardContent>
+          </Card>
 
           <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider', overflow: 'hidden' }}>
             <List disablePadding>

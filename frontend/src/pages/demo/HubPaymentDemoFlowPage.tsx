@@ -347,7 +347,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
           append(`Pending step failed: ${e instanceof Error ? e.message : String(e)}`)
         }
       } else {
-        append('Not signed in — skipped notification outbox. Sign in under Account to receive email and in-app notifications.')
+        append('Not signed in — skipped notification outbox. Sign in under My account to receive email and in-app notifications.')
       }
 
       await sleep(300)
@@ -535,8 +535,8 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
   }
 
   if (variant === 'payments' && (!categoryId || !itemId)) {
-    const p = pathPrefix ? `${pathPrefix}/payments` : '/payments'
-    return <Navigate to={p} replace />
+    const shop = pathPrefix ? `${pathPrefix}/shop` : '/shop'
+    return <Navigate to={`${shop}#shop-bill-pay`} replace />
   }
 
   const displayPayee = effectivePayee
@@ -708,7 +708,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                 </Button>
                 {session === 'out' ? (
                   <Alert severity="info">
-                    Sign in on <strong>Account</strong> to receive email and in-app notifications for this flow.
+                    Sign in under <strong>My account</strong> to receive email and in-app notifications for this flow.
                   </Alert>
                 ) : null}
               </Stack>

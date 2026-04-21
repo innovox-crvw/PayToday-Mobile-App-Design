@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import { Alert, Box, Button, Divider, Paper, Stack, Typography } from '@mui/material'
-import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { AdminOverviewCharts, type AdminOverviewDto } from './AdminOverviewCharts'
 
@@ -11,8 +10,6 @@ export function AdminHomePage() {
   const [overview, setOverview] = useState<AdminOverviewDto | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
-  const [connectivity, setConnectivity] = useState<string | null>(null)
-  const [connectivityBusy, setConnectivityBusy] = useState(false)
   const [lowStock, setLowStock] = useState<LowStockRow[]>([])
   const [lowStockHint, setLowStockHint] = useState<string | null>(null)
   const [lowStockLoaded, setLowStockLoaded] = useState(false)
@@ -78,21 +75,6 @@ export function AdminHomePage() {
     })()
   }, [])
 
-  async function verifyConnectivity() {
-    setConnectivity(null)
-    setConnectivityBusy(true)
-    try {
-      await fetchCsrfToken()
-      const res = await apiFetch('/api/admin/ping', { method: 'GET' })
-      const text = (await res.text()).trim()
-      setConnectivity(`${res.status} ${text}`.trim())
-    } catch (e) {
-      setConnectivity(e instanceof Error ? e.message : 'Request failed')
-    } finally {
-      setConnectivityBusy(false)
-    }
-  }
-
   return (
     <Stack spacing={3} sx={{ maxWidth: 1200 }}>
       <Box>
@@ -106,32 +88,6 @@ export function AdminHomePage() {
 
       <AdminOverviewCharts data={overview} loading={overviewLoading} error={overviewError} />
 
-      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2 }}>
-        <Typography variant="subtitle1" fontWeight={800}>
-          Access & connectivity
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.65, maxWidth: 720 }}>
-          Sign in under{' '}
-          <Button component={RouterLink} to="/account" size="small" variant="text" sx={{ fontWeight: 700, p: 0, minWidth: 0, verticalAlign: 'baseline' }}>
-            Account
-          </Button>{' '}
-          with a staff profile that has <strong>Admin</strong>, <strong>Operations</strong>, or{' '}
-          <strong>Fulfillment</strong> privileges. The API validates your session before returning admin data.
-        </Typography>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }} sx={{ mt: 2 }}>
-          <Button variant="outlined" onClick={() => void verifyConnectivity()} disabled={connectivityBusy} sx={{ fontWeight: 700 }}>
-            {connectivityBusy ? 'Checking…' : 'Verify API connectivity'}
-          </Button>
-          <Typography variant="caption" color="text.secondary">
-            Confirms that authenticated admin traffic reaches the application tier.
-          </Typography>
-        </Stack>
-        {connectivity ? (
-          <Alert severity={connectivity.startsWith('200') ? 'success' : 'warning'} sx={{ mt: 2, wordBreak: 'break-word' }}>
-            {connectivity}
-          </Alert>
-        ) : null}
-      </Paper>
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2 }}>
         <Typography variant="subtitle1" fontWeight={800}>

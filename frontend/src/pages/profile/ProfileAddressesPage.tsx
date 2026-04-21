@@ -47,7 +47,7 @@ const emptyForm = {
 
 export function ProfileAddressesPage() {
   const prefix = useStorePathPrefix()
-  const accountPath = prefix ? `${prefix}/account` : '/account'
+  const profileHubPath = prefix ? `${prefix}/profile` : '/profile'
 
   const { user, loading } = useAuthMe()
   const [items, setItems] = useState<AddressRow[]>([])
@@ -198,8 +198,8 @@ export function ProfileAddressesPage() {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
               Save delivery addresses for checkout. Sign in to manage your address book.
             </Typography>
-            <Button component={RouterLink} to={accountPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
-              Go to Account
+            <Button component={RouterLink} to={profileHubPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
+              Go to My account
             </Button>
           </CardContent>
         </Card>

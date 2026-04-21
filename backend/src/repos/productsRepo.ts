@@ -240,7 +240,15 @@ export async function listProducts(pool: ConnectionPool, opts?: ListProductsOpti
 }
 
 export async function listProductsAdmin(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
-  return runFirstSuccessful(listProductAttempts(pool, opts, true))
+  const list = await runFirstSuccessful(listProductAttempts(pool, opts, true))
+  for (const p of list) {
+    try {
+      p.images = await loadProductImages(pool, p.id)
+    } catch {
+      p.images = []
+    }
+  }
+  return list
 }
 
 async function getProductBySlugQuery(
@@ -304,15 +312,17 @@ async function getProductBySlugQuery(
 async function loadProductImages(pool: ConnectionPool, productId: string): Promise<ProductImageDto[]> {
   try {
     const r = await pool.request().input('pid', productId).query<{
+      id: string
       url: string
       sort_order: number
       variant_id: string | null
     }>(`
-      SELECT url, sort_order, CAST(variant_id AS NVARCHAR(36)) AS variant_id
+      SELECT CAST(id AS NVARCHAR(36)) AS id, url, sort_order, CAST(variant_id AS NVARCHAR(36)) AS variant_id
       FROM dbo.product_images WHERE product_id = @pid
       ORDER BY sort_order, id
     `)
     return r.recordset.map((row) => ({
+      id: row.id,
       url: row.url,
       sortOrder: row.sort_order,
       variantId: row.variant_id,
@@ -447,6 +457,14 @@ export async function createProductSimple(
 ): Promise<{ productId: string; variantId: string }> {
   const invPol = input.inventoryPolicy ?? 'track'
   const cmp = input.compareAtPriceCents
+  if (cmp != null) {
+    if (!Number.isInteger(cmp) || cmp < 0) {
+      throw new Error('compareAtPriceCents must be null or a non-negative integer')
+    }
+    if (cmp <= input.priceCents) {
+      throw new Error('List price (compare-at) must be greater than sale price (priceCents)')
+    }
+  }
   const r1 = pool.request()
   r1.input('slug', input.slug)
   r1.input('name', input.name)
@@ -546,14 +564,18 @@ export async function insertProductImage(
   pool: ConnectionPool,
   productId: string,
   url: string,
-  sortOrder: number,
+  _sortOrderIgnored: number,
   variantId?: string | null,
 ): Promise<void> {
   const u = url.trim().slice(0, 2000)
   if (!u) {
     throw new Error('url required')
   }
-  const so = Number.isFinite(sortOrder) ? Math.floor(sortOrder) : 0
+  const nextRes = await pool
+    .request()
+    .input('pid', productId)
+    .query<{ m: number }>(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM dbo.product_images WHERE product_id = @pid`)
+  const so = Number(nextRes.recordset[0]?.m ?? -1) + 1
   const vid = variantId?.trim() || null
   try {
     await pool.request().input('pid', productId).input('url', u).input('so', so).input('vid', vid).query(`
@@ -563,6 +585,93 @@ export async function insertProductImage(
     await pool.request().input('pid', productId).input('url', u).input('so', so).query(`
       INSERT INTO dbo.product_images (product_id, url, sort_order) VALUES (@pid, @url, @so)
     `)
+  }
+}
+
+export async function updateProductImage(
+  pool: ConnectionPool,
+  productId: string,
+  imageId: string,
+  patch: { url?: string; variantId?: string | null },
+): Promise<void> {
+  if (patch.url === undefined && patch.variantId === undefined) {
+    throw new Error('No fields to update')
+  }
+  const own = await pool
+    .request()
+    .input('iid', imageId)
+    .input('pid', productId)
+    .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_images WHERE id = @iid AND product_id = @pid`)
+  if (Number(own.recordset[0]?.c ?? 0) === 0) {
+    throw new Error('Image not found for product')
+  }
+  if (patch.url !== undefined) {
+    const u = patch.url.trim().slice(0, 2000)
+    if (!u) throw new Error('url cannot be empty')
+    await pool.request().input('iid', imageId).input('u', u).query(`UPDATE dbo.product_images SET url = @u WHERE id = @iid`)
+  }
+  if (patch.variantId !== undefined) {
+    const vid = patch.variantId === null ? null : String(patch.variantId).trim() || null
+    if (vid) {
+      const vchk = await pool
+        .request()
+        .input('pid', productId)
+        .input('vid', vid)
+        .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_variants WHERE id = @vid AND product_id = @pid`)
+      if (Number(vchk.recordset[0]?.c ?? 0) === 0) {
+        throw new Error('variantId does not belong to this product')
+      }
+    }
+    try {
+      await pool.request().input('iid', imageId).input('vid', vid).query(`UPDATE dbo.product_images SET variant_id = @vid WHERE id = @iid`)
+    } catch {
+      throw new Error('variant_id column missing — run database migrations')
+    }
+  }
+}
+
+export async function deleteProductImage(pool: ConnectionPool, productId: string, imageId: string): Promise<string | null> {
+  const r = await pool
+    .request()
+    .input('iid', imageId)
+    .input('pid', productId)
+    .query<{ url: string }>(`SELECT TOP 1 url FROM dbo.product_images WHERE id = @iid AND product_id = @pid`)
+  const row = r.recordset[0]
+  if (!row) {
+    throw new Error('Image not found for product')
+  }
+  const url = row.url
+  await pool.request().input('iid', imageId).query(`DELETE FROM dbo.product_images WHERE id = @iid`)
+  return url
+}
+
+export async function reorderProductImages(pool: ConnectionPool, productId: string, orderedImageIds: string[]): Promise<void> {
+  if (orderedImageIds.length === 0) {
+    throw new Error('orderedImageIds required')
+  }
+  const r = await pool
+    .request()
+    .input('pid', productId)
+    .query<{ id: string }>(`SELECT CAST(id AS NVARCHAR(36)) AS id FROM dbo.product_images WHERE product_id = @pid`)
+  const existing = new Set(r.recordset.map((x) => x.id))
+  if (existing.size !== orderedImageIds.length || orderedImageIds.some((id) => !existing.has(id))) {
+    throw new Error('orderedImageIds must list every image for this product exactly once')
+  }
+  const tx = pool.transaction()
+  await tx.begin()
+  try {
+    for (let i = 0; i < orderedImageIds.length; i++) {
+      await tx
+        .request()
+        .input('iid', orderedImageIds[i]!)
+        .input('so', i)
+        .input('pid', productId)
+        .query(`UPDATE dbo.product_images SET sort_order = @so WHERE id = @iid AND product_id = @pid`)
+    }
+    await tx.commit()
+  } catch (e) {
+    await tx.rollback()
+    throw e
   }
 }
 
@@ -659,6 +768,26 @@ export async function updateVariantAdmin(
       .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_variants WHERE id = @vid AND product_id = @pid`)
     if (Number(own.recordset[0]?.c ?? 0) === 0) {
       throw new Error('Variant not found for product')
+    }
+    const snapRes = await tx
+      .request()
+      .input('vid', variantId)
+      .query<{ pc: number; ca: number | null }>(
+        `SELECT price_cents AS pc, compare_at_price_cents AS ca FROM dbo.product_variants WHERE id = @vid`,
+      )
+    const snap = snapRes.recordset[0]
+    if (!snap) {
+      throw new Error('Variant not found for product')
+    }
+    const nextPrice = patch.priceCents !== undefined ? patch.priceCents : snap.pc
+    const nextCompare = patch.compareAtPriceCents !== undefined ? patch.compareAtPriceCents : snap.ca
+    if (nextCompare != null) {
+      if (!Number.isInteger(nextCompare) || nextCompare < 0) {
+        throw new Error('compareAtPriceCents must be null or a non-negative integer')
+      }
+      if (nextCompare <= nextPrice) {
+        throw new Error('List price (compare-at) must be greater than sale price')
+      }
     }
     if (patch.sku !== undefined) {
       const v = patch.sku.trim()

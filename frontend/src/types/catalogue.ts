@@ -6,6 +6,8 @@ export interface VariantOptionDto {
 }
 
 export interface ProductImageDto {
+  /** Present when the API returns gallery rows with ids (admin + product detail). */
+  id?: string
   url: string
   sortOrder: number
   variantId: string | null

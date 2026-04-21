@@ -294,18 +294,18 @@ export function OrderDetailPage() {
         </Button>
       </Stack>
       <Typography>
-        Subtotal {(o.subtotal_cents / 100).toFixed(2)} · Shipping {(o.shipping_cents / 100).toFixed(2)} · Tax{' '}
-        {(o.tax_cents / 100).toFixed(2)}
+        Subtotal {formatMoney(o.subtotal_cents, o.currency)} · Shipping {formatMoney(o.shipping_cents, o.currency)} · Tax{' '}
+        {formatMoney(o.tax_cents, o.currency)}
       </Typography>
       <Typography variant="h6" fontWeight={800}>
-        Total {(o.total_cents / 100).toFixed(2)} {o.currency}
+        Total {formatMoney(o.total_cents, o.currency)}
       </Typography>
       <Typography variant="subtitle1" fontWeight={700}>
         Items
       </Typography>
       {detail.lines.map((l) => (
         <Typography key={l.sku}>
-          {l.productName} × {l.quantity} @ {(l.unitPriceCents / 100).toFixed(2)}
+          {l.productName} × {l.quantity} @ {formatMoney(l.unitPriceCents, o.currency)}
         </Typography>
       ))}
       {detail.shippingAddress && o.delivery_method === 'home' ? (

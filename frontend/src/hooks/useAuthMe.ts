@@ -4,10 +4,18 @@ import { apiFetch, readResponseJson } from '../api/client'
 /** Dispatched after login, register, logout, or profile save so Profile (and others) can refresh. */
 export const SESSION_CHANGED_EVENT = 'pt-session-changed'
 
+export type AuthMeStore = {
+  id: string
+  slug: string
+  name: string
+}
+
 export type AuthMeUser = {
   sub?: string
   email: string
   role: string
+  storeId?: string | null
+  store?: AuthMeStore | null
   fullName?: string | null
   notificationChannel?: string
   emailVerified?: boolean

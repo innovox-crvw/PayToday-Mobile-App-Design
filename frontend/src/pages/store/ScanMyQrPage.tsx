@@ -9,7 +9,7 @@ import { buildReceiveDemoPayload } from '../../lib/demoScan'
 export function ScanMyQrPage() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  const backToScan = `${pathPrefix}/scan`
+  const backToScan = `${pathPrefix}/wallet/scan`
   const { user } = useAuthMe()
 
   const walletUrl = useMemo(() => `${window.location.origin}${pathPrefix}/wallet`, [pathPrefix])

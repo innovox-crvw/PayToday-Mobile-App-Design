@@ -3,6 +3,7 @@ import { Link as RouterLink, useLocation } from 'react-router-dom'
 import { Alert, Card, CardActionArea, Stack, Typography } from '@mui/material'
 import { apiFetch } from '../../api/client'
 import { formatOrderStatusLabel } from '../../lib/orderStatusDisplay'
+import { formatMoney } from '../../lib/money'
 
 type Row = { orderId: string; status: string; total_cents: number; currency: string; created_at: string }
 
@@ -43,7 +44,7 @@ export function OrdersListPage() {
               Order {o.orderId}
             </Typography>
             <Typography fontWeight={700}>
-              {(o.total_cents / 100).toFixed(2)} {o.currency}
+              {formatMoney(o.total_cents, o.currency ?? 'NAD')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
               {formatOrderStatusLabel(o.status)} · {new Date(o.created_at).toLocaleString()}

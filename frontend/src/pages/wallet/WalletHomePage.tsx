@@ -5,6 +5,8 @@ import {
   Box,
   Button,
   Card,
+  CardActionArea,
+  CardContent,
   CircularProgress,
   List,
   ListItemButton,
@@ -14,6 +16,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import { PageHeader } from '../../components/page/PageHeader'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
@@ -25,6 +28,9 @@ import CallSplitIcon from '@mui/icons-material/CallSplit'
 import CardGiftcardIcon from '@mui/icons-material/CardGiftcard'
 import PaymentsIcon from '@mui/icons-material/Payments'
 import RedeemIcon from '@mui/icons-material/Redeem'
+import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner'
+import QrCode2Icon from '@mui/icons-material/QrCode2'
+import BadgeIcon from '@mui/icons-material/Badge'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { formatNad, WALLET_BALANCE_CENTS } from '../../data/walletMock'
 import { useAuthMe } from '../../hooks/useAuthMe'
@@ -185,7 +191,7 @@ export function WalletHomePage() {
           <Typography variant="caption" sx={{ opacity: 0.85, textAlign: { xs: 'center', md: 'left' } }}>
             {user
               ? walletDemoAvailable
-                ? 'Your account wallet: add funds below, then pay with PayToday Wallet in hub payments or Vouchers.'
+                ? 'Your account wallet: add funds below, then pay with PayToday Wallet from the store’s bill-pay hub or Vouchers.'
                 : 'Wallet funding is not available on this database. Contact your administrator, then refresh.'
               : 'Sample balance for guests. Sign in to fund and spend from your wallet.'}
           </Typography>
@@ -198,7 +204,7 @@ export function WalletHomePage() {
             Add funds
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Credits your wallet balance so hub payments and vouchers can debit it.
+            Credits your wallet balance so bill-pay flows and vouchers can debit it.
           </Typography>
           <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 1.5 }}>
             {QUICK_FUND_CENTS.map((c) => (
@@ -261,6 +267,84 @@ export function WalletHomePage() {
       >
         My Rewards
       </Button>
+
+      <Stack spacing={1.25}>
+        <Box sx={{ px: 0.5 }}>
+          <Typography variant="subtitle2" color="text.secondary" fontWeight={800}>
+            Scan & pay
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.35, lineHeight: 1.5 }}>
+            Pay with your camera or a code, or show a QR to get paid — without leaving your wallet.
+          </Typography>
+        </Box>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
+          {(
+            [
+              {
+                to: `${prefix}/scan/pay-code`,
+                title: 'Pay by code',
+                body: '',
+                icon: <QrCodeScannerIcon sx={{ fontSize: 26 }} />,
+              },
+              {
+                to: `${prefix}/scan/receive-qr`,
+                title: 'Receive via QR',
+                body: '',
+                icon: <QrCode2Icon sx={{ fontSize: 26 }} />,
+              },
+              {
+                to: `${prefix}/scan/my-qr`,
+                title: 'My QR code',
+                body: '',
+                icon: <BadgeIcon sx={{ fontSize: 26 }} />,
+              },
+            ] as const
+          ).map((item) => (
+            <Card
+              key={item.to}
+              variant="outlined"
+              sx={{
+                flex: 1,
+                borderRadius: 3,
+                borderColor: 'divider',
+                minWidth: 0,
+                transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 10px 26px rgba(15, 23, 42, 0.08)' },
+              }}
+            >
+              <CardActionArea component={RouterLink} to={item.to} sx={{ height: '100%', alignItems: 'stretch' }}>
+                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                  <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                    <Box
+                      sx={(t) => ({
+                        width: 48,
+                        height: 48,
+                        borderRadius: 2,
+                        flexShrink: 0,
+                        bgcolor: alpha(t.palette.primary.main, 0.1),
+                        color: 'primary.main',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      })}
+                    >
+                      {item.icon}
+                    </Box>
+                    <Stack spacing={0.35} minWidth={0}>
+                      <Typography fontWeight={800} fontSize="0.95rem">
+                        {item.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.82rem', lineHeight: 1.45 }}>
+                        {item.body}
+                      </Typography>
+                    </Stack>
+                  </Stack>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          ))}
+        </Stack>
+      </Stack>
 
       <Stack spacing={1}>
         <Typography variant="subtitle2" color="text.secondary" sx={{ px: 0.5, fontWeight: 700 }}>
