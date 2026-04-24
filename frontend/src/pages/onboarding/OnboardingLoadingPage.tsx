@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Box, CircularProgress, Stack, Typography } from '@mui/material'
+import { Box, CircularProgress, Stack } from '@mui/material'
+import { AppBrandLogo } from '../../components/brand/AppBrandLogo'
 import { ONBOARDING_GRADIENT } from './onboardingBranding'
 
 function safePrefix(pathname: string): string {
@@ -31,9 +32,7 @@ export function OnboardingLoadingPage() {
       }}
     >
       <Stack spacing={2} alignItems="center">
-        <Typography variant="h4" fontWeight={900} letterSpacing={-0.6} sx={{ color: '#fff' }}>
-          PAY TODAY
-        </Typography>
+        <AppBrandLogo to={prefix || '/'} />
         <CircularProgress thickness={5} size={44} sx={{ color: 'rgba(255,255,255,0.92)' }} />
       </Stack>
     </Box>

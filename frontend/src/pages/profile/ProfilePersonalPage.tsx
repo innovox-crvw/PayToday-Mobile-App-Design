@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@mui/material'
 import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
@@ -172,43 +173,45 @@ export function ProfilePersonalPage() {
 
   if (loading) {
     return (
-      <Stack alignItems="center" py={6}>
-        <CircularProgress size={36} />
-      </Stack>
+      <ProfilePageShell>
+        <Stack alignItems="center" py={6}>
+          <CircularProgress size={36} />
+        </Stack>
+      </ProfilePageShell>
     )
   }
 
   if (!user) {
     return (
-      <Stack spacing={2.5} sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}>
-        <WalletSubheader title="My Personal Details" />
+      <ProfilePageShell>
+        <WalletSubheader title="Personal" />
         <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
           <CardContent sx={{ py: 4, textAlign: 'center' }}>
             <Box sx={{ color: 'text.secondary', mb: 2 }}>
               <PersonOffOutlinedIcon sx={{ fontSize: 56 }} />
             </Box>
             <Typography variant="h6" fontWeight={800} gutterBottom>
-              No user account
+              Sign in required
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
-              Personal details are available after you sign in.
+              Sign in to edit name, email, and password.
             </Typography>
             <Button component={RouterLink} to={profileHubPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
-              Go to My account
+              Account
             </Button>
           </CardContent>
         </Card>
-      </Stack>
+      </ProfilePageShell>
     )
   }
 
   const verified = user.emailVerified !== false
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 520, mx: 'auto', pb: 4 }}>
-      <WalletSubheader title="My Personal Details" />
+    <ProfilePageShell>
+      <WalletSubheader title="Personal" />
       <Typography variant="body2" color="text.secondary">
-        Update your display name, sign-in email, or password. Email and password changes require your current password for store accounts that use a password.
+        Name, email, and password. Email and password changes need your current password.
       </Typography>
 
       {msg ? (
@@ -223,8 +226,8 @@ export function ProfilePersonalPage() {
             {resending ? 'Sending…' : 'Resend link'}
           </Button>
         }>
-          Your email is not verified yet. After registering, open the link we send you, or resend and then open{' '}
-          <RouterLink to={confirmPath}>Confirm email</RouterLink> with the token from the message.
+          Email not verified. Open the link from your inbox, or{' '}
+          <RouterLink to={confirmPath}>confirm with a token</RouterLink>.
         </Alert>
       ) : null}
 
@@ -282,8 +285,8 @@ export function ProfilePersonalPage() {
       </Button>
 
       <Typography variant="caption" color="text.secondary" display="block" sx={{ pt: 1 }}>
-        Forgot your password? Use the store forgot-password flow when linked from sign-in, or ask your administrator for Keycloak accounts.
+        Forgot password? Use the link on the sign-in screen, or ask your admin for SSO accounts.
       </Typography>
-    </Stack>
+    </ProfilePageShell>
   )
 }

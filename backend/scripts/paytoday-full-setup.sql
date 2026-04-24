@@ -40,6 +40,8 @@ IF OBJECT_ID(N'dbo.product_images', N'U') IS NOT NULL DROP TABLE dbo.product_ima
 IF OBJECT_ID(N'dbo.product_variant_options', N'U') IS NOT NULL DROP TABLE dbo.product_variant_options;
 IF OBJECT_ID(N'dbo.product_variants', N'U') IS NOT NULL DROP TABLE dbo.product_variants;
 IF OBJECT_ID(N'dbo.products', N'U') IS NOT NULL DROP TABLE dbo.products;
+IF OBJECT_ID(N'dbo.user_businesses', N'U') IS NOT NULL DROP TABLE dbo.user_businesses;
+IF OBJECT_ID(N'dbo.businesses', N'U') IS NOT NULL DROP TABLE dbo.businesses;
 IF OBJECT_ID(N'dbo.categories', N'U') IS NOT NULL DROP TABLE dbo.categories;
 IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL DROP TABLE dbo.hub_navigation_tiles;
 IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL DROP TABLE dbo.hub_payment_category_items;
@@ -70,9 +72,28 @@ CREATE TABLE dbo.categories (
   is_active BIT NOT NULL CONSTRAINT DF_categories_active DEFAULT (1)
 );
 
+CREATE TABLE dbo.businesses (
+  id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_businesses PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+  name NVARCHAR(300) NOT NULL,
+  registration_number NVARCHAR(120) NULL,
+  vat_number NVARCHAR(80) NULL,
+  email NVARCHAR(320) NULL,
+  phone NVARCHAR(40) NULL,
+  address NVARCHAR(500) NULL,
+  country NVARCHAR(120) NULL,
+  is_active BIT NOT NULL CONSTRAINT DF_businesses_active DEFAULT (1),
+  created_at DATETIME2 NOT NULL CONSTRAINT DF_businesses_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2 NULL
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX UQ_businesses_registration_number
+  ON dbo.businesses(registration_number)
+  WHERE registration_number IS NOT NULL;
+
 CREATE TABLE dbo.products (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_products PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
   category_id UNIQUEIDENTIFIER NULL CONSTRAINT FK_products_category REFERENCES dbo.categories(id),
+  business_id UNIQUEIDENTIFIER NULL CONSTRAINT FK_products_business REFERENCES dbo.businesses(id),
   slug NVARCHAR(160) NOT NULL CONSTRAINT UQ_products_slug UNIQUE,
   name NVARCHAR(300) NOT NULL,
   description NVARCHAR(MAX) NULL,
@@ -191,6 +212,9 @@ CREATE TABLE dbo.users (
   password_hash NVARCHAR(500) NULL,
   keycloak_sub NVARCHAR(255) NULL,
   full_name NVARCHAR(200) NULL,
+  first_name NVARCHAR(120) NULL,
+  last_name NVARCHAR(120) NULL,
+  phone NVARCHAR(40) NULL,
   role NVARCHAR(32) NOT NULL,
   notification_channel NVARCHAR(20) NOT NULL CONSTRAINT DF_users_notify DEFAULT ('email'),
   wallet_demo_balance_cents BIGINT NOT NULL CONSTRAINT DF_users_wallet_demo DEFAULT (0),
@@ -199,6 +223,7 @@ CREATE TABLE dbo.users (
   email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT (1),
   email_verification_token_hash VARBINARY(32) NULL,
   email_verification_expires_at DATETIME2 NULL,
+  is_active BIT NOT NULL CONSTRAINT DF_users_is_active DEFAULT (1),
   created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2 NULL
 );
@@ -210,6 +235,22 @@ IF NOT EXISTS (
 BEGIN
   CREATE UNIQUE INDEX UQ_users_keycloak_sub ON dbo.users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
 END;
+
+CREATE TABLE dbo.user_businesses (
+  id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_user_businesses PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+  user_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_user_businesses_user REFERENCES dbo.users(id) ON DELETE CASCADE,
+  business_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_user_businesses_business REFERENCES dbo.businesses(id) ON DELETE CASCADE,
+  role NVARCHAR(64) NOT NULL CONSTRAINT DF_user_businesses_role DEFAULT (N'member'),
+  is_primary BIT NOT NULL CONSTRAINT DF_user_businesses_primary DEFAULT (0),
+  joined_at DATETIME2 NOT NULL CONSTRAINT DF_user_businesses_joined DEFAULT (SYSUTCDATETIME()),
+  created_at DATETIME2 NOT NULL CONSTRAINT DF_user_businesses_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2 NULL,
+  CONSTRAINT UQ_user_businesses_user_business UNIQUE (user_id, business_id)
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX UQ_user_businesses_one_primary
+  ON dbo.user_businesses(user_id)
+  WHERE is_primary = 1;
 
 CREATE TABLE dbo.user_refresh_tokens (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_refresh PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
@@ -491,6 +532,7 @@ DECLARE @locWind UNIQUEIDENTIFIER = '60000000-0000-0000-0000-000000000001';
 DECLARE @locKat UNIQUEIDENTIFIER = '60000000-0000-0000-0000-000000000002';
 DECLARE @boxW1 UNIQUEIDENTIFIER = '61000000-0000-0000-0000-000000000001';
 DECLARE @boxK1 UNIQUEIDENTIFIER = '61000000-0000-0000-0000-000000000002';
+DECLARE @defaultBusinessId UNIQUEIDENTIFIER = N'E0000000-0000-4000-8000-000000000001';
 
 INSERT INTO dbo.warehouses (id, code, name) VALUES (@wh, N'MAIN', N'Main warehouse');
 
@@ -499,10 +541,13 @@ INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active) VA
   (@catEl, N'electronics', N'Electronics', NULL, 20, 1),
   (@catHome, N'home', N'Home & kitchen', NULL, 30, 1);
 
-INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name) VALUES
-  (@pMilk, @catGro, N'full-cream-milk', N'Spar full cream milk 1L', N'Fresh dairy, 1 litre — from Spar.', 1, N'spar', N'Spar'),
-  (@pBread, @catGro, N'brown-bread', N'Spar brown bread loaf', N'Baked daily — from Spar.', 1, N'spar', N'Spar'),
-  (@pPhone, @catEl, N'budget-smartphone', N'Budget smartphone', N'Dual SIM, essentials only.', 1, NULL, NULL);
+INSERT INTO dbo.businesses (id, name, registration_number, vat_number, email, phone, address, country, is_active)
+VALUES (@defaultBusinessId, N'Default store', NULL, NULL, NULL, NULL, NULL, NULL, 1);
+
+INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name) VALUES
+  (@pMilk, @catGro, @defaultBusinessId, N'full-cream-milk', N'Spar full cream milk 1L', N'Fresh dairy, 1 litre — from Spar.', 1, N'spar', N'Spar'),
+  (@pBread, @catGro, @defaultBusinessId, N'brown-bread', N'Spar brown bread loaf', N'Baked daily — from Spar.', 1, N'spar', N'Spar'),
+  (@pPhone, @catEl, @defaultBusinessId, N'budget-smartphone', N'Budget smartphone', N'Dual SIM, essentials only.', 1, NULL, NULL);
 
 INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold) VALUES
   (@vMilk, @pMilk, N'MILK-1L-FC', N'1 Litre', 2899, N'NAD', 5),
@@ -526,10 +571,10 @@ INSERT INTO dbo.users (id, email, password_hash, full_name, role, notification_c
 VALUES (
   @userDemo,
   N'demo@paytoday.local',
-  N'$2b$10$yHL1enO0hQsVLFZx/1EPsO4D5z4if5.DDx2YR/TKCw5XvmGn4un62',
+  N'$2b$10$.5RgDox23EnGCv9NKp/mouLCbMM6sfFMiJqHRWr6loRLK.Lj24/te',
   N'Demo Shopper',
   N'customer',
-  N'email'
+  N'both'
 );
 
 /* App admin: existing row → role admin; otherwise seed row (same bcrypt as demo: PayToday123!) — change password after first login. */
@@ -539,10 +584,10 @@ BEGIN
   VALUES (
     '55000000-0000-0000-0000-000000000001',
     N'louis.viljoen@crvw.com.na',
-    N'$2b$10$yHL1enO0hQsVLFZx/1EPsO4D5z4if5.DDx2YR/TKCw5XvmGn4un62',
+    N'$2b$10$.5RgDox23EnGCv9NKp/mouLCbMM6sfFMiJqHRWr6loRLK.Lj24/te',
     N'Louis Viljoen',
     N'admin',
-    N'email'
+    N'both'
   );
 END
 ELSE
@@ -551,6 +596,20 @@ BEGIN
   SET role = N'admin', updated_at = SYSUTCDATETIME()
   WHERE LOWER(LTRIM(RTRIM(email))) = LOWER(LTRIM(RTRIM(N'louis.viljoen@crvw.com.na')));
 END;
+
+INSERT INTO dbo.user_businesses (id, user_id, business_id, role, is_primary, joined_at, created_at)
+SELECT NEWID(), @userDemo, @defaultBusinessId, N'member', 0, SYSUTCDATETIME(), SYSUTCDATETIME()
+WHERE NOT EXISTS (
+  SELECT 1 FROM dbo.user_businesses ub WHERE ub.user_id = @userDemo AND ub.business_id = @defaultBusinessId
+);
+
+INSERT INTO dbo.user_businesses (id, user_id, business_id, role, is_primary, joined_at, created_at)
+SELECT NEWID(), u.id, @defaultBusinessId, N'owner', 1, SYSUTCDATETIME(), SYSUTCDATETIME()
+FROM dbo.users u
+WHERE u.role IN (N'admin', N'ops', N'fulfillment')
+  AND NOT EXISTS (
+    SELECT 1 FROM dbo.user_businesses ub WHERE ub.user_id = u.id AND ub.business_id = @defaultBusinessId
+  );
 
 INSERT INTO dbo.addresses (id, user_id, label, line1, line2, city, region, postal_code, country, is_default)
 VALUES (
@@ -693,15 +752,17 @@ DECLARE @p11 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000011';
 DECLARE @v11 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000012';
 DECLARE @p12 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000012';
 DECLARE @v12 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000013';
+DECLARE @defaultBusinessId UNIQUEIDENTIFIER = N'E0000000-0000-4000-8000-000000000001';
 
 IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'groceries')
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'sparkling-water-500ml')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p1,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'sparkling-water-500ml',
       N'Sparkling mineral water 500 ml',
       N'Chilled sparkling water — great with meals.',
@@ -719,10 +780,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'cola-2l-bottle')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p2,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'cola-2l-bottle',
       N'Cola soft drink 2 L',
       N'Classic cola — share size.',
@@ -740,10 +802,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'long-life-milk-1l')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p3,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'long-life-milk-1l',
       N'Long life milk 1 L',
       N'UHT dairy — pantry staple.',
@@ -761,10 +824,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'white-rice-2kg')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p4,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'white-rice-2kg',
       N'White rice 2 kg',
       N'Parboiled rice — family pack.',
@@ -782,10 +846,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'potato-chips-150g')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p5,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'potato-chips-150g',
       N'Potato chips salted 150 g',
       N'Crunchy snack — party size.',
@@ -803,10 +868,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'apples-1-5kg-bag')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p6,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'apples-1-5kg-bag',
       N'Apples 1.5 kg bag',
       N'Crisp red apples — sourced locally when available.',
@@ -827,10 +893,11 @@ IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'electronics')
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'usb-c-cable-2m')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p7,
       (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      @defaultBusinessId,
       N'usb-c-cable-2m',
       N'USB-C fast charge cable',
       N'Braided cable for phones and laptops — 60 W rated.',
@@ -852,10 +919,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'bluetooth-speaker-mini')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p8,
       (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      @defaultBusinessId,
       N'bluetooth-speaker-mini',
       N'Mini Bluetooth speaker',
       N'Portable 360° sound — 10 h battery.',
@@ -873,10 +941,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'aa-batteries-8-pack')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p9,
       (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      @defaultBusinessId,
       N'aa-batteries-8-pack',
       N'AA alkaline batteries 8 pack',
       N'Long-lasting power for remotes and toys.',
@@ -897,10 +966,11 @@ IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'home')
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'dishwashing-liquid-750ml')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p10,
       (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      @defaultBusinessId,
       N'dishwashing-liquid-750ml',
       N'Dishwashing liquid 750 ml',
       N'Cuts grease — citrus scent.',
@@ -918,10 +988,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'electric-kettle-1-7l')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p11,
       (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      @defaultBusinessId,
       N'electric-kettle-1-7l',
       N'Electric kettle 1.7 L',
       N'Stainless steel — auto shut-off.',
@@ -939,10 +1010,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'cotton-bath-towel')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p12,
       (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      @defaultBusinessId,
       N'cotton-bath-towel',
       N'Premium cotton bath towel',
       N'Plush 600 GSM — quick dry.',
@@ -1135,14 +1207,14 @@ VALUES
 */
 INSERT INTO dbo.notification_outbox (user_id, email, channel, template_key, payload)
 VALUES (
-  @userDemo,
+  '50000000-0000-0000-0000-000000000001',
   N'demo@paytoday.local',
   N'both',
   N'hub_demo_pending_payment',
   N'{"correlationId":"70000000-0000-0000-0000-000000000001","reference":"seed-hub-pending","variant":"services","categorySlug":"water","itemId":null,"serviceSlug":"water","payeeName":"NamWater (seed demo)","amountCents":150000,"currency":"NAD","payMethod":"wallet","stage":"pending"}'
 ),
 (
-  @userDemo,
+  '50000000-0000-0000-0000-000000000001',
   N'demo@paytoday.local',
   N'both',
   N'hub_demo_payment_completed',

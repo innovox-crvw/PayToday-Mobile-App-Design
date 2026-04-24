@@ -1,4 +1,5 @@
 import type { ConnectionPool } from 'mssql'
+import { getUserNotificationChannel } from '../repos/usersRepo.js'
 
 /** Order / payment / pickup — emailed (and in-app when the user has an account). */
 const EMAIL_WORTHY_TEMPLATE_KEYS = new Set([
@@ -20,8 +21,10 @@ export function isEmailWorthyTemplate(templateKey: string): boolean {
 
 /**
  * Outbox channel: email | in_app | both
- * - Orders and payments: email (guests) or both (signed-in: email + in-app).
- * - Other templates: in-app only for accounts; guests fall back to email when no user id.
+ * - Guests (no user id): always email.
+ * - Signed-in users: `dbo.users.notification_channel` (profile Settings).
+ * - If the user chose **email only**, we still use **both** for order/checkout/hub templates so the
+ *   in-app feed and badge stay useful (email is sent when notify/SMTP is configured).
  */
 export async function resolveOutboxChannel(
   pool: ConnectionPool | null,
@@ -29,15 +32,14 @@ export async function resolveOutboxChannel(
   _guestEmail: string | null | undefined,
   templateKey: string,
 ): Promise<'email' | 'in_app' | 'both'> {
-  const important = isEmailWorthyTemplate(templateKey)
-
-  if (!userId || !pool) {
+  const uid = userId?.trim()
+  if (!uid || !pool) {
     return 'email'
   }
 
-  if (important) {
+  const pref = await getUserNotificationChannel(pool, uid)
+  if (pref === 'email' && isEmailWorthyTemplate(templateKey)) {
     return 'both'
   }
-
-  return 'in_app'
+  return pref
 }

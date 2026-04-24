@@ -2,7 +2,6 @@ import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { requireAuth, requireRole } from '../../middleware/auth.js'
 import { allocatePickupCode } from '../../services/depositService.js'
-import { importInventoryFromCsv } from '../../services/inventoryCsvImport.js'
 import { resolveOrderNotificationTarget } from '../../services/orderNotificationEmail.js'
 import { enqueueNotification } from '../../services/notifications.js'
 import { resolveOutboxChannel } from '../../services/notificationRouting.js'
@@ -145,33 +144,3 @@ fulfillmentRouter.post('/orders/:orderId/pickup-code', async (req, res) => {
   }
 })
 
-fulfillmentRouter.post('/inventory/csv', async (req, res) => {
-  if (!req.user || !['admin', 'ops'].includes(req.user.role)) {
-    res.status(403).json({ error: 'Forbidden' })
-    return
-  }
-  const pool = await getSqlPool()
-  if (!pool) {
-    res.status(503).json({ error: 'Database not configured' })
-    return
-  }
-  const csv = typeof req.body?.csv === 'string' ? req.body.csv : ''
-  if (!csv.trim()) {
-    res.status(400).json({ error: 'csv required' })
-    return
-  }
-  try {
-    const result = await importInventoryFromCsv(pool, csv)
-    if (result.parseErrors.length > 0) {
-      res.status(400).json({ ok: false, applied: 0, parseErrors: result.parseErrors, errors: [] })
-      return
-    }
-    if (result.errors.length > 0) {
-      res.status(400).json({ ok: false, applied: 0, errors: result.errors, parseErrors: [] })
-      return
-    }
-    res.json({ ok: true, applied: result.applied })
-  } catch (e) {
-    res.status(500).json({ error: e instanceof Error ? e.message : 'CSV import failed' })
-  }
-})

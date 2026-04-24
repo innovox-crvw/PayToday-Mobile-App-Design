@@ -30,13 +30,22 @@ function isHomeRelPath(relPath: string): boolean {
   return p === '/' || p === ''
 }
 
-export function recordRecentVisit(input: { dedupeKey: string; relPath: string; label: string }) {
+function storageKeyForScope(scope: string): string {
+  const t = (scope ?? '').trim()
+  const safe = t ? encodeURIComponent(t) : 'guest'
+  return `${STORAGE_KEY}:${safe}`
+}
+
+export function recordRecentVisit(
+  input: { dedupeKey: string; relPath: string; label: string },
+  opts?: { scope?: string },
+) {
   const relPath = normalizeRelPath(input.relPath)
   const label = input.label.trim().slice(0, 96)
   if (!label || isHomeRelPath(relPath)) return
 
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKeyForScope(opts?.scope ?? 'guest'))
     const list: RecentVisitRecord[] = raw ? JSON.parse(raw) : []
     if (!Array.isArray(list)) return
 
@@ -47,16 +56,16 @@ export function recordRecentVisit(input: { dedupeKey: string; relPath: string; l
       label,
       at: Date.now(),
     })
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next.slice(0, MAX_RECENT_VISIT_ITEMS)))
+    localStorage.setItem(storageKeyForScope(opts?.scope ?? 'guest'), JSON.stringify(next.slice(0, MAX_RECENT_VISIT_ITEMS)))
     window.dispatchEvent(new Event('pt-recent-visits-updated'))
   } catch {
     /* storage full / disabled */
   }
 }
 
-export function getRecentVisits(): RecentVisitRecord[] {
+export function getRecentVisits(opts?: { scope?: string }): RecentVisitRecord[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKeyForScope(opts?.scope ?? 'guest'))
     if (!raw) return []
     const list = JSON.parse(raw) as RecentVisitRecord[]
     if (!Array.isArray(list)) return []
@@ -102,6 +111,7 @@ export function parseLocationForRecent(
   if (norm.startsWith('/services/')) {
     const seg = norm.slice('/services/'.length).split('/').filter(Boolean)[0] ?? ''
     if (!seg) return null
+    if (seg === 'essentials' || seg === 'more') return null
     const titled: Record<string, string> = {
       water: 'Water',
       insurance: 'Insurance',

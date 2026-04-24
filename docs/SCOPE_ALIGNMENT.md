@@ -20,10 +20,6 @@ This file is the working reconciliation between the PayToday Store scope documen
 - **`used_at`** / verification flows enforce **single use** where implemented in `orders` pickup routes.
 - **Expiry:** `expires_at` is set when the code is allocated. TTL defaults to **48 hours** and is configurable with **`PICKUP_CODE_TTL_HOURS`** (fractional hours allowed, e.g. `0.5` for ~30 minutes). See `depositService.allocatePickupCode` and `backend/src/config/env.ts`.
 
-## Bulk inventory CSV
-
-- Documented in [`docs/INVENTORY_CSV.md`](INVENTORY_CSV.md). Implemented at `POST /api/fulfillment/inventory/csv` for `admin` / `ops`.
-
 ## TypeORM
 
 - Documented in [`docs/ARCHITECTURE_DATA_LAYER.md`](ARCHITECTURE_DATA_LAYER.md).

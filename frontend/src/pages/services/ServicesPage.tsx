@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { Box, CircularProgress, Stack, Typography, useMediaQuery, useTheme } from '@mui/material'
 import Grid from '@mui/material/Grid2'
@@ -9,6 +9,8 @@ import { readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { useHubNavigationTiles } from '../../hooks/useHubNavigationTiles'
 import { hubNavIcon } from '../../lib/hubNavIcons'
+import type { HubNavigationTileDto } from '../../types/hubNavigation'
+import { partitionServicesHubTiles, SERVICES_HUB_EMPTY_HINTS, SERVICES_HUB_TAB_LABELS } from '../../lib/servicesHubTabs'
 
 function resolveHref(pathPrefix: string, linkPath: string) {
   const rel = linkPath.replace(/^\//, '')
@@ -59,6 +61,39 @@ function ServiceTile({ to, label, icon, caption }: { to: string; label: string; 
   )
 }
 
+function ServiceTilesGrid(props: {
+  tiles: readonly HubNavigationTileDto[]
+  emptyHint: string
+  pathPrefix: string
+}) {
+  const { tiles, emptyHint, pathPrefix } = props
+  const prefix = pathPrefix || ''
+
+  if (tiles.length === 0) {
+    return (
+      <Typography color="text.secondary" textAlign="center" sx={{ py: 2, px: 1 }}>
+        {emptyHint}
+      </Typography>
+    )
+  }
+
+  return (
+    <Grid container spacing={2} columns={4}>
+      {tiles.map((t) => (
+        <Grid size={{ xs: 1, sm: 1 }} key={t.slug}>
+          <ServiceTile
+            to={resolveHref(prefix, t.linkPath)}
+            label={t.label}
+            icon={hubNavIcon(t.iconKey)}
+            caption={t.paymentMethodsCaption}
+          />
+        </Grid>
+      ))}
+    </Grid>
+  )
+}
+
+/** Prepaid services hub: essential slugs plus former “more” tiles (parking, vouchers, etc.) in one grid. */
 export function ServicesPage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
@@ -75,6 +110,14 @@ export function ServicesPage() {
   const [cartCount, setCartCount] = useState(0)
   const hubTiles = useHubNavigationTiles('services')
   const serviceTiles = hubTiles.fromDatabase ? hubTiles.items : SERVICES_HUB_TILES
+
+  const partition = useMemo(() => partitionServicesHubTiles(serviceTiles), [serviceTiles])
+  const sectionTiles = useMemo(() => [...partition.essentials, ...partition.more], [partition])
+  const emptyHint =
+    partition.essentials.length === 0 && partition.more.length === 0
+      ? `${SERVICES_HUB_EMPTY_HINTS.essentials} ${SERVICES_HUB_EMPTY_HINTS.more}`.trim()
+      : SERVICES_HUB_EMPTY_HINTS.essentials
+  const sectionTitle = SERVICES_HUB_TAB_LABELS.essentials
 
   useEffect(() => {
     let cancelled = false
@@ -116,40 +159,26 @@ export function ServicesPage() {
         pb: 4,
         px: { xs: 2, sm: 3 },
         boxShadow: isMobile ? '0 -4px 24px rgba(15,23,42,0.06)' : '0 4px 24px rgba(15,23,42,0.06)',
-        minHeight: isMobile ? '50vh' : undefined,
       }}
     >
       <Typography variant="h6" textAlign="center" fontWeight={800} sx={{ mb: 2, letterSpacing: -0.3 }}>
-        Services
+        {sectionTitle}
       </Typography>
-      <Grid container spacing={2} columns={4}>
-        {hubTiles.loading ? (
-          <Grid size={{ xs: 4, sm: 4 }} sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
-            <CircularProgress size={32} />
-          </Grid>
-        ) : hubTiles.fromDatabase && serviceTiles.length === 0 ? (
-          <Grid size={{ xs: 4, sm: 4 }}>
-            <Typography color="text.secondary" textAlign="center">
-              No service tiles in the database yet. Add rows to{' '}
-              <Typography component="span" variant="body2" sx={{ fontFamily: 'monospace' }}>
-                hub_navigation_tiles
-              </Typography>{' '}
-              (hub_kind = &apos;services&apos;).
-            </Typography>
-          </Grid>
-        ) : (
-          serviceTiles.map((t) => (
-            <Grid size={{ xs: 1, sm: 1 }} key={t.slug}>
-              <ServiceTile
-                to={resolveHref(prefix, t.linkPath)}
-                label={t.label}
-                icon={hubNavIcon(t.iconKey)}
-                caption={t.paymentMethodsCaption}
-              />
-            </Grid>
-          ))
-        )}
-      </Grid>
+      {hubTiles.loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+          <CircularProgress size={32} />
+        </Box>
+      ) : hubTiles.fromDatabase && serviceTiles.length === 0 ? (
+        <Typography color="text.secondary" textAlign="center">
+          No service tiles in the database yet. Add rows to{' '}
+          <Typography component="span" variant="body2" sx={{ fontFamily: 'monospace' }}>
+            hub_navigation_tiles
+          </Typography>{' '}
+          (hub_kind = &apos;services&apos;).
+        </Typography>
+      ) : (
+        <ServiceTilesGrid tiles={sectionTiles} emptyHint={emptyHint} pathPrefix={prefix} />
+      )}
     </Box>
   )
 
@@ -174,7 +203,7 @@ export function ServicesPage() {
   return (
     <Stack spacing={2}>
       <Typography variant="h4" fontWeight={800}>
-        Services
+        {sectionTitle}
       </Typography>
       {sheet}
     </Stack>

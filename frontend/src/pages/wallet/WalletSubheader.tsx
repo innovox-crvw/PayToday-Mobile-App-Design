@@ -1,9 +1,19 @@
 import type { ReactNode } from 'react'
 import { IconButton, Typography, Box, Paper } from '@mui/material'
+import type { SxProps, Theme } from '@mui/material/styles'
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew'
 import { useNavigate } from 'react-router-dom'
 
-export function WalletSubheader({ title, rightSlot }: { title: string; rightSlot?: ReactNode }) {
+export function WalletSubheader({
+  title,
+  rightSlot,
+  sx,
+}: {
+  title: string
+  rightSlot?: ReactNode
+  /** Merged into the header `Paper` (e.g. tighter margin on Account hub). */
+  sx?: SxProps<Theme>
+}) {
   const navigate = useNavigate()
   return (
     <Paper
@@ -20,7 +30,8 @@ export function WalletSubheader({ title, rightSlot }: { title: string; rightSlot
         borderRadius: 3,
         border: 1,
         borderColor: 'divider',
-        boxShadow: '0 4px 20px rgba(15, 23, 42, 0.05)',
+        boxShadow: '0 2px 12px rgba(15, 23, 42, 0.06)',
+        ...sx,
       }}
     >
       <IconButton onClick={() => navigate(-1)} aria-label="Back" size="medium" sx={{ justifySelf: 'start' }}>

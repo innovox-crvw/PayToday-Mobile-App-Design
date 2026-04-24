@@ -15,6 +15,7 @@ import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { formatMoney } from '../../lib/money'
 import { formatOrderStatusLabel } from '../../lib/orderStatusDisplay'
+import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
 
 const REFUND_FEE_BPS = 1000
 
@@ -399,8 +400,8 @@ export function OrderDetailPage() {
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Available while the order is paid or processing (not shipped). A 10% handling fee is deducted from the order
-            total; the remainder is returned where your payment method allows (PayToday Wallet credits apply immediately when you
-            paid with the wallet).
+            total; the remainder is returned where your payment method allows ({APP_WALLET_DISPLAY_NAME} credits apply immediately
+            when you paid with the wallet).
           </Typography>
           <Button variant="outlined" onClick={() => setRefundOpen(true)}>
             Request refund…
@@ -423,7 +424,7 @@ export function OrderDetailPage() {
             </Typography>
             <Typography variant="caption" color="text.secondary">
               By confirming, this order will be marked refunded and inventory will be put back on sale. Card payments may
-              require additional processing by PayToday.
+              require additional processing by {APP_DISPLAY_NAME}.
             </Typography>
           </Stack>
         </DialogContent>

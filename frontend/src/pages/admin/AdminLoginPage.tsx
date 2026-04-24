@@ -8,6 +8,7 @@ import {
   CircularProgress,
   IconButton,
   InputAdornment,
+  Link,
   Paper,
   Stack,
   Tab,
@@ -22,7 +23,7 @@ import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { useAuthMethods } from '../../hooks/useAuthMethods'
-import { SIGNIN_PAGE_BACKDROP, SURFACE_SHADOW } from '../../theme/branding'
+import { APP_DISPLAY_NAME, SIGNIN_PAGE_BACKDROP, SURFACE_SHADOW } from '../../theme/branding'
 
 type Method = 'local' | 'paytoday'
 
@@ -115,11 +116,11 @@ export function AdminLoginPage() {
         }
         if (data.code === 'use_paytoday_account') {
           setSignInMethod('paytoday')
-          setNotice('This email uses a PayToday account — switched to PayToday sign-in.')
+          setNotice(`This email uses a ${APP_DISPLAY_NAME} account — switched to ${APP_DISPLAY_NAME} sign-in.`)
           return
         }
         if (data.code === 'paytoday_login_failed') {
-          setError("PayToday sign-in isn't available right now. Try again later or use your staff password.")
+          setError(`${APP_DISPLAY_NAME} sign-in isn't available right now. Try again later or use your staff password.`)
           return
         }
         setError(data.error ?? 'Sign in failed')
@@ -150,7 +151,7 @@ export function AdminLoginPage() {
   const paytodayDisabled = !paytodaySignInEnabled
   const paytodayHint =
     signInMethod === 'paytoday' && methodsLoaded && paytodayDisabled
-      ? "PayToday sign-in isn't available right now. Use your staff password instead."
+      ? `${APP_DISPLAY_NAME} sign-in isn't available right now. Use your staff password instead.`
       : null
 
   const passwordAdornment = (
@@ -284,25 +285,21 @@ export function AdminLoginPage() {
               {submitting ? (
                 <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
                   <CircularProgress size={18} thickness={5} sx={{ color: 'common.white' }} />
-                  <span>{signInMethod === 'paytoday' ? 'Verifying with PayToday…' : 'Signing in…'}</span>
+                  <span>{signInMethod === 'paytoday' ? `Verifying with ${APP_DISPLAY_NAME}…` : 'Signing in…'}</span>
                 </Stack>
               ) : (
                 'Sign in to admin'
               )}
             </Button>
 
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
               {signInMethod === 'paytoday' && paytodayForgotUrl ? (
-                <Button
-                  component="a"
-                  href={paytodayForgotUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  size="small"
-                  sx={{ textTransform: 'none', fontWeight: 600 }}
-                >
-                  Forgot password (PayToday)
-                </Button>
+                <Typography variant="body2" component="span" sx={{ fontWeight: 600 }}>
+                  <strong>Forgot password ({APP_DISPLAY_NAME}):</strong>{' '}
+                  <Link href={paytodayForgotUrl} target="_blank" rel="noopener noreferrer" fontWeight={600}>
+                    Reset link
+                  </Link>
+                </Typography>
               ) : signInMethod === 'local' ? (
                 <Button
                   component={RouterLink}

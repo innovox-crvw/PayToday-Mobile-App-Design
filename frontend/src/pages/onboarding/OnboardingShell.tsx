@@ -1,5 +1,7 @@
 import type { PropsWithChildren, ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Box, Stack, Typography } from '@mui/material'
+import { AppBrandLogo } from '../../components/brand/AppBrandLogo'
 import { ONBOARDING_GRADIENT } from './onboardingBranding'
 
 type Props = PropsWithChildren<{
@@ -9,6 +11,9 @@ type Props = PropsWithChildren<{
 }>
 
 export function OnboardingShell({ children, title, subtitle, topRightBrand = true }: Props) {
+  const { pathname } = useLocation()
+  const homePath = pathname.startsWith('/embed') ? '/embed' : '/'
+
   return (
     <Box
       sx={{
@@ -31,21 +36,18 @@ export function OnboardingShell({ children, title, subtitle, topRightBrand = tru
       }}
     >
       {topRightBrand ? (
-        <Typography
+        <Box
           aria-hidden
           sx={{
             position: 'absolute',
-            top: 18,
-            right: 20,
-            color: 'rgba(255,255,255,0.92)',
-            fontWeight: 900,
-            letterSpacing: 2.2,
-            fontSize: 12,
+            top: 14,
+            right: 16,
             userSelect: 'none',
+            '& a': { lineHeight: 0 },
           }}
         >
-          PAY TODAY
-        </Typography>
+          <AppBrandLogo to={homePath} compact />
+        </Box>
       ) : null}
 
       <Box

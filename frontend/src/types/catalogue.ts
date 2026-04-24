@@ -23,6 +23,10 @@ export interface ProductVariantDto {
   compareAtPriceCents: number | null
   inventoryPolicy: InventoryPolicy
   options: VariantOptionDto[]
+  packageLengthMm?: number | null
+  packageWidthMm?: number | null
+  packageHeightMm?: number | null
+  grossWeightG?: number | null
 }
 
 export interface ProductDto {

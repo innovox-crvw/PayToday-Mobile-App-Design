@@ -5,6 +5,8 @@ export interface StoreCategoryDto {
   parentId?: string | null
   sortOrder?: number
   isActive?: boolean
+  /** Allowlisted key from API; UI maps via `categoryIcons`. */
+  iconKey?: string | null
 }
 
 export interface StorePromotionDto {

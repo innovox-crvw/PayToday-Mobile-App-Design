@@ -32,7 +32,9 @@ import { ScanReceiveQrPage } from './pages/store/ScanReceiveQrPage'
 import { ScanMyQrPage } from './pages/store/ScanMyQrPage'
 import { ShopPage } from './pages/store/ShopPage'
 import { StoreHomePage } from './pages/store/StoreHomePage'
+import { APP_DISPLAY_NAME } from './theme/branding'
 import { HubPaymentDemoFlowPage } from './pages/demo/HubPaymentDemoFlowPage'
+import { servicesEssentialsHref } from './lib/servicesHubTabs'
 import { ServicesPage } from './pages/services/ServicesPage'
 import { InsuranceFlowPage } from './pages/services/InsuranceFlowPage'
 import { ProfileHubPage } from './pages/profile/ProfileHubPage'
@@ -104,6 +106,13 @@ function ScanLegacyRedirect() {
   return <Navigate to={dest} replace />
 }
 
+/** Legacy `/services` → essentials hub (bottom nav uses `/services/essentials`). */
+function ServicesHubRootRedirect() {
+  const { pathname } = useLocation()
+  const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
+  return <Navigate to={servicesEssentialsHref(pathPrefix)} replace />
+}
+
 /** Shared storefront routes — must be `<Route>` nodes inside `<Fragment>`, not a custom component (React Router 7). */
 function storeRouteElements(withHome: boolean) {
   return (
@@ -121,7 +130,9 @@ function storeRouteElements(withHome: boolean) {
       <Route path="shop" element={<ShopPage />} />
       <Route path="shop/:slug" element={<ProductPage />} />
       <Route path="scan/*" element={<ScanLegacyRedirect />} />
-      <Route path="services" element={<ServicesPage />} />
+      <Route path="services" element={<ServicesHubRootRedirect />} />
+      <Route path="services/essentials" element={<ServicesPage />} />
+      <Route path="services/more" element={<ServicesHubRootRedirect />} />
       <Route path="services/insurance" element={<InsuranceFlowPage />} />
       <Route path="services/:slug" element={<HubPaymentDemoFlowPage variant="services" />} />
       <Route path="profile" element={<ProfileHubPage />} />
@@ -172,7 +183,7 @@ function storeRouteElements(withHome: boolean) {
         element={
           <WalletFeaturePlaceholderPage
             title="Request a Payment"
-            body="Generate a payment link or QR for someone to pay you. Available when PayToday request-money is enabled for your account."
+            body={`Generate a payment link or QR for someone to pay you. Available when ${APP_DISPLAY_NAME} request-money is enabled for your account.`}
           />
         }
       />
@@ -181,7 +192,7 @@ function storeRouteElements(withHome: boolean) {
         element={
           <WalletFeaturePlaceholderPage
             title="Split your bill"
-            body="Split expenses with friends and collect your share. This feature will use PayToday split payments when connected."
+            body={`Split expenses with friends and collect your share. This feature will use ${APP_DISPLAY_NAME} split payments when connected.`}
           />
         }
       />
@@ -194,7 +205,7 @@ function storeRouteElements(withHome: boolean) {
         element={
           <WalletFeaturePlaceholderPage
             title="Cashout"
-            body="Cash out wallet balance to cash agents or linked accounts per PayToday rules."
+            body={`Cash out wallet balance to cash agents or linked accounts per ${APP_DISPLAY_NAME} rules.`}
           />
         }
       />

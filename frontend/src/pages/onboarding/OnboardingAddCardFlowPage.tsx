@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom'
-import { Avatar, Button, Stack, TextField, Typography } from '@mui/material'
+import { Avatar, Box, Button, Stack, TextField, Typography } from '@mui/material'
 import CreditCardOutlinedIcon from '@mui/icons-material/CreditCardOutlined'
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined'
 import CloseOutlinedIcon from '@mui/icons-material/CloseOutlined'
 import ArrowBackIosNewOutlinedIcon from '@mui/icons-material/ArrowBackIosNewOutlined'
+import { AppBrandLogo } from '../../components/brand/AppBrandLogo'
 import { OnboardingShell } from './OnboardingShell'
 
 function safePrefix(pathname: string): string {
@@ -55,7 +56,9 @@ export function OnboardingAddCardFlowPage() {
         >
           Back
         </Button>
-        <Typography sx={{ color: 'rgba(255,255,255,0.92)', fontWeight: 900, letterSpacing: 2, fontSize: 12 }}>PAY TODAY</Typography>
+        <Box sx={{ lineHeight: 0, '& a': { lineHeight: 0 } }}>
+          <AppBrandLogo to={prefix || '/'} compact />
+        </Box>
       </Stack>
 
       {step === 'form' ? (

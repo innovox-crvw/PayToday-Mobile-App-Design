@@ -1,10 +1,19 @@
+html,
+body,
+#root {
+  height: 100%;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
 html::-webkit-scrollbar {
+  width: 0;
+  height: 0;
   display: none;
 }
 
@@ -17,6 +26,8 @@ body {
 }
 
 body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
   display: none;
 }
 
@@ -26,6 +37,22 @@ body::-webkit-scrollbar {
 }
 
 #root::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/**
+ * Hide native scrollbars on scrollports (nested `overflow: auto` too), not only `html/body`.
+ */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
   display: none;
 }
 

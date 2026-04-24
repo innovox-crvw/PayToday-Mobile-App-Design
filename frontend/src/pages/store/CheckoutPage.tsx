@@ -22,7 +22,9 @@ import {
 import { notifyCatalogInventoryMaybeChanged } from '../../lib/catalogEvents'
 import { apiUrl } from '../../lib/apiOrigin'
 import { formatMoney } from '../../lib/money'
+import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
 import type { StorefrontConfig } from '../../types/storefront'
+import { parseEmailString } from '../../lib/inputValidators'
 
 interface DepositLocation {
   id: string
@@ -36,12 +38,6 @@ interface AddressRow {
   line1: string
   city: string
   is_default?: boolean
-}
-
-function isValidEmail(value: string): boolean {
-  const t = value.trim()
-  if (t.length < 5) return false
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)
 }
 
 export function CheckoutPage() {
@@ -191,9 +187,12 @@ export function CheckoutPage() {
       setMsg('Sign in to use home delivery, or switch to pickup.')
       return
     }
-    if (!user?.sub && !isValidEmail(guestEmail)) {
-      setMsg('Enter a valid email address for checkout (required when you are not signed in).')
-      return
+    if (!user?.sub) {
+      const ge = parseEmailString(guestEmail, 'guestEmail')
+      if (!ge.ok) {
+        setMsg(ge.message)
+        return
+      }
     }
     let resolvedShippingId = shippingAddressId
     if (delivery === 'home' && user?.sub) {
@@ -478,13 +477,13 @@ export function CheckoutPage() {
           fullWidth
           required
           autoComplete="email"
-          helperText="Used for receipts and PayToday payment (hosted checkout)."
+          helperText={`Used for receipts and ${APP_DISPLAY_NAME} payment (hosted checkout).`}
           disabled={submitting}
         />
       )}
       <Typography variant="subtitle2" color="text.secondary">
-        Optional contact fields for the hosted PayToday step. If you are signed in, your account name is used when these are left
-        blank.
+        Optional contact fields for the hosted {APP_DISPLAY_NAME} step. If you are signed in, your account name is used when these
+        are left blank.
       </Typography>
       <TextField
         label="First name (optional)"
@@ -522,7 +521,7 @@ export function CheckoutPage() {
             <FormControlLabel
               value="paytoday"
               control={<Radio />}
-              label="PayToday (hosted checkout)"
+              label={`${APP_DISPLAY_NAME} (hosted checkout)`}
               disabled={submitting}
             />
             <FormControlLabel
@@ -531,7 +530,7 @@ export function CheckoutPage() {
               disabled={submitting || !walletDemoAvailable}
               label={
                 <Stack spacing={0.25}>
-                  <Typography fontWeight={700}>PayToday Wallet</Typography>
+                  <Typography fontWeight={700}>{APP_WALLET_DISPLAY_NAME}</Typography>
                   <Typography variant="caption" color="text.secondary">
                     {walletDemoAvailable
                       ? walletBalanceCents != null
@@ -546,7 +545,11 @@ export function CheckoutPage() {
         </FormControl>
       ) : null}
       <Button variant="contained" onClick={() => void submit()} disabled={payDisabled}>
-        {submitting ? 'Processing…' : paymentMethod === 'demo_wallet' && signedIn ? 'Place order & pay with wallet' : 'Pay with PayToday'}
+        {submitting
+          ? 'Processing…'
+          : paymentMethod === 'demo_wallet' && signedIn
+            ? 'Place order & pay with wallet'
+            : `Pay with ${APP_DISPLAY_NAME}`}
       </Button>
       {msg && (
         <Alert

@@ -20,6 +20,7 @@ import {
 } from '@mui/material'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
+import { CATEGORY_ICON_OPTIONS, renderCategoryIcon } from '../../lib/categoryIcons'
 
 type CategoryRow = {
   id: string
@@ -28,6 +29,7 @@ type CategoryRow = {
   parentId: string | null
   sortOrder: number
   isActive: boolean
+  iconKey: string | null
 }
 
 function depthForCategory(c: CategoryRow, all: CategoryRow[]): number {
@@ -48,8 +50,9 @@ export function AdminCategoriesPage() {
   const [name, setName] = useState('')
   const [parentId, setParentId] = useState('')
   const [sortOrder, setSortOrder] = useState('0')
+  const [newIconKey, setNewIconKey] = useState('')
   const [edit, setEdit] = useState<
-    Record<string, { slug: string; name: string; parentId: string; sortOrder: string; isActive: boolean }>
+    Record<string, { slug: string; name: string; parentId: string; sortOrder: string; isActive: boolean; iconKey: string }>
   >({})
 
   async function load() {
@@ -72,6 +75,7 @@ export function AdminCategoriesPage() {
           parentId: c.parentId ?? '',
           sortOrder: String(c.sortOrder ?? 0),
           isActive: c.isActive !== false,
+          iconKey: c.iconKey ?? '',
         }
       }
       setEdit(next)
@@ -96,6 +100,7 @@ export function AdminCategoriesPage() {
           name,
           parentId: parentId.trim() || null,
           sortOrder: Number(sortOrder) || 0,
+          ...(newIconKey.trim() ? { iconKey: newIconKey.trim() } : {}),
         }),
       })
       if (!res.ok) throw new Error(await res.text())
@@ -103,6 +108,7 @@ export function AdminCategoriesPage() {
       setName('')
       setParentId('')
       setSortOrder('0')
+      setNewIconKey('')
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Create failed')
@@ -124,6 +130,7 @@ export function AdminCategoriesPage() {
           parentId: e.parentId.trim() || null,
           sortOrder: Number(e.sortOrder) || 0,
           isActive: e.isActive,
+          iconKey: e.iconKey.trim() ? e.iconKey.trim() : null,
         }),
       })
       if (!res.ok) throw new Error(await res.text())
@@ -176,6 +183,26 @@ export function AdminCategoriesPage() {
             </TextField>
             <TextField label="Sort order" value={sortOrder} onChange={(ev) => setSortOrder(ev.target.value)} fullWidth />
           </Stack>
+          <TextField
+            select
+            label="Storefront icon (optional)"
+            value={newIconKey}
+            onChange={(ev) => setNewIconKey(ev.target.value)}
+            fullWidth
+            helperText="Shown on the home “Shop by category” strip. Leave blank for auto from slug."
+          >
+            <MenuItem value="">
+              <em>Default (from slug)</em>
+            </MenuItem>
+            {CATEGORY_ICON_OPTIONS.map((o) => (
+              <MenuItem key={o.key} value={o.key}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Box sx={{ width: 32, display: 'flex', justifyContent: 'center' }}>{renderCategoryIcon(o.key, null)}</Box>
+                  <span>{o.label}</span>
+                </Stack>
+              </MenuItem>
+            ))}
+          </TextField>
           <Button variant="contained" onClick={() => void createCategory()} sx={{ alignSelf: 'flex-start' }}>
             Create
           </Button>
@@ -197,6 +224,7 @@ export function AdminCategoriesPage() {
               <TableCell>Parent</TableCell>
               <TableCell>Sort</TableCell>
               <TableCell>Active</TableCell>
+              <TableCell sx={{ minWidth: 200 }}>Icon</TableCell>
               <TableCell width={120} />
             </TableRow>
           </TableHead>
@@ -212,6 +240,7 @@ export function AdminCategoriesPage() {
                   parentId: c.parentId ?? '',
                   sortOrder: String(c.sortOrder ?? 0),
                   isActive: c.isActive !== false,
+                  iconKey: c.iconKey ?? '',
                 } as const)
               return (
                 <TableRow key={c.id}>
@@ -284,6 +313,35 @@ export function AdminCategoriesPage() {
                       }
                       label=""
                     />
+                  </TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Box sx={{ width: 36, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+                        {renderCategoryIcon((e?.iconKey ?? c.iconKey)?.trim() || null, c.slug)}
+                      </Box>
+                      <TextField
+                        select
+                        size="small"
+                        fullWidth
+                        label="Icon"
+                        value={e?.iconKey ?? ''}
+                        onChange={(ev) =>
+                          setEdit((m) => ({
+                            ...m,
+                            [c.id]: { ...(m[c.id] ?? draft), iconKey: ev.target.value },
+                          }))
+                        }
+                      >
+                        <MenuItem value="">
+                          <em>Default</em>
+                        </MenuItem>
+                        {CATEGORY_ICON_OPTIONS.map((o) => (
+                          <MenuItem key={o.key} value={o.key}>
+                            {o.label}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                    </Stack>
                   </TableCell>
                   <TableCell>
                     <Button size="small" variant="outlined" onClick={() => void saveRow(c.id)}>

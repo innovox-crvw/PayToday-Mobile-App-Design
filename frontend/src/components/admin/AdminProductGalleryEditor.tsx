@@ -1,7 +1,7 @@
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
-import { Box, Button, IconButton, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material'
+import { Alert, Box, Button, IconButton, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material'
 import { useEffect, useMemo, useState } from 'react'
 import type { ProductDto, ProductImageDto } from '../../types/catalogue'
 import { apiFetch } from '../../api/client'
@@ -117,13 +117,28 @@ export function AdminProductGalleryEditor(props: { product: ProductDto; onReload
     }
   }
 
-  if (sorted.length === 0) return null
+  if (sorted.length === 0) {
+    if (p.isActive) {
+      return (
+        <Alert severity="warning">
+          Active products must have at least one catalog image before they appear in the store. Upload an image or
+          deactivate the product.
+        </Alert>
+      )
+    }
+    return null
+  }
 
   return (
     <Stack spacing={1.5}>
       <Typography variant="body2" fontWeight={700}>
         Gallery images (order = storefront carousel)
       </Typography>
+      {p.isActive && sorted.length === 1 ? (
+        <Alert severity="info" sx={{ py: 0.5 }}>
+          You cannot remove the last image while the product is active — add another image first, or deactivate.
+        </Alert>
+      ) : null}
       {rowError ? (
         <Typography variant="body2" color="error">
           {rowError}

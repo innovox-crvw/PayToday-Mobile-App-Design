@@ -20,6 +20,7 @@ import MenuIcon from '@mui/icons-material/Menu'
 import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined'
 import { apiFetch, fetchCsrfToken } from '../api/client'
 import { SESSION_CHANGED_EVENT } from '../hooks/useAuthMe'
+import { APP_DISPLAY_NAME } from '../theme/branding'
 
 const DRAWER_WIDTH = 264
 
@@ -71,7 +72,7 @@ export function AdminLayout() {
         }}
       >
         <Typography variant="h6" fontWeight={800} letterSpacing={-0.25} sx={{ color: 'text.primary' }}>
-          PayToday Ops
+          {APP_DISPLAY_NAME} Ops
         </Typography>
       </Toolbar>
       <List sx={{ px: 1.5, py: 1.5, flex: 1 }}>

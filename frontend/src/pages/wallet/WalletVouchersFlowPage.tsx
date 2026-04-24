@@ -20,6 +20,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { WalletSubheader } from './WalletSubheader'
 import { apiFetch } from '../../api/client'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 
 type Step = 'vendor' | 'amount' | 'confirm' | 'pin' | 'processing' | 'result'
 
@@ -33,7 +34,7 @@ const vendors = [
   { id: 'checkers', name: 'Checkers' },
   { id: 'picknpay', name: 'Pick n Pay' },
   { id: 'woermann', name: 'Woermann Brock' },
-  { id: 'paytoday', name: 'PayToday' },
+  { id: 'paytoday', name: APP_DISPLAY_NAME },
 ] as const
 
 export function WalletVouchersFlowPage() {

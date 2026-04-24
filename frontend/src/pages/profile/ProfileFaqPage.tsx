@@ -2,20 +2,22 @@ import { useState } from 'react'
 import { Collapse, IconButton, List, ListItemButton, ListItemText, Stack, Typography } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 
 const items = [
-  { q: 'What is PayToday?', a: 'PayToday is a digital wallet and payments platform for Namibia.' },
-  { q: 'How long does it take to process?', a: 'Most payments clear within seconds; bank transfers may take longer.' },
-  { q: 'Is my card data stored?', a: 'Card details are tokenized per PCI practices when you connect a live processor.' },
+  { q: `What is ${APP_DISPLAY_NAME}?`, a: 'Digital wallet and payments for Namibia.' },
+  { q: 'How long do payments take?', a: 'Most clear in seconds; bank transfers can take longer.' },
+  { q: 'Is card data stored?', a: 'Cards are tokenized when a live processor is connected.' },
 ] as const
 
 export function ProfileFaqPage() {
   const [open, setOpen] = useState<number | null>(0)
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 520, mx: 'auto', pb: 2 }}>
-      <WalletSubheader title="Frequently Asked Questions" />
+    <ProfilePageShell>
+      <WalletSubheader title="FAQ" />
       <List disablePadding>
         {items.map((item, i) => (
           <Stack key={item.q} sx={{ borderBottom: 1, borderColor: 'divider', py: 0.5 }}>
@@ -33,6 +35,6 @@ export function ProfileFaqPage() {
           </Stack>
         ))}
       </List>
-    </Stack>
+    </ProfilePageShell>
   )
 }

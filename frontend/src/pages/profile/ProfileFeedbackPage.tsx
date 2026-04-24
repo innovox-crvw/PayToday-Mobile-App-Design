@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Rating, Stack, TextField, Typography } from '@mui/material'
+import { Button, Rating, TextField, Typography } from '@mui/material'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 
@@ -12,10 +13,10 @@ export function ProfileFeedbackPage() {
   const [text, setText] = useState('')
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}>
+    <ProfilePageShell>
       <WalletSubheader title="Feedback" />
       <Typography color="text.secondary" variant="body2">
-        Tell us what you think.
+        Rate your experience (optional note below).
       </Typography>
       <Rating
         value={rating}
@@ -24,7 +25,7 @@ export function ProfileFeedbackPage() {
         sx={{ '& .MuiRating-iconFilled': { color: 'secondary.main' } }}
       />
       <TextField
-        label="Tell us what you think..."
+        label="Message"
         value={text}
         onChange={(e) => setText(e.target.value)}
         multiline
@@ -40,6 +41,6 @@ export function ProfileFeedbackPage() {
       >
         Send
       </Button>
-    </Stack>
+    </ProfilePageShell>
   )
 }

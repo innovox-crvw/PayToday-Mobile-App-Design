@@ -43,6 +43,7 @@ import { formatMoney } from '../../lib/money'
 import { addVariantToCart } from '../../lib/cartClient'
 import { ProductImage } from '../../components/store/ProductImage'
 import { getDemoStoreForProduct, getDemoStoreSlugForProduct } from '../../data/demoStores'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { SHOP_V2 } from '../../theme/storeV2'
 
 type CartFeedback = { kind: 'success'; qtyAdded: number } | { kind: 'error'; message: string }
@@ -62,6 +63,20 @@ function variantChoiceLabel(v: ProductVariantDto): string {
 
 /** Optional promo rows under price (PayToday-neutral copy). Set false to hide. */
 const SHOW_PRODUCT_TOP_PROMO_STUBS = false
+
+function variantPackageLines(v: ProductVariantDto): { dims: string | null; weight: string | null } {
+  const l = v.packageLengthMm
+  const w = v.packageWidthMm
+  const h = v.packageHeightMm
+  const dims = l != null && w != null && h != null ? `${l} × ${w} × ${h} mm (L × W × H)` : null
+  const weight = v.grossWeightG != null ? `${v.grossWeightG} g` : null
+  return { dims, weight }
+}
+
+function variantHasPackageDisplay(v: ProductVariantDto): boolean {
+  const { dims, weight } = variantPackageLines(v)
+  return Boolean(dims || weight)
+}
 
 function normalizeProduct(raw: unknown): ProductDto {
   const p = raw as ProductDto
@@ -290,6 +305,9 @@ export function ProductPage() {
   const savingsLine =
     savingsCents != null && savingsCents > 0 && variant ? formatMoney(savingsCents, variant.currency) : null
 
+  const selectedVariantPkg = variant ? variantPackageLines(variant) : { dims: null as string | null, weight: null as string | null }
+  const showSelectedVariantPkg = Boolean(variant && variantHasPackageDisplay(variant))
+
   const rawDescription = product.description || 'No description provided for this item.'
   const descriptionNeedsTruncate = rawDescription.length > DESCRIPTION_PREVIEW_CHARS
   const descriptionShown =
@@ -304,7 +322,6 @@ export function ProductPage() {
         mx: { xs: -2, sm: -3 },
         px: { xs: 2, sm: 3 },
         py: { xs: 1.5, sm: 2 },
-        mb: { xs: -2, sm: -3 },
         borderRadius: { md: SHOP_V2.radius },
       }}
     >
@@ -744,7 +761,7 @@ export function ProductPage() {
                       }}
                     >
                       <Typography variant="caption" fontWeight={700}>
-                        PayToday checkout perks
+                        {APP_DISPLAY_NAME} checkout perks
                       </Typography>
                       <ChevronRightIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
                     </Paper>
@@ -752,6 +769,58 @@ export function ProductPage() {
                       More payment options at checkout
                     </Typography>
                   </Stack>
+                ) : null}
+                {showSelectedVariantPkg ? (
+                  <Box
+                    sx={{
+                      mt: 0.75,
+                      py: 1,
+                      px: 1.25,
+                      borderRadius: 1,
+                      bgcolor: 'rgba(15, 23, 42, 0.04)',
+                      border: '1px solid rgba(15, 23, 42, 0.08)',
+                    }}
+                  >
+                    <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                      Package size & weight
+                    </Typography>
+                    {selectedVariantPkg.dims ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                        {selectedVariantPkg.dims}
+                      </Typography>
+                    ) : null}
+                    {selectedVariantPkg.weight ? (
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ fontWeight: 600, mt: selectedVariantPkg.dims ? 0.35 : 0 }}
+                      >
+                        Weight: {selectedVariantPkg.weight}
+                      </Typography>
+                    ) : null}
+                  </Box>
+                ) : null}
+                {product.variants.length > 1 && product.variants.some(variantHasPackageDisplay) ? (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+                      All options
+                    </Typography>
+                    <Stack spacing={0.75}>
+                      {product.variants.map((vv) => {
+                        if (!variantHasPackageDisplay(vv)) return null
+                        const { dims, weight } = variantPackageLines(vv)
+                        return (
+                          <Typography key={vv.id} variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
+                            <Box component="span" fontWeight={700} color="text.primary">
+                              {variantChoiceLabel(vv)}
+                            </Box>
+                            {dims ? ` — ${dims}` : ''}
+                            {weight ? `${dims ? ' · ' : ' — '}Weight: ${weight}` : ''}
+                          </Typography>
+                        )
+                      })}
+                    </Stack>
+                  </Box>
                 ) : null}
                 <Divider sx={{ my: 1.25, borderColor: 'rgba(15, 23, 42, 0.08)' }} />
                 <Typography
@@ -981,8 +1050,8 @@ export function ProductPage() {
           )}
           {detailTab === 3 && (
             <Typography color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              Warranty coverage depends on the manufacturer and product category. Keep your PayToday receipt and order confirmation
-              as proof of purchase.
+              Warranty coverage depends on the manufacturer and product category. Keep your {APP_DISPLAY_NAME} receipt and order
+              confirmation as proof of purchase.
             </Typography>
           )}
           {detailTab === 4 && (
@@ -1033,11 +1102,8 @@ export function ProductPage() {
                   flex: 1,
                   scrollSnapType: 'x mandatory',
                   WebkitOverflowScrolling: 'touch',
-                  '&::-webkit-scrollbar': { height: 8 },
-                  '&::-webkit-scrollbar-thumb': {
-                    borderRadius: 4,
-                    bgcolor: 'action.hover',
-                  },
+                  scrollbarWidth: 'none',
+                  '&::-webkit-scrollbar': { display: 'none', width: 0, height: 0 },
                 }}
               >
                 {related.map((p) => {

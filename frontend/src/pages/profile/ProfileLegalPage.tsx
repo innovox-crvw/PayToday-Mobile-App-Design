@@ -4,7 +4,7 @@ export function ProfileLegalPage() {
   return (
     <FlowPlaceholderPage
       title="Legal"
-      body="Terms of use, privacy policy, and regulatory notices will be linked here from your legal team."
+      body="Terms, privacy, and notices will be linked here."
     />
   )
 }

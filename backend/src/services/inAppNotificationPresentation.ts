@@ -112,6 +112,22 @@ export function inAppCopyForTemplate(templateKey: string, payloadJson: string): 
     }
   }
 
+  if (templateKey === 'merchant_paytoday_sync') {
+    const name = String(payload.merchantName ?? 'Merchant').trim()
+    const mid = payload.payTodayMerchantId
+    const midStr =
+      typeof mid === 'number' && Number.isFinite(mid)
+        ? String(mid)
+        : typeof mid === 'string'
+          ? mid.trim()
+          : ''
+    const ev = String(payload.event ?? 'update').trim()
+    return {
+      title: name || 'Merchant update',
+      body: midStr ? `PayToday merchant ${midStr} · ${ev}` : ev,
+    }
+  }
+
   if (templateKey === 'hub_demo_payment_completed') {
     const ref = String(payload.reference ?? '').trim()
     const payee = String(payload.payeeName ?? '').trim()

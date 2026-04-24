@@ -4,6 +4,7 @@ import { Button, CircularProgress, Stack, Typography } from '@mui/material'
 import { notifyCatalogInventoryMaybeChanged } from '../../lib/catalogEvents'
 import { apiFetch, readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 
 type StatusPayload = {
   paid?: boolean
@@ -64,18 +65,18 @@ export function CheckoutSuccessPage() {
   return (
     <Stack spacing={2} alignItems="center" sx={{ py: 4, textAlign: 'center', maxWidth: 480, mx: 'auto', px: 2 }}>
       <Typography variant="h5" fontWeight={800}>
-        {paid ? 'Payment confirmed' : 'Thanks — we received your return from PayToday'}
+        {paid ? 'Payment confirmed' : `Thanks — we received your return from ${APP_DISPLAY_NAME}`}
       </Typography>
       {uncertain ? (
         <Typography variant="body2" color="text.secondary">
-          The payment result was unclear from the redirect. We are confirming with PayToday in the background — stay on this page
-          or check your order in a few minutes.
+          The payment result was unclear from the redirect. We are confirming with {APP_DISPLAY_NAME} in the background — stay on
+          this page or check your order in a few minutes.
         </Typography>
       ) : null}
       {awaitingWebhook && !paid ? (
         <Typography variant="body2" color="text.secondary">
-          Your order is confirmed when our server receives PayToday&apos;s webhook (authoritative). The return URL alone does not
-          finalize payment.
+          Your order is confirmed when our server receives {APP_DISPLAY_NAME}&apos;s webhook (authoritative). The return URL alone
+          does not finalize payment.
         </Typography>
       ) : null}
       {showPending ? (

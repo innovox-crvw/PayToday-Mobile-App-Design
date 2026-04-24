@@ -1,4 +1,5 @@
 import type { ConnectionPool } from 'mssql'
+import { isMissingPayTodayMerchantIdColumnError } from './productsRepo.js'
 
 export type InventoryOverviewRow = {
   variantId: string
@@ -13,6 +14,17 @@ export type InventoryOverviewRow = {
   quantity: number
   lowStockThreshold: number | null
   reservedQuantity: number
+}
+
+export type ListInventoryMerchantScope = {
+  /** When set and non-empty, restrict rows to products with these `pay_today_merchant_id` values. */
+  payTodayMerchantIds?: number[]
+}
+
+function bindPayTodayMerchantIds(req: import('mssql').Request, ids: number[], prefix: string): string {
+  const clean = ids.filter((n) => Number.isInteger(n) && n >= 0)
+  clean.forEach((id, i) => req.input(`${prefix}${i}`, id))
+  return clean.map((_, i) => `@${prefix}${i}`).join(', ')
 }
 
 export type StockMovementRow = {
@@ -35,8 +47,12 @@ export async function getPrimaryWarehouseId(pool: ConnectionPool): Promise<strin
   return r.recordset[0]?.id ?? null
 }
 
-export async function listInventoryOverview(pool: ConnectionPool): Promise<InventoryOverviewRow[]> {
-  const r = await pool.request().query<{
+async function queryInventoryOverview(
+  _pool: ConnectionPool,
+  merchantFilterSql: string,
+  req: import('mssql').Request,
+): Promise<InventoryOverviewRow[]> {
+  const r = await req.query<{
     variantId: string
     productId: string
     productName: string
@@ -77,6 +93,7 @@ export async function listInventoryOverview(pool: ConnectionPool): Promise<Inven
       WHERE o.status = N'pending_payment'
       GROUP BY ir.variant_id
     ) res ON res.variant_id = v.id
+    WHERE 1 = 1${merchantFilterSql}
     ORDER BY p.name, v.sku
   `)
   return r.recordset.map((row) => ({
@@ -95,12 +112,39 @@ export async function listInventoryOverview(pool: ConnectionPool): Promise<Inven
   }))
 }
 
-export async function listRecentStockMovements(pool: ConnectionPool, limit: number): Promise<StockMovementRow[]> {
+export async function listInventoryOverview(
+  pool: ConnectionPool,
+  opts?: ListInventoryMerchantScope,
+): Promise<InventoryOverviewRow[]> {
+  const ids = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
+  if (ids.length === 0) {
+    const req = pool.request()
+    return queryInventoryOverview(pool, '', req)
+  }
+  const req = pool.request()
+  const merchantSql = ` AND p.pay_today_merchant_id IN (${bindPayTodayMerchantIds(req, ids, 'inv')})`
+  try {
+    return await queryInventoryOverview(pool, merchantSql, req)
+  } catch (e) {
+    if (isMissingPayTodayMerchantIdColumnError(e)) {
+      const r2 = pool.request()
+      return queryInventoryOverview(pool, '', r2)
+    }
+    throw e
+  }
+}
+
+export async function listRecentStockMovements(
+  pool: ConnectionPool,
+  limit: number,
+  opts?: ListInventoryMerchantScope,
+): Promise<StockMovementRow[]> {
   const take = Math.min(Math.max(Number(limit) || 30, 1), 200)
-  const r = await pool
-    .request()
-    .input('lim', take)
-    .query<{
+  const ids = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
+
+  const run = async (merchantSql: string, req: import('mssql').Request) => {
+    req.input('lim', take)
+    const r = await req.query<{
       id: string
       variantId: string
       sku: string
@@ -126,20 +170,87 @@ export async function listRecentStockMovements(pool: ConnectionPool, limit: numb
       FROM dbo.stock_movements sm
       INNER JOIN dbo.product_variants v ON v.id = sm.variant_id
       INNER JOIN dbo.products p ON p.id = v.product_id
+      WHERE 1 = 1${merchantSql}
       ORDER BY sm.created_at DESC
     `)
-  return r.recordset.map((row) => ({
-    id: row.id,
-    variantId: row.variantId,
-    sku: row.sku,
-    productName: row.productName,
-    warehouseId: row.warehouseId,
-    deltaQty: row.deltaQty,
-    reason: row.reason,
-    referenceType: row.referenceType,
-    referenceId: row.referenceId,
-    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
-  }))
+    return r.recordset.map((row) => ({
+      id: row.id,
+      variantId: row.variantId,
+      sku: row.sku,
+      productName: row.productName,
+      warehouseId: row.warehouseId,
+      deltaQty: row.deltaQty,
+      reason: row.reason,
+      referenceType: row.referenceType,
+      referenceId: row.referenceId,
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+    }))
+  }
+
+  if (ids.length === 0) {
+    const req = pool.request()
+    return run('', req)
+  }
+  const req = pool.request()
+  const merchantSql = ` AND p.pay_today_merchant_id IN (${bindPayTodayMerchantIds(req, ids, 'mov')})`
+  try {
+    return await run(merchantSql, req)
+  } catch (e) {
+    if (isMissingPayTodayMerchantIdColumnError(e)) {
+      const r2 = pool.request()
+      return run('', r2)
+    }
+    throw e
+  }
+}
+
+export type LowStockRow = {
+  sku: string
+  product_name: string
+  quantity: number
+  low_stock_threshold: number | null
+}
+
+export async function listLowStockSkus(
+  pool: ConnectionPool,
+  opts?: ListInventoryMerchantScope,
+): Promise<LowStockRow[]> {
+  const ids = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
+
+  const run = async (merchantSql: string, req: import('mssql').Request) => {
+    const r = await req.query<{
+      sku: string
+      product_name: string
+      quantity: number
+      low_stock_threshold: number | null
+    }>(`
+    SELECT v.sku, p.name AS product_name, SUM(iq.quantity) AS quantity, v.low_stock_threshold
+    FROM dbo.inventory_quantity iq
+    INNER JOIN dbo.product_variants v ON v.id = iq.variant_id
+    INNER JOIN dbo.products p ON p.id = v.product_id
+    WHERE v.low_stock_threshold IS NOT NULL${merchantSql}
+    GROUP BY v.sku, p.name, v.low_stock_threshold
+    HAVING SUM(iq.quantity) <= v.low_stock_threshold
+    ORDER BY SUM(iq.quantity) ASC
+  `)
+    return r.recordset
+  }
+
+  if (ids.length === 0) {
+    const req = pool.request()
+    return run('', req)
+  }
+  const req = pool.request()
+  const merchantSql = ` AND p.pay_today_merchant_id IN (${bindPayTodayMerchantIds(req, ids, 'low')})`
+  try {
+    return await run(merchantSql, req)
+  } catch (e) {
+    if (isMissingPayTodayMerchantIdColumnError(e)) {
+      const r2 = pool.request()
+      return run('', r2)
+    }
+    throw e
+  }
 }
 
 /** Hyphenated hex GUID as returned by SQL Server `CAST(id AS NVARCHAR(36))` / `NEWSEQUENTIALID()` (not always RFC-4122 version bits). */

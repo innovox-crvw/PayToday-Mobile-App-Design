@@ -1,70 +1,43 @@
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
-import { Box, Card, CardActionArea, CardContent, Chip, IconButton, Stack, Typography } from '@mui/material'
-import AddIcon from '@mui/icons-material/Add'
+import { Box, Card, CardActionArea, CardContent, Chip, Stack, Typography } from '@mui/material'
 import type { ProductDto } from '../../types/catalogue'
 import { totalListedStock, variantDiscountPercent, variantIsPurchasable } from '../../lib/productStock'
 import { ProductImage } from './ProductImage'
 import { SHOP_V2 } from '../../theme/storeV2'
 
-const stockChipSx = {
-  position: 'absolute' as const,
-  top: 8,
-  right: 8,
+const listingDiscountChipSx = {
   height: 22,
   fontSize: '0.62rem',
   fontWeight: 800,
+  bgcolor: SHOP_V2.listingDiscountChip.bg,
+  color: SHOP_V2.listingDiscountChip.color,
   '& .MuiChip-label': { px: 0.75 },
-}
-
-function initials(name: string): string {
-  const p = name.trim().split(/\s+/u).filter(Boolean)
-  if (p.length >= 2) return `${p[0]!.charAt(0)}${p[1]!.charAt(0)}`.toUpperCase()
-  return (p[0] ?? '?').slice(0, 2).toUpperCase()
-}
+} as const
 
 export function ShopProductCard(props: {
   product: ProductDto
   pathPrefix: string
   priceLabel: string
   demoStore: { name: string; slug: string } | null
-  onQuickAdd: (variantId: string) => Promise<void>
 }) {
-  const { product: p, pathPrefix, priceLabel, demoStore, onQuickAdd } = props
-  const [adding, setAdding] = useState(false)
+  const { product: p, pathPrefix, priceLabel, demoStore } = props
   const stockTotal = totalListedStock(p)
   const anyBuy = p.variants.some((v) => variantIsPurchasable(v))
   const lowStock = anyBuy && stockTotal > 0 && stockTotal <= 5
   const firstVariant = p.variants.find((v) => variantIsPurchasable(v))
   const discountPct = firstVariant ? variantDiscountPercent(firstVariant) : null
-  const merchantName = demoStore?.name ?? p.brandName ?? null
-  const merchantInitials = initials(merchantName ?? p.name)
+  const merchantLine = (demoStore?.name ?? p.brandName ?? p.categoryName ?? '').trim() || null
 
-  const stockChip =
-    !anyBuy ? (
-      <Chip size="small" label="Out of stock" color="error" variant="filled" sx={stockChipSx} />
-    ) : lowStock ? (
-      <Chip size="small" label={`${stockTotal} left`} color="warning" variant="filled" sx={stockChipSx} />
-    ) : (
-      <Chip
-        size="small"
-        label={stockTotal > 0 ? `${stockTotal} in stock` : 'In stock'}
-        variant="filled"
-        sx={{ ...stockChipSx, bgcolor: SHOP_V2.success, color: '#fff' }}
-      />
-    )
+  const heroUrl = useMemo(() => {
+    const imgs = [...(p.images ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.url.localeCompare(b.url))
+    const first = imgs.map((i) => i.url.trim()).find(Boolean)
+    if (first) return first
+    const fallback = p.imageUrl?.trim()
+    return fallback || null
+  }, [p.images, p.imageUrl, p.id])
 
-  async function handleAdd(e: React.MouseEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    if (!firstVariant || adding) return
-    setAdding(true)
-    try {
-      await onQuickAdd(firstVariant.id)
-    } finally {
-      setAdding(false)
-    }
-  }
+  const badgeRow = discountPct != null || !anyBuy || lowStock
 
   return (
     <Card
@@ -72,12 +45,13 @@ export function ShopProductCard(props: {
       sx={{
         height: '100%',
         overflow: 'hidden',
-        borderRadius: SHOP_V2.radius,
-        borderColor: 'divider',
+        borderRadius: '14px',
+        bgcolor: 'background.paper',
+        border: '1px solid rgba(15, 23, 42, 0.1)',
         transition: 'transform 0.15s ease, box-shadow 0.15s ease',
         '&:hover': {
           transform: 'translateY(-2px)',
-          boxShadow: '0 12px 32px rgba(15, 23, 42, 0.1)',
+          boxShadow: '0 12px 32px rgba(15, 23, 42, 0.08)',
         },
       }}
     >
@@ -87,107 +61,74 @@ export function ShopProductCard(props: {
         sx={{ height: '100%', alignItems: 'stretch', display: 'block' }}
       >
         <Box sx={{ position: 'relative', width: 1, display: 'block' }}>
-          <ProductImage imageUrl={p.imageUrl} alt={p.name} ratio="1" imageLayout="hero" frame="default" />
-          {discountPct != null ? (
-            <Chip
-              size="small"
-              label={`${discountPct}% off`}
-              sx={{
-                position: 'absolute',
-                left: 8,
-                top: 8,
-                height: 22,
-                fontSize: '0.62rem',
-                fontWeight: 800,
-                bgcolor: SHOP_V2.success,
-                color: '#fff',
-                '& .MuiChip-label': { px: 0.75 },
-              }}
-            />
-          ) : null}
-          {merchantName ? (
-            <Box
-              sx={{
-                position: 'absolute',
-                left: 8,
-                bottom: 8,
-                width: 28,
-                height: 28,
-                borderRadius: '50%',
-                bgcolor: 'background.paper',
-                border: `1px solid ${SHOP_V2.accent}`,
-                color: SHOP_V2.accent,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '0.62rem',
-                fontWeight: 800,
-                boxShadow: 1,
-              }}
-              title={merchantName}
-            >
-              {merchantInitials.slice(0, 2)}
-            </Box>
-          ) : null}
-          {stockChip}
+          <ProductImage imageUrl={heroUrl} alt={p.name} ratio="1" imageLayout="hero" frame="default" />
         </Box>
-        <CardContent sx={{ pt: 1.25, pb: 1.25, px: 1.25, '&:last-child': { pb: 1.25 } }}>
+        <CardContent
+          sx={{
+            pt: 1.5,
+            pb: 1.5,
+            px: 1.5,
+            '&:last-child': { pb: 1.5 },
+          }}
+        >
+          {badgeRow ? (
+            <Stack direction="row" flexWrap="wrap" gap={0.75} useFlexGap sx={{ mb: 1, alignItems: 'center' }}>
+              {discountPct != null ? (
+                <Chip size="small" label={`${discountPct}% off`} sx={listingDiscountChipSx} />
+              ) : null}
+              {!anyBuy ? (
+                <Chip size="small" label="Out of stock" color="error" variant="outlined" sx={{ height: 22, fontSize: '0.62rem', fontWeight: 700 }} />
+              ) : lowStock ? (
+                <Chip size="small" label={`${stockTotal} left`} color="warning" variant="outlined" sx={{ height: 22, fontSize: '0.62rem', fontWeight: 700 }} />
+              ) : null}
+            </Stack>
+          ) : null}
           <Typography
             fontWeight={800}
             sx={{
-              fontSize: '0.78rem',
-              lineHeight: 1.25,
-              minHeight: 32,
+              fontSize: { xs: '0.875rem', sm: '0.82rem' },
+              lineHeight: 1.35,
+              minHeight: { xs: 38, sm: 34 },
               display: '-webkit-box',
               WebkitLineClamp: 2,
               WebkitBoxOrient: 'vertical',
               overflow: 'hidden',
-              mb: 0.75,
+              color: 'text.primary',
+              mb: merchantLine ? 0.35 : 0.5,
             }}
           >
             {p.name}
           </Typography>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} sx={{ minHeight: 40 }}>
+          {merchantLine ? (
             <Typography
               variant="body2"
-              component="span"
-              title={priceLabel}
+              noWrap
+              title={merchantLine}
               sx={{
-                fontSize: '0.84rem',
-                fontWeight: 800,
-                color: SHOP_V2.accent,
-                flex: 1,
-                minWidth: 0,
-                lineHeight: 1.2,
-                pr: 0.5,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                fontSize: '0.8125rem',
+                color: 'text.secondary',
+                lineHeight: 1.35,
+                mb: 0.75,
               }}
             >
-              {priceLabel}
+              {merchantLine}
             </Typography>
-            {firstVariant ? (
-              <IconButton
-                aria-label="Add to cart"
-                size="small"
-                onClick={(e) => void handleAdd(e)}
-                disabled={adding}
-                sx={{
-                  flexShrink: 0,
-                  alignSelf: 'flex-end',
-                  bgcolor: SHOP_V2.accent,
-                  color: '#fff',
-                  width: 38,
-                  height: 38,
-                  boxShadow: '0 4px 14px rgba(93, 45, 145, 0.32)',
-                  '&:hover': { bgcolor: SHOP_V2.accent, opacity: 0.92 },
-                }}
-              >
-                <AddIcon sx={{ fontSize: 22 }} />
-              </IconButton>
-            ) : null}
-          </Stack>
+          ) : null}
+          <Typography
+            variant="body2"
+            component="div"
+            title={priceLabel}
+            sx={{
+              fontSize: { xs: '0.95rem', sm: '0.9rem' },
+              fontWeight: 800,
+              color: 'text.primary',
+              lineHeight: 1.3,
+              wordBreak: 'break-word',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {priceLabel}
+          </Typography>
         </CardContent>
       </CardActionArea>
     </Card>

@@ -1,10 +1,17 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined'
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined'
-import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined'
+import ElectricBoltOutlinedIcon from '@mui/icons-material/ElectricBoltOutlined'
+import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
+import {
+  SERVICES_HUB_TAB_LABELS,
+  servicesCompactNavSlot,
+  servicesEssentialsHref,
+  servicesInsuranceHref,
+} from '../../lib/servicesHubTabs'
 import { HEADER_TEXT_MUTED, HEADER_TEXT_PRIMARY } from '../../theme/branding'
 
 function storeHref(pathPrefix: string, segment: string): string {
@@ -47,8 +54,16 @@ const navSx = {
   },
 }
 
+const serviceNavActiveSx = {
+  color: HEADER_TEXT_PRIMARY,
+  bgcolor: 'rgba(255,255,255,0.06)',
+  '& .MuiButton-startIcon': { opacity: 1 },
+} as const
+
 export function StoreDesktopNav(props: { centered?: boolean; pathPrefix?: string }) {
   const { centered, pathPrefix = '' } = props
+  const { pathname } = useLocation()
+  const servicesSlot = servicesCompactNavSlot(pathname)
   const home = storeHref(pathPrefix, '')
   return (
     <Box
@@ -71,8 +86,21 @@ export function StoreDesktopNav(props: { centered?: boolean; pathPrefix?: string
       <Button component={NavLink} to={storeHref(pathPrefix, 'wallet')} sx={navSx} startIcon={<AccountBalanceWalletOutlinedIcon sx={{ fontSize: 18 }} />}>
         Wallet
       </Button>
-      <Button component={NavLink} to={storeHref(pathPrefix, 'services')} sx={navSx} startIcon={<AppsOutlinedIcon sx={{ fontSize: 18 }} />}>
-        Services
+      <Button
+        component={NavLink}
+        to={servicesEssentialsHref(pathPrefix)}
+        sx={{ ...navSx, ...(servicesSlot === 4 ? serviceNavActiveSx : {}) }}
+        startIcon={<ElectricBoltOutlinedIcon sx={{ fontSize: 18 }} />}
+      >
+        {SERVICES_HUB_TAB_LABELS.essentials}
+      </Button>
+      <Button
+        component={NavLink}
+        to={servicesInsuranceHref(pathPrefix)}
+        sx={{ ...navSx, ...(servicesSlot === 5 ? serviceNavActiveSx : {}) }}
+        startIcon={<PolicyOutlinedIcon sx={{ fontSize: 18 }} />}
+      >
+        {SERVICES_HUB_TAB_LABELS.insurance}
       </Button>
     </Box>
   )

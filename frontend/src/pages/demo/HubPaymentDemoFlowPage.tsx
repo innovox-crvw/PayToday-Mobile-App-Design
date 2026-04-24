@@ -29,7 +29,10 @@ import { getPaymentHubTileBySlug, SERVICES_HUB_TILES } from '../../data/hubNavig
 import { tileToPaymentCategory } from '../../data/paymentsCatalog'
 import { useHubNavigationTiles } from '../../hooks/useHubNavigationTiles'
 import { apiUrl, readApiError } from '../../lib/apiOrigin'
+import { NOTIFICATIONS_CHANGED_EVENT } from '../../lib/notificationEvents'
+import { servicesDemoFlowBackHref } from '../../lib/servicesHubTabs'
 import type { HubPaymentCategoryItemDto, HubPaymentCategoryItemsResponse } from '../../types/paymentCategoryItems'
+import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
 
 type Step = 'review' | 'amount' | 'method' | 'pin' | 'processing' | 'done'
 
@@ -48,7 +51,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 const RAILS: { value: PayRail; label: string; hint: string }[] = [
-  { value: 'wallet', label: 'PayToday Wallet', hint: 'Instant debit from wallet balance (simulated).' },
+  { value: 'wallet', label: APP_WALLET_DISPLAY_NAME, hint: 'Instant debit from wallet balance (simulated).' },
   { value: 'card', label: 'Card ·••• 5145', hint: 'Hosted card + 3-D Secure style wait (simulated).' },
   { value: 'ussd', label: 'USSD', hint: 'PIN prompt on handset (simulated delay).' },
   { value: 'bank_eft', label: 'Bank EFT', hint: 'Reference allocation + instruction (simulated instant).' },
@@ -131,7 +134,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
   const notificationsHref = pathPrefix ? `${pathPrefix}/notifications` : '/notifications'
 
   const backHref = useMemo(() => {
-    if (variant === 'services') return pathPrefix ? `${pathPrefix}/services` : '/services'
+    if (variant === 'services') return servicesDemoFlowBackHref(pathPrefix)
     return pathPrefix ? `${pathPrefix}/payments/${encodeURIComponent(categoryId)}` : `/payments/${encodeURIComponent(categoryId)}`
   }, [variant, pathPrefix, categoryId])
 
@@ -304,7 +307,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
       append('Validating payee, amount, and payment rail…')
       await sleep(400)
 
-      append('Handing off to PayToday payment session (simulated gateway redirect)…')
+      append(`Handing off to ${APP_DISPLAY_NAME} payment session (simulated gateway redirect)…`)
       await sleep(350)
 
       let correlationId = ''
@@ -337,6 +340,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
           } else {
             const j = (await res.json()) as { correlationId?: string }
             correlationId = (j.correlationId ?? '').trim()
+            window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT))
             if (correlationId) {
               append('Recorded pending payment notification (same pipeline as store checkout).')
             } else {
@@ -366,7 +370,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
         await sleep(700)
       }
 
-      append('Confirming settlement with PayToday core (simulated)…')
+      append(`Confirming settlement with ${APP_DISPLAY_NAME} core (simulated)…`)
       await sleep(400)
 
       if (s === 'in' && correlationId) {
@@ -413,6 +417,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             walletOutcomeSet = true
             if (res.ok) {
               append('Wallet debited. Payment completed notification queued (email and in-app when the worker runs).')
+              window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT))
               setPaymentOk(true)
             } else {
               setPaymentOk(false)
@@ -432,6 +437,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
             append(`Completed notification: ${t}`)
           } else {
             append('Payment completed notification queued. The background worker delivers email and in-app messages.')
+            window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT))
           }
         } catch (e) {
           append(`Complete step failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -729,7 +735,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                 ) : null}
                 {session === 'in' && walletBalanceKnown && walletBalanceCents != null ? (
                   <Alert severity="info" sx={{ py: 0.5 }}>
-                    PayToday Wallet balance: <strong>{formatNadFromCents(walletBalanceCents)}</strong>
+                    {APP_WALLET_DISPLAY_NAME} balance: <strong>{formatNadFromCents(walletBalanceCents)}</strong>
                   </Alert>
                 ) : null}
                 <Stack direction="row" flexWrap="wrap" gap={1}>
@@ -822,7 +828,9 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
                         walletBalanceCents != null &&
                         amountCents > walletBalanceCents
                       ) {
-                        setLoadError('Amount exceeds your PayToday Wallet balance. Choose card, USSD, EFT, or a lower amount.')
+                        setLoadError(
+                          `Amount exceeds your ${APP_WALLET_DISPLAY_NAME} balance. Choose card, USSD, EFT, or a lower amount.`,
+                        )
                         return
                       }
                       setLoadError(null)

@@ -35,10 +35,10 @@ import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { formatNad, WALLET_BALANCE_CENTS } from '../../data/walletMock'
 import { useAuthMe } from '../../hooks/useAuthMe'
 import { readApiError } from '../../lib/apiOrigin'
-import { CHROME_SHADOW_DEEP, WALLET_BALANCE_GRADIENT } from '../../theme/branding'
+import { APP_WALLET_DISPLAY_NAME, CHROME_SHADOW_DEEP, WALLET_BALANCE_GRADIENT } from '../../theme/branding'
 
 const menu = [
-  { to: 'paytoday', label: 'PayToday Wallet', icon: <AccountBalanceWalletIcon /> },
+  { to: 'paytoday', label: APP_WALLET_DISPLAY_NAME, icon: <AccountBalanceWalletIcon /> },
   { to: 'cards', label: 'My Cards', icon: <CreditCardIcon /> },
   { to: 'bank', label: 'My Bank Details', icon: <AccountBalanceIcon /> },
   { to: 'transactions', label: 'My Transactions', icon: <ReceiptLongIcon /> },
@@ -131,7 +131,14 @@ export function WalletHomePage() {
   }
 
   return (
-    <Stack spacing={{ xs: 2.5, md: 3.5 }} sx={{ maxWidth: { xs: 560, md: 720 }, mx: 'auto', pb: { xs: 2, md: 4 } }}>
+    <Stack
+      spacing={{ xs: 2.5, md: 3.5 }}
+      sx={{
+        maxWidth: { xs: 560, md: 720 },
+        mx: 'auto',
+        pb: { xs: 4, md: 4 },
+      }}
+    >
       <PageHeader
         overline="Wallet"
         title="Overview"
@@ -191,7 +198,7 @@ export function WalletHomePage() {
           <Typography variant="caption" sx={{ opacity: 0.85, textAlign: { xs: 'center', md: 'left' } }}>
             {user
               ? walletDemoAvailable
-                ? 'Your account wallet: add funds below, then pay with PayToday Wallet from the store’s bill-pay hub or Vouchers.'
+                ? `Your account wallet: add funds below, then pay with ${APP_WALLET_DISPLAY_NAME} from the store’s bill-pay hub or Vouchers.`
                 : 'Wallet funding is not available on this database. Contact your administrator, then refresh.'
               : 'Sample balance for guests. Sign in to fund and spend from your wallet.'}
           </Typography>

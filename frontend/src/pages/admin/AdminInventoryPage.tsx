@@ -17,6 +17,7 @@ import {
 } from '@mui/material'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
+import { useAuthMe } from '../../hooks/useAuthMe'
 
 const POLL_MS = 12_000
 
@@ -49,6 +50,7 @@ type MovementRow = {
 type LowRow = { sku: string; product_name: string; quantity: number; low_stock_threshold: number | null }
 
 export function AdminInventoryPage() {
+  const { user: authUser } = useAuthMe()
   const [rows, setRows] = useState<InvRow[]>([])
   const [movements, setMovements] = useState<MovementRow[]>([])
   const [lowStock, setLowStock] = useState<LowRow[]>([])
@@ -167,6 +169,12 @@ export function AdminInventoryPage() {
         </Typography>
       )}
       {err && <Alert severity="warning">{err}</Alert>}
+      {(authUser?.role === 'admin' || authUser?.role === 'fulfillment') && (authUser.merchants?.length ?? 0) > 0 ? (
+        <Alert severity="info">
+          Stock levels, low-stock alerts, and recent movements are limited to your linked store(s):{' '}
+          <strong>{authUser.merchants!.map((m) => m.name).join(', ')}</strong>. The storefront still aggregates all merchants.
+        </Alert>
+      ) : null}
 
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Typography variant="subtitle1" fontWeight={700} gutterBottom>

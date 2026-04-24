@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Alert,
   Box,
   Button,
   Card,
   CardContent,
-  CircularProgress,
   FormControl,
   FormControlLabel,
   FormLabel,
   Link,
-  List,
-  ListItem,
-  ListItemText,
   MenuItem,
   Radio,
   RadioGroup,
@@ -21,15 +17,16 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined'
 import NotificationsActiveOutlinedIcon from '@mui/icons-material/NotificationsActiveOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
 import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
-import { apiUrl, readApiError } from '../../lib/apiOrigin'
+import { apiUrl } from '../../lib/apiOrigin'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
 import { WalletSubheader } from '../wallet/WalletSubheader'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import {
@@ -43,18 +40,12 @@ import {
   writeUiLanguage,
 } from '../../lib/appPreferences'
 
-type HealthDatabase = 'off' | 'connected' | 'unreachable'
-
-type HealthBody = {
-  ok: true
-  service: string
-  database: HealthDatabase
-  databaseError?: string
-  sqlHints?: string[]
-}
-
 function isNotifyDeliveryPreference(v: string): v is NotifyDeliveryPreference {
   return v === 'email' || v === 'in_app' || v === 'both' || v === 'device'
+}
+
+function isServerNotifyChannel(v: string): v is 'email' | 'in_app' | 'both' {
+  return v === 'email' || v === 'in_app' || v === 'both'
 }
 
 export function ProfileSettingsPage() {
@@ -65,14 +56,11 @@ export function ProfileSettingsPage() {
 
   const [notifyChannel, setNotifyChannel] = useState<NotifyDeliveryPreference>(() => readNotifyDeliveryChannel())
   const [notifyMsg, setNotifyMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
+  const [notifySaving, setNotifySaving] = useState(false)
 
   const [uiLanguage, setUiLanguage] = useState('en')
   const [reducedMotion, setReducedMotion] = useState(false)
   const [prefsMsg, setPrefsMsg] = useState<string | null>(null)
-
-  const [healthLoading, setHealthLoading] = useState(false)
-  const [healthError, setHealthError] = useState<string | null>(null)
-  const [health, setHealth] = useState<HealthBody | null>(null)
 
   const [publicCfg, setPublicCfg] = useState<{
     publicStoreUrl?: string
@@ -81,8 +69,19 @@ export function ProfileSettingsPage() {
   } | null>(null)
 
   useEffect(() => {
+    if (authLoading) return
+    if (user?.notificationChannel && isServerNotifyChannel(user.notificationChannel)) {
+      const ch = user.notificationChannel as NotifyDeliveryPreference
+      setNotifyChannel(ch)
+      writeNotifyDeliveryChannel(ch)
+      return
+    }
+    if (!user) {
+      setNotifyChannel(readNotifyDeliveryChannel())
+      return
+    }
     setNotifyChannel(readNotifyDeliveryChannel())
-  }, [])
+  }, [authLoading, user])
 
   useEffect(() => {
     setUiLanguage(readUiLanguage() || 'en')
@@ -106,34 +105,40 @@ export function ProfileSettingsPage() {
     })()
   }, [])
 
-  const testDatabase = useCallback(async () => {
-    setHealthLoading(true)
-    setHealthError(null)
-    setHealth(null)
-    try {
-      const res = await fetch(apiUrl('/api/health'))
-      if (!res.ok) {
-        setHealthError(await readApiError(res))
-        return
-      }
-      const body = await readResponseJson<HealthBody>(res)
-      if (body?.ok !== true || !body.database) {
-        setHealthError('Unexpected response from server.')
-        return
-      }
-      setHealth(body)
-    } catch (e) {
-      setHealthError(e instanceof Error ? e.message : 'Request failed.')
-    } finally {
-      setHealthLoading(false)
-    }
-  }, [])
-
-  function persistNotifyChannel(next: NotifyDeliveryPreference) {
+  async function persistNotifyChannel(next: NotifyDeliveryPreference) {
+    setNotifyMsg(null)
     setNotifyChannel(next)
     writeNotifyDeliveryChannel(next)
-    setNotifyMsg({ text: 'Channel preference saved on this device.', severity: 'success' })
-    window.setTimeout(() => setNotifyMsg(null), 2800)
+    const forServer: 'email' | 'in_app' | 'both' = next === 'device' ? 'in_app' : next
+
+    if (!user) {
+      setNotifyMsg({ text: 'Preference saved on this device. Sign in to sync it to your account.', severity: 'success' })
+      window.setTimeout(() => setNotifyMsg(null), 3200)
+      return
+    }
+
+    setNotifySaving(true)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notificationChannel: forServer }),
+      })
+      const data = await readResponseJson<{ ok?: boolean; error?: string }>(res)
+      if (!res.ok) {
+        setNotifyMsg({ text: data.error ?? 'Could not save notification channel', severity: 'error' })
+        return
+      }
+      setNotifyMsg({ text: 'Notification channel saved to your account.', severity: 'success' })
+      window.setTimeout(() => setNotifyMsg(null), 2800)
+      await refreshAuth()
+      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+    } catch (e) {
+      setNotifyMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
+    } finally {
+      setNotifySaving(false)
+    }
   }
 
   function persistUiLanguage(code: string) {
@@ -159,16 +164,15 @@ export function ProfileSettingsPage() {
       window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
       await refreshAuth()
     } catch {
-      /* still refresh */
       await refreshAuth()
     }
   }
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 560, mx: 'auto', pb: 3 }}>
+    <ProfilePageShell>
       <WalletSubheader title="Settings" />
       <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-        Control how we reach you, how the app feels on this device, and run quick checks when something looks wrong.
+        Control how we reach you, how the app feels on this device, and quick links when something looks wrong.
       </Typography>
 
       {!authLoading && !user ? (
@@ -199,21 +203,22 @@ export function ProfileSettingsPage() {
               in the header to read them.
             </Typography>
 
-            <FormControl disabled={authLoading}>
+            <FormControl disabled={authLoading || notifySaving}>
               <FormLabel id="notify-channel-label" sx={{ fontWeight: 700, color: 'text.primary', mb: 0.5 }}>
                 Channel
               </FormLabel>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-                How you prefer to be notified on <strong>this device</strong>. Saved in your browser only (not synced to
-                your PayToday account). Server emails for checkout and payments may still be sent for legal and receipt
-                reasons; this controls how we surface alerts in the app UI.
+                {user
+                  ? `Saved to your ${APP_DISPLAY_NAME} account (email, in-app feed, or both).`
+                  : 'Saved on this device only until you sign in.'}{' '}
+                Receipt emails may still send where required.
               </Typography>
               <RadioGroup
                 aria-labelledby="notify-channel-label"
                 value={notifyChannel}
                 onChange={(e) => {
                   const v = e.target.value
-                  if (isNotifyDeliveryPreference(v)) persistNotifyChannel(v)
+                  if (isNotifyDeliveryPreference(v)) void persistNotifyChannel(v)
                 }}
               >
                 <FormControlLabel value="email" control={<Radio />} label="Email only" />
@@ -252,16 +257,16 @@ export function ProfileSettingsPage() {
               </Typography>
             </Stack>
             <Typography variant="body2" color="text.secondary">
-              These options are saved in your browser only (they follow this device, not your PayToday account).
+              Saved in this browser only.
             </Typography>
 
             <TextField
               select
-              label="Interface language"
+              label="Language"
               value={uiLanguage}
               onChange={(e) => persistUiLanguage(e.target.value)}
               fullWidth
-              helperText="Sets the HTML lang attribute for accessibility. Full translations are not wired yet."
+              helperText="Sets page language (labels). Full translations coming later."
             >
               <MenuItem value="en">English (default)</MenuItem>
               <MenuItem value="en-ZA">English (South Africa)</MenuItem>
@@ -305,7 +310,7 @@ export function ProfileSettingsPage() {
               </Typography>
             </Stack>
             <Typography variant="body2" color="text.secondary">
-              Sign out on this browser. Your saved device settings above stay until you clear site data.
+              Sign out here. Device settings stay until you clear site data.
             </Typography>
             <Button
               variant="outlined"
@@ -352,7 +357,7 @@ export function ProfileSettingsPage() {
               )}
               {publicCfg?.paytodayForgotPasswordUrl ? (
                 <Typography variant="body2">
-                  <strong>Forgot password (PayToday):</strong>{' '}
+                  <strong>Forgot password ({APP_DISPLAY_NAME}):</strong>{' '}
                   <Link href={publicCfg.paytodayForgotPasswordUrl} target="_blank" rel="noopener noreferrer">
                     Reset link
                   </Link>
@@ -362,81 +367,6 @@ export function ProfileSettingsPage() {
           </Stack>
         </CardContent>
       </Card>
-
-      <Card variant="outlined" sx={{ borderRadius: 3 }}>
-        <CardContent>
-          <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <StorageOutlinedIcon color="primary" />
-              <Typography variant="subtitle1" fontWeight={800}>
-                Diagnostics
-              </Typography>
-            </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Checks whether the PayToday API can reach Microsoft SQL Server ({' '}
-              <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.85em' }}>
-                GET /api/health
-              </Box>
-              ).
-            </Typography>
-            <Button
-              variant="contained"
-              onClick={testDatabase}
-              disabled={healthLoading}
-              sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
-              startIcon={healthLoading ? <CircularProgress size={18} color="inherit" /> : undefined}
-            >
-              {healthLoading ? 'Checking…' : 'Test database connection'}
-            </Button>
-
-            {healthError ? <Alert severity="error">{healthError}</Alert> : null}
-
-            {health ? (
-              <Stack spacing={1.5}>
-                {health.database === 'connected' ? (
-                  <Alert severity="success">
-                    <strong>MS SQL is connected.</strong> The API is using the database.
-                  </Alert>
-                ) : null}
-                {health.database === 'off' ? (
-                  <Alert severity="info">
-                    <strong>SQL is not configured</strong> (no connection string in{' '}
-                    <Box component="span" sx={{ fontFamily: 'monospace' }}>
-                      .env
-                    </Box>
-                    ). The store runs on in-memory sample data.
-                  </Alert>
-                ) : null}
-                {health.database === 'unreachable' ? (
-                  <Alert severity="warning">
-                    <strong>SQL is configured but the API cannot connect.</strong>
-                    {health.databaseError ? (
-                      <Typography variant="body2" component="span" display="block" sx={{ mt: 1, fontFamily: 'monospace' }}>
-                        {health.databaseError}
-                      </Typography>
-                    ) : null}
-                  </Alert>
-                ) : null}
-
-                {health.sqlHints?.length ? (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary" fontWeight={700} display="block" sx={{ mb: 0.5 }}>
-                      Hints (development)
-                    </Typography>
-                    <List dense disablePadding sx={{ bgcolor: 'action.hover', borderRadius: 2, px: 1, py: 0.5 }}>
-                      {health.sqlHints.map((hint) => (
-                        <ListItem key={hint} disableGutters sx={{ py: 0.5 }}>
-                          <ListItemText primary={hint} primaryTypographyProps={{ variant: 'body2', color: 'text.secondary' }} />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </Box>
-                ) : null}
-              </Stack>
-            ) : null}
-          </Stack>
-        </CardContent>
-      </Card>
-    </Stack>
+    </ProfilePageShell>
   )
 }

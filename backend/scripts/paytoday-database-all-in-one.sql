@@ -4,19 +4,19 @@
 ================================================================================
   What this file does:
     1) Creates database [paytoday] if missing (comment out if you use an existing DB).
-    2) Drops and recreates core schema + seed data (same as paytoday-full-setup.sql), including
-       dbo.notification_outbox, dbo.user_notifications, and two seed outbox rows for hub demo templates.
-    3) Applies incremental migrations 002–009 (idempotent where objects already exist).
+    2) Drops and recreates core schema + seed data (same as paytoday-full-setup.sql).
 
-  How to run:
-    • SSMS: open this file, then Execute (F5).
-    • sqlcmd: sqlcmd -S YOURSERVER -E -i paytoday-database-all-in-one.sql
+  After SSMS/sqlcmd runs this file, apply newer schema from the repo with:
+    npm run db:migrate
 
   Demo login after seed (local bcrypt auth):
     demo@paytoday.local  /  PayToday123!
 
-  After this script, "npm run db:migrate" will skip versions 001–009 when the
-  schema_migrations rows at the end are present.
+  Then run from the repo (with .env / SQL_CONNECTION_STRING):
+
+    npm run db:migrate
+
+  Do not pre-fill dbo.schema_migrations here — migrate.ts must apply incremental migrations.
 
   WARNING: The first section DROPS existing PayToday tables in [paytoday].
 ================================================================================
@@ -64,6 +64,8 @@ IF OBJECT_ID(N'dbo.product_images', N'U') IS NOT NULL DROP TABLE dbo.product_ima
 IF OBJECT_ID(N'dbo.product_variant_options', N'U') IS NOT NULL DROP TABLE dbo.product_variant_options;
 IF OBJECT_ID(N'dbo.product_variants', N'U') IS NOT NULL DROP TABLE dbo.product_variants;
 IF OBJECT_ID(N'dbo.products', N'U') IS NOT NULL DROP TABLE dbo.products;
+IF OBJECT_ID(N'dbo.user_businesses', N'U') IS NOT NULL DROP TABLE dbo.user_businesses;
+IF OBJECT_ID(N'dbo.businesses', N'U') IS NOT NULL DROP TABLE dbo.businesses;
 IF OBJECT_ID(N'dbo.categories', N'U') IS NOT NULL DROP TABLE dbo.categories;
 IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL DROP TABLE dbo.hub_navigation_tiles;
 IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL DROP TABLE dbo.hub_payment_category_items;
@@ -94,9 +96,28 @@ CREATE TABLE dbo.categories (
   is_active BIT NOT NULL CONSTRAINT DF_categories_active DEFAULT (1)
 );
 
+CREATE TABLE dbo.businesses (
+  id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_businesses PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+  name NVARCHAR(300) NOT NULL,
+  registration_number NVARCHAR(120) NULL,
+  vat_number NVARCHAR(80) NULL,
+  email NVARCHAR(320) NULL,
+  phone NVARCHAR(40) NULL,
+  address NVARCHAR(500) NULL,
+  country NVARCHAR(120) NULL,
+  is_active BIT NOT NULL CONSTRAINT DF_businesses_active DEFAULT (1),
+  created_at DATETIME2 NOT NULL CONSTRAINT DF_businesses_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2 NULL
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX UQ_businesses_registration_number
+  ON dbo.businesses(registration_number)
+  WHERE registration_number IS NOT NULL;
+
 CREATE TABLE dbo.products (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_products PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
   category_id UNIQUEIDENTIFIER NULL CONSTRAINT FK_products_category REFERENCES dbo.categories(id),
+  business_id UNIQUEIDENTIFIER NULL CONSTRAINT FK_products_business REFERENCES dbo.businesses(id),
   slug NVARCHAR(160) NOT NULL CONSTRAINT UQ_products_slug UNIQUE,
   name NVARCHAR(300) NOT NULL,
   description NVARCHAR(MAX) NULL,
@@ -215,6 +236,9 @@ CREATE TABLE dbo.users (
   password_hash NVARCHAR(500) NULL,
   keycloak_sub NVARCHAR(255) NULL,
   full_name NVARCHAR(200) NULL,
+  first_name NVARCHAR(120) NULL,
+  last_name NVARCHAR(120) NULL,
+  phone NVARCHAR(40) NULL,
   role NVARCHAR(32) NOT NULL,
   notification_channel NVARCHAR(20) NOT NULL CONSTRAINT DF_users_notify DEFAULT ('email'),
   wallet_demo_balance_cents BIGINT NOT NULL CONSTRAINT DF_users_wallet_demo DEFAULT (0),
@@ -223,6 +247,7 @@ CREATE TABLE dbo.users (
   email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT (1),
   email_verification_token_hash VARBINARY(32) NULL,
   email_verification_expires_at DATETIME2 NULL,
+  is_active BIT NOT NULL CONSTRAINT DF_users_is_active DEFAULT (1),
   created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2 NULL
 );
@@ -234,6 +259,22 @@ IF NOT EXISTS (
 BEGIN
   CREATE UNIQUE INDEX UQ_users_keycloak_sub ON dbo.users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
 END;
+
+CREATE TABLE dbo.user_businesses (
+  id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_user_businesses PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+  user_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_user_businesses_user REFERENCES dbo.users(id) ON DELETE CASCADE,
+  business_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_user_businesses_business REFERENCES dbo.businesses(id) ON DELETE CASCADE,
+  role NVARCHAR(64) NOT NULL CONSTRAINT DF_user_businesses_role DEFAULT (N'member'),
+  is_primary BIT NOT NULL CONSTRAINT DF_user_businesses_primary DEFAULT (0),
+  joined_at DATETIME2 NOT NULL CONSTRAINT DF_user_businesses_joined DEFAULT (SYSUTCDATETIME()),
+  created_at DATETIME2 NOT NULL CONSTRAINT DF_user_businesses_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2 NULL,
+  CONSTRAINT UQ_user_businesses_user_business UNIQUE (user_id, business_id)
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX UQ_user_businesses_one_primary
+  ON dbo.user_businesses(user_id)
+  WHERE is_primary = 1;
 
 CREATE TABLE dbo.user_refresh_tokens (
   id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_refresh PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
@@ -515,6 +556,7 @@ DECLARE @locWind UNIQUEIDENTIFIER = '60000000-0000-0000-0000-000000000001';
 DECLARE @locKat UNIQUEIDENTIFIER = '60000000-0000-0000-0000-000000000002';
 DECLARE @boxW1 UNIQUEIDENTIFIER = '61000000-0000-0000-0000-000000000001';
 DECLARE @boxK1 UNIQUEIDENTIFIER = '61000000-0000-0000-0000-000000000002';
+DECLARE @defaultBusinessId UNIQUEIDENTIFIER = N'E0000000-0000-4000-8000-000000000001';
 
 INSERT INTO dbo.warehouses (id, code, name) VALUES (@wh, N'MAIN', N'Main warehouse');
 
@@ -523,10 +565,13 @@ INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active) VA
   (@catEl, N'electronics', N'Electronics', NULL, 20, 1),
   (@catHome, N'home', N'Home & kitchen', NULL, 30, 1);
 
-INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name) VALUES
-  (@pMilk, @catGro, N'full-cream-milk', N'Spar full cream milk 1L', N'Fresh dairy, 1 litre — from Spar.', 1, N'spar', N'Spar'),
-  (@pBread, @catGro, N'brown-bread', N'Spar brown bread loaf', N'Baked daily — from Spar.', 1, N'spar', N'Spar'),
-  (@pPhone, @catEl, N'budget-smartphone', N'Budget smartphone', N'Dual SIM, essentials only.', 1, NULL, NULL);
+INSERT INTO dbo.businesses (id, name, registration_number, vat_number, email, phone, address, country, is_active)
+VALUES (@defaultBusinessId, N'Default store', NULL, NULL, NULL, NULL, NULL, NULL, 1);
+
+INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name) VALUES
+  (@pMilk, @catGro, @defaultBusinessId, N'full-cream-milk', N'Spar full cream milk 1L', N'Fresh dairy, 1 litre — from Spar.', 1, N'spar', N'Spar'),
+  (@pBread, @catGro, @defaultBusinessId, N'brown-bread', N'Spar brown bread loaf', N'Baked daily — from Spar.', 1, N'spar', N'Spar'),
+  (@pPhone, @catEl, @defaultBusinessId, N'budget-smartphone', N'Budget smartphone', N'Dual SIM, essentials only.', 1, NULL, NULL);
 
 INSERT INTO dbo.product_variants (id, product_id, sku, name, price_cents, currency, low_stock_threshold) VALUES
   (@vMilk, @pMilk, N'MILK-1L-FC', N'1 Litre', 2899, N'NAD', 5),
@@ -550,10 +595,10 @@ INSERT INTO dbo.users (id, email, password_hash, full_name, role, notification_c
 VALUES (
   @userDemo,
   N'demo@paytoday.local',
-  N'$2b$10$yHL1enO0hQsVLFZx/1EPsO4D5z4if5.DDx2YR/TKCw5XvmGn4un62',
+  N'$2b$10$.5RgDox23EnGCv9NKp/mouLCbMM6sfFMiJqHRWr6loRLK.Lj24/te',
   N'Demo Shopper',
   N'customer',
-  N'email'
+  N'both'
 );
 
 /* App admin: existing row → role admin; otherwise seed row (same bcrypt as demo: PayToday123!) — change password after first login. */
@@ -563,10 +608,10 @@ BEGIN
   VALUES (
     '55000000-0000-0000-0000-000000000001',
     N'louis.viljoen@crvw.com.na',
-    N'$2b$10$yHL1enO0hQsVLFZx/1EPsO4D5z4if5.DDx2YR/TKCw5XvmGn4un62',
+    N'$2b$10$.5RgDox23EnGCv9NKp/mouLCbMM6sfFMiJqHRWr6loRLK.Lj24/te',
     N'Louis Viljoen',
     N'admin',
-    N'email'
+    N'both'
   );
 END
 ELSE
@@ -575,6 +620,20 @@ BEGIN
   SET role = N'admin', updated_at = SYSUTCDATETIME()
   WHERE LOWER(LTRIM(RTRIM(email))) = LOWER(LTRIM(RTRIM(N'louis.viljoen@crvw.com.na')));
 END;
+
+INSERT INTO dbo.user_businesses (id, user_id, business_id, role, is_primary, joined_at, created_at)
+SELECT NEWID(), @userDemo, @defaultBusinessId, N'member', 0, SYSUTCDATETIME(), SYSUTCDATETIME()
+WHERE NOT EXISTS (
+  SELECT 1 FROM dbo.user_businesses ub WHERE ub.user_id = @userDemo AND ub.business_id = @defaultBusinessId
+);
+
+INSERT INTO dbo.user_businesses (id, user_id, business_id, role, is_primary, joined_at, created_at)
+SELECT NEWID(), u.id, @defaultBusinessId, N'owner', 1, SYSUTCDATETIME(), SYSUTCDATETIME()
+FROM dbo.users u
+WHERE u.role IN (N'admin', N'ops', N'fulfillment')
+  AND NOT EXISTS (
+    SELECT 1 FROM dbo.user_businesses ub WHERE ub.user_id = u.id AND ub.business_id = @defaultBusinessId
+  );
 
 INSERT INTO dbo.addresses (id, user_id, label, line1, line2, city, region, postal_code, country, is_default)
 VALUES (
@@ -717,15 +776,17 @@ DECLARE @p11 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000011';
 DECLARE @v11 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000012';
 DECLARE @p12 UNIQUEIDENTIFIER = '7F200001-0000-4000-8000-000000000012';
 DECLARE @v12 UNIQUEIDENTIFIER = '7F300001-0000-4000-8000-000000000013';
+DECLARE @defaultBusinessId UNIQUEIDENTIFIER = N'E0000000-0000-4000-8000-000000000001';
 
 IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'groceries')
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'sparkling-water-500ml')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p1,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'sparkling-water-500ml',
       N'Sparkling mineral water 500 ml',
       N'Chilled sparkling water — great with meals.',
@@ -743,10 +804,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'cola-2l-bottle')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p2,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'cola-2l-bottle',
       N'Cola soft drink 2 L',
       N'Classic cola — share size.',
@@ -764,10 +826,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'long-life-milk-1l')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p3,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'long-life-milk-1l',
       N'Long life milk 1 L',
       N'UHT dairy — pantry staple.',
@@ -785,10 +848,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'white-rice-2kg')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p4,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'white-rice-2kg',
       N'White rice 2 kg',
       N'Parboiled rice — family pack.',
@@ -806,10 +870,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'potato-chips-150g')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p5,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'potato-chips-150g',
       N'Potato chips salted 150 g',
       N'Crunchy snack — party size.',
@@ -827,10 +892,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'apples-1-5kg-bag')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p6,
       (SELECT id FROM dbo.categories WHERE slug = N'groceries'),
+      @defaultBusinessId,
       N'apples-1-5kg-bag',
       N'Apples 1.5 kg bag',
       N'Crisp red apples — sourced locally when available.',
@@ -851,10 +917,11 @@ IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'electronics')
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'usb-c-cable-2m')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p7,
       (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      @defaultBusinessId,
       N'usb-c-cable-2m',
       N'USB-C fast charge cable',
       N'Braided cable for phones and laptops — 60 W rated.',
@@ -876,10 +943,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'bluetooth-speaker-mini')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p8,
       (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      @defaultBusinessId,
       N'bluetooth-speaker-mini',
       N'Mini Bluetooth speaker',
       N'Portable 360° sound — 10 h battery.',
@@ -897,10 +965,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'aa-batteries-8-pack')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p9,
       (SELECT id FROM dbo.categories WHERE slug = N'electronics'),
+      @defaultBusinessId,
       N'aa-batteries-8-pack',
       N'AA alkaline batteries 8 pack',
       N'Long-lasting power for remotes and toys.',
@@ -921,10 +990,11 @@ IF EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'home')
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'dishwashing-liquid-750ml')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p10,
       (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      @defaultBusinessId,
       N'dishwashing-liquid-750ml',
       N'Dishwashing liquid 750 ml',
       N'Cuts grease — citrus scent.',
@@ -942,10 +1012,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'electric-kettle-1-7l')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p11,
       (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      @defaultBusinessId,
       N'electric-kettle-1-7l',
       N'Electric kettle 1.7 L',
       N'Stainless steel — auto shut-off.',
@@ -963,10 +1034,11 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM dbo.products WHERE slug = N'cotton-bath-towel')
   BEGIN
-    INSERT INTO dbo.products (id, category_id, slug, name, description, is_active, brand_slug, brand_name)
+    INSERT INTO dbo.products (id, category_id, business_id, slug, name, description, is_active, brand_slug, brand_name)
     VALUES (
       @p12,
       (SELECT id FROM dbo.categories WHERE slug = N'home'),
+      @defaultBusinessId,
       N'cotton-bath-towel',
       N'Premium cotton bath towel',
       N'Plush 600 GSM — quick dry.',
@@ -1057,28 +1129,78 @@ BEGIN
 END;
 GO
 
-/* Payments hub drill-down (GET /api/hub/payment-category-items?category=...) */
-INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active)
+/* Payments hub drill-down (GET /api/hub/payment-category-items?category=...) — richer demo data */
+INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, payment_method, sort_order, is_active)
 VALUES
   /* businesses */
-  (N'businesses', N'business', N'Okahandja Traders', NULL, 10, 1),
-  (N'businesses', N'business', N'Windhoek Fresh Market', NULL, 20, 1),
-  (N'businesses', N'business', N'Namibia Auto Parts', NULL, 30, 1),
+  (N'businesses', N'business', N'Okahandja Traders', NULL, N'Wallet · Card · EFT ref', 10, 1),
+  (N'businesses', N'business', N'Windhoek Fresh Market', NULL, N'Wallet · Tap to pay · QR', 20, 1),
+  (N'businesses', N'business', N'Namibia Auto Parts', NULL, N'Wallet · Card · invoice ref', 30, 1),
+  (N'businesses', N'business', N'Coastal Coffee Co.', NULL, N'Wallet · loyalty stamps', 40, 1),
+  (N'businesses', N'business', N'Desert Bloom Pharmacy', NULL, N'Wallet · medical aid · card', 50, 1),
+  (N'businesses', N'business', N'Katutura Hardware & Paint', NULL, N'Wallet · bulk quote ref', 60, 1),
+  (N'businesses', N'business', N'Walvis Bay Marine Supplies', NULL, N'Wallet · PO number', 70, 1),
+  (N'businesses', N'business', N'Oshakati Electronics Hub', NULL, N'Wallet · lay-by ref', 80, 1),
   /* contacts */
-  (N'contacts', N'contact', N'Anna Nghipondoka', N'AN', 10, 1),
-  (N'contacts', N'contact', N'Johan van Wyk', N'JW', 20, 1),
-  (N'contacts', N'contact', N'Lisa #Shapumba', N'LS', 30, 1),
-  /* sample billers per category */
-  (N'airtime', N'business', N'MTC Prepaid', NULL, 10, 1),
-  (N'airtime', N'business', N'TN Mobile', NULL, 20, 1),
-  (N'electricity', N'business', N'Nampower Prepaid', NULL, 10, 1),
-  (N'bills', N'business', N'Municipality — Windhoek', NULL, 10, 1),
-  (N'food', N'business', N'Local Eats Collective', NULL, 10, 1),
-  (N'fuel', N'business', N'Engen Rewards', NULL, 10, 1),
-  (N'parking', N'business', N'CBD Parking Zone A', NULL, 10, 1),
-  (N'vouchers', N'business', N'National Bookstore', NULL, 10, 1),
-  (N'stay', N'business', N'Coastal Guesthouse', NULL, 10, 1),
-  (N'services', N'business', N'PayToday Service Desk', NULL, 10, 1);
+  (N'contacts', N'contact', N'Anna Nghipondoka', N'AN', N'Wallet only · P2P', 10, 1),
+  (N'contacts', N'contact', N'Johan van Wyk', N'JW', N'Wallet · request money', 20, 1),
+  (N'contacts', N'contact', N'Lisa #Shapumba', N'LS', N'Wallet only · P2P', 30, 1),
+  (N'contacts', N'contact', N'Tomas Hamutenya', N'TH', N'Wallet · split bill', 40, 1),
+  (N'contacts', N'contact', N'Helvi Ndapandula', N'HN', N'Wallet only', 50, 1),
+  (N'contacts', N'contact', N'Petro #Kahimise', N'PK', N'Wallet · request link', 60, 1),
+  (N'contacts', N'contact', N'Chrizelle du Preez', N'CD', N'Wallet · P2P', 70, 1),
+  /* airtime */
+  (N'airtime', N'business', N'MTC Prepaid', NULL, N'Wallet · MTC app · *682#', 10, 1),
+  (N'airtime', N'business', N'TN Mobile', NULL, N'Wallet · TN voucher · USSD', 20, 1),
+  (N'airtime', N'business', N'RechargeNow Namibia', NULL, N'Wallet · MSISDN lookup', 30, 1),
+  (N'airtime', N'business', N'Corporate airtime pool', NULL, N'Wallet · company account ref', 40, 1),
+  (N'airtime', N'business', N'Tourist SIM top-up', NULL, N'Card · passport ref on file', 50, 1),
+  /* electricity */
+  (N'electricity', N'business', N'Nampower Prepaid', NULL, N'Meter · wallet · card', 10, 1),
+  (N'electricity', N'business', N'City of Windhoek prepaid', NULL, N'Meter · wallet · USSD', 20, 1),
+  (N'electricity', N'business', N'Erongo RED prepaid', NULL, N'Meter · wallet', 30, 1),
+  (N'electricity', N'business', N'Omaheke municipal prepaid', NULL, N'Meter · wallet · branch code', 40, 1),
+  /* bills */
+  (N'bills', N'business', N'City of Windhoek — rates & refuse', NULL, N'Account · wallet · ref', 10, 1),
+  (N'bills', N'business', N'MultiChoice Namibia (DStv)', NULL, N'Smartcard · wallet · card', 20, 1),
+  (N'bills', N'business', N'NamWater — municipal bulk', NULL, N'Account · wallet', 30, 1),
+  (N'bills', N'business', N'School fees — Khomas cluster', NULL, N'Learner ID · wallet', 40, 1),
+  (N'bills', N'business', N'Namibia Medical Aid (demo)', NULL, N'Member no. · wallet · card', 50, 1),
+  /* food */
+  (N'food', N'business', N'Joe''s Beerhouse — Windhoek', NULL, N'Wallet · table QR', 10, 1),
+  (N'food', N'business', N'The Stellenbosch — Klein Windhoek', NULL, N'Wallet · booking ref', 20, 1),
+  (N'food', N'business', N'Local Eats Collective', NULL, N'Wallet · rider tip', 30, 1),
+  (N'food', N'business', N'Swakopmund Jetty Restaurant', NULL, N'Wallet · split bill', 40, 1),
+  (N'food', N'business', N'Oshakati open-market vendors', NULL, N'Wallet · stall code', 50, 1),
+  /* fuel */
+  (N'fuel', N'business', N'Engen — Independence Ave', NULL, N'Rewards · wallet · card', 10, 1),
+  (N'fuel', N'business', N'Puma Energy — B1 stop', NULL, N'Fleet card · wallet', 20, 1),
+  (N'fuel', N'business', N'Shell V-Power — Hosea Kutako', NULL, N'Card · wallet', 30, 1),
+  (N'fuel', N'business', N'TotalEnergies — coastal route', NULL, N'Loyalty · wallet', 40, 1),
+  (N'fuel', N'business', N'Truck diesel — Walvis corridor', NULL, N'Fleet ref · wallet', 50, 1),
+  /* parking */
+  (N'parking', N'business', N'Grove Mall — underground P1', NULL, N'Plate · wallet · QR', 10, 1),
+  (N'parking', N'business', N'Hosea Kutako short stay', NULL, N'Ticket · wallet', 20, 1),
+  (N'parking', N'business', N'CBD Zone A — street meters', NULL, N'Bay code · wallet', 30, 1),
+  (N'parking', N'business', N'Swakopmund plaza parking', NULL, N'SMS code · wallet', 40, 1),
+  /* vouchers */
+  (N'vouchers', N'business', N'National Bookstore', NULL, N'Voucher SKU · wallet · card', 10, 1),
+  (N'vouchers', N'business', N'Pick n Pay gift cards', NULL, N'Barcode · wallet', 20, 1),
+  (N'vouchers', N'business', N'Woermann Brock — grocery voucher', NULL, N'Store ref · wallet', 30, 1),
+  (N'vouchers', N'business', N'Cinema combo — Grove', NULL, N'Showtime · wallet', 40, 1),
+  /* stay */
+  (N'stay', N'business', N'Coastal Guesthouse — Swakop', NULL, N'Booking ref · wallet · card', 10, 1),
+  (N'stay', N'business', N'Hilton Windhoek (demo)', NULL, N'Confirmation no. · wallet', 20, 1),
+  (N'stay', N'business', N'Etosha lodge partners', NULL, N'Park permit ref · wallet', 30, 1),
+  (N'stay', N'business', N'Farm stay — Khomas Hochland', NULL, N'Host code · wallet', 40, 1),
+  (N'stay', N'business', N'Airbnb-style host payout', NULL, N'Listing ID · wallet', 50, 1),
+  /* services */
+  (N'services', N'business', N'PayToday Service Desk', NULL, N'Wallet · case ref', 10, 1),
+  (N'services', N'business', N'NamPost parcel COD', NULL, N'Waybill · wallet', 20, 1),
+  (N'services', N'business', N'Courier Namibia — same day', NULL, N'Pickup code · wallet', 30, 1),
+  (N'services', N'business', N'IT support — Windhoek SME', NULL, N'Ticket no. · wallet', 40, 1),
+  (N'services', N'business', N'Plumbing 24 — emergency', NULL, N'Call-out ref · wallet', 50, 1),
+  (N'services', N'business', N'Laundry & dry-clean — CBD', NULL, N'Bag tag · wallet', 60, 1);
 
 /* Hub grids — same slugs/link paths as former static data */
 INSERT INTO dbo.hub_navigation_tiles (hub_kind, slug, label, icon_key, list_style, link_path, sort_order, is_active)
@@ -1109,14 +1231,14 @@ VALUES
 */
 INSERT INTO dbo.notification_outbox (user_id, email, channel, template_key, payload)
 VALUES (
-  @userDemo,
+  '50000000-0000-0000-0000-000000000001',
   N'demo@paytoday.local',
   N'both',
   N'hub_demo_pending_payment',
   N'{"correlationId":"70000000-0000-0000-0000-000000000001","reference":"seed-hub-pending","variant":"services","categorySlug":"water","itemId":null,"serviceSlug":"water","payeeName":"NamWater (seed demo)","amountCents":150000,"currency":"NAD","payMethod":"wallet","stage":"pending"}'
 ),
 (
-  @userDemo,
+  '50000000-0000-0000-0000-000000000001',
   N'demo@paytoday.local',
   N'both',
   N'hub_demo_payment_completed',
@@ -1130,546 +1252,5 @@ GO
 
 GO
 
-/* ---- Migrations 002–009 (idempotent on top of full setup) ---- */
-
-/* In-app notification feed (store orders / checkout); worker inserts rows with source_outbox_id for idempotency. */
-IF OBJECT_ID(N'dbo.user_notifications', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.user_notifications (
-    id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_user_notifications PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
-    source_outbox_id UNIQUEIDENTIFIER NULL,
-    user_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_user_notifications_user REFERENCES dbo.users(id) ON DELETE CASCADE,
-    template_key NVARCHAR(80) NOT NULL,
-    title NVARCHAR(200) NOT NULL,
-    body NVARCHAR(1000) NULL,
-    payload NVARCHAR(MAX) NULL,
-    read_at DATETIME2 NULL,
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_user_notif_created DEFAULT (SYSUTCDATETIME())
-  );
-END;
-GO
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE name = N'UX_user_notifications_source_outbox' AND object_id = OBJECT_ID(N'dbo.user_notifications')
-)
-  CREATE UNIQUE NONCLUSTERED INDEX UX_user_notifications_source_outbox
-  ON dbo.user_notifications(source_outbox_id)
-  WHERE source_outbox_id IS NOT NULL;
-GO
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE name = N'IX_user_notifications_user_created' AND object_id = OBJECT_ID(N'dbo.user_notifications')
-)
-  CREATE NONCLUSTERED INDEX IX_user_notifications_user_created
-  ON dbo.user_notifications(user_id, created_at DESC);
-GO
-
-GO
-
-/*
-  Payment method captions (hub tiles) + per-row hints (payment drill-down).
-  Safe if hub tables are missing: skips those parts. Create hub tables first, e.g.:
-  - backend/scripts/paytoday-add-hub-navigation-tiles.sql, or
-  - backend/scripts/paytoday-full-setup.sql
-*/
-
-/* ---- hub_payment_category_items.payment_method ---- */
-IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL
-BEGIN
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'payment_method') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD payment_method NVARCHAR(120) NULL;
-END;
-GO
-
-/* ---- hub_navigation_tiles.payment_methods_caption ---- */
-IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL
-BEGIN
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'payment_methods_caption') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD payment_methods_caption NVARCHAR(200) NULL;
-END;
-GO
-
-/* ---- Services hub captions (only if table exists) ---- */
-IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL
-BEGIN
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · USSD'
-  WHERE hub_kind = N'services' AND slug = N'airtime';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · EFT · Municipality ref'
-  WHERE hub_kind = N'services' AND slug = N'water';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Prepaid meter · Card · Wallet'
-  WHERE hub_kind = N'services' AND slug = N'electricity';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Tap to pay'
-  WHERE hub_kind = N'services' AND slug = N'parking';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Voucher code'
-  WHERE hub_kind = N'services' AND slug = N'vouchers';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Debit order'
-  WHERE hub_kind = N'services' AND slug = N'insurance';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'USSD · *120# (demo)'
-  WHERE hub_kind = N'services' AND slug = N'ussd';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Pickup'
-  WHERE hub_kind = N'services' AND slug = N'store';
-END;
-GO
-
-/* ---- Payments hub category captions ---- */
-IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL
-BEGIN
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · QR'
-  WHERE hub_kind = N'payments' AND slug = N'businesses';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Instant pay'
-  WHERE hub_kind = N'payments' AND slug = N'contacts';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · Airtime PIN'
-  WHERE hub_kind = N'payments' AND slug = N'airtime';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Prepaid token · Card · Wallet'
-  WHERE hub_kind = N'payments' AND slug = N'electricity';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · Reference'
-  WHERE hub_kind = N'payments' AND slug = N'bills';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Order ahead'
-  WHERE hub_kind = N'payments' AND slug = N'food';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Fleet card · Wallet'
-  WHERE hub_kind = N'payments' AND slug = N'fuel';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Plate / bay ref'
-  WHERE hub_kind = N'payments' AND slug = N'parking';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Gift code'
-  WHERE hub_kind = N'payments' AND slug = N'vouchers';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Deposit'
-  WHERE hub_kind = N'payments' AND slug = N'stay';
-
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · Invoice ref'
-  WHERE hub_kind = N'payments' AND slug = N'services';
-END;
-GO
-
-/* Payment category drill-down rows moved to 006_hub_payment_category_items_drilldown.sql
-   (EXEC-based) so this migration does not compile UPDATE payment_method when the column is absent. */
-
-GO
-
-/*
-  Bootstrap Payments/Services hub tables when missing or incomplete.
-  Fixes: Invalid object name hub_navigation_tiles / hub_payment_category_items,
-         Invalid column name hub_kind, slug, payment_methods_caption, payment_method.
-  Safe to re-run: creates tables if missing; adds missing columns; seeds only when tables are empty.
-*/
-
-/* ---- dbo.hub_navigation_tiles ---- */
-IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.hub_navigation_tiles (
-    id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_hub_nav_tiles PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
-    hub_kind NVARCHAR(32) NOT NULL,
-    slug NVARCHAR(80) NOT NULL,
-    label NVARCHAR(160) NOT NULL,
-    icon_key NVARCHAR(80) NOT NULL,
-    list_style NVARCHAR(20) NULL,
-    link_path NVARCHAR(256) NOT NULL,
-    sort_order INT NOT NULL CONSTRAINT DF_hub_nav_sort DEFAULT (0),
-    is_active BIT NOT NULL CONSTRAINT DF_hub_nav_active DEFAULT (1),
-    payment_methods_caption NVARCHAR(200) NULL,
-    CONSTRAINT UQ_hub_nav_slug_kind UNIQUE (hub_kind, slug)
-  );
-END
-ELSE
-BEGIN
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'hub_kind') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD hub_kind NVARCHAR(32) NULL;
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'slug') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD slug NVARCHAR(80) NULL;
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'label') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD label NVARCHAR(160) NULL;
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'icon_key') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD icon_key NVARCHAR(80) NULL;
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'list_style') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD list_style NVARCHAR(20) NULL;
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'link_path') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD link_path NVARCHAR(256) NULL;
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'sort_order') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD sort_order INT NOT NULL CONSTRAINT DF_hub_nav_sort_missing DEFAULT (0);
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'is_active') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD is_active BIT NOT NULL CONSTRAINT DF_hub_nav_active_missing DEFAULT (1);
-  IF COL_LENGTH('dbo.hub_navigation_tiles', 'payment_methods_caption') IS NULL
-    ALTER TABLE dbo.hub_navigation_tiles ADD payment_methods_caption NVARCHAR(200) NULL;
-END;
-GO
-
-/* Seed hub tiles only when empty (avoids wiping custom rows). */
-IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM dbo.hub_navigation_tiles)
-BEGIN
-  INSERT INTO dbo.hub_navigation_tiles (hub_kind, slug, label, icon_key, list_style, link_path, sort_order, is_active, payment_methods_caption)
-  VALUES
-    (N'payments', N'businesses', N'Businesses', N'business', N'business', N'payments/businesses', 10, 1, N'Wallet · Card · QR'),
-    (N'payments', N'contacts', N'Contacts', N'contacts', N'contacts', N'payments/contacts', 20, 1, N'Wallet · Instant pay'),
-    (N'payments', N'airtime', N'Airtime', N'airtime', N'business', N'payments/airtime', 30, 1, N'Wallet · Card · Airtime PIN'),
-    (N'payments', N'electricity', N'Electricity', N'electricity', N'business', N'payments/electricity', 40, 1, N'Prepaid token · Card · Wallet'),
-    (N'payments', N'bills', N'Bills', N'bills', N'business', N'payments/bills', 50, 1, N'Wallet · Card · Reference'),
-    (N'payments', N'food', N'Food', N'food', N'business', N'payments/food', 60, 1, N'Card · Wallet · Order ahead'),
-    (N'payments', N'fuel', N'Fuel', N'fuel', N'business', N'payments/fuel', 70, 1, N'Fleet card · Wallet'),
-    (N'payments', N'parking', N'Parking', N'parking', N'business', N'payments/parking', 80, 1, N'Wallet · Plate / bay ref'),
-    (N'payments', N'vouchers', N'Vouchers', N'vouchers', N'business', N'payments/vouchers', 90, 1, N'Card · Wallet · Gift code'),
-    (N'payments', N'stay', N'Stay', N'stay', N'business', N'payments/stay', 100, 1, N'Card · Wallet · Deposit'),
-    (N'payments', N'services', N'Services', N'services', N'business', N'payments/services', 110, 1, N'Wallet · Card · Invoice ref'),
-    (N'services', N'airtime', N'Airtime', N'airtime', NULL, N'services/airtime', 10, 1, N'Wallet · Card · USSD'),
-    (N'services', N'water', N'Water', N'water', NULL, N'services/water', 20, 1, N'Wallet · EFT · Municipality ref'),
-    (N'services', N'electricity', N'Electricity', N'electricity', NULL, N'services/electricity', 30, 1, N'Prepaid meter · Card · Wallet'),
-    (N'services', N'parking', N'Parking', N'parking', NULL, N'services/parking', 40, 1, N'Wallet · Tap to pay'),
-    (N'services', N'vouchers', N'Vouchers', N'vouchers', NULL, N'services/vouchers', 50, 1, N'Card · Wallet · Voucher code'),
-    (N'services', N'insurance', N'Insurance', N'insurance', NULL, N'services/insurance', 60, 1, N'Card · Debit order'),
-    (N'services', N'ussd', N'USSD', N'ussd', NULL, N'services/ussd', 70, 1, N'USSD · *120# (demo)'),
-    (N'services', N'store', N'Store', N'storefront', NULL, N'shop', 80, 1, N'Card · Wallet · Pickup');
-END;
-GO
-
-/* ---- dbo.hub_payment_category_items ---- */
-IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.hub_payment_category_items (
-    id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_hub_pay_items PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
-    category_slug NVARCHAR(80) NOT NULL,
-    item_kind NVARCHAR(20) NOT NULL,
-    display_name NVARCHAR(300) NOT NULL,
-    initials NVARCHAR(20) NULL,
-    sort_order INT NOT NULL CONSTRAINT DF_hub_item_sort DEFAULT (0),
-    is_active BIT NOT NULL CONSTRAINT DF_hub_item_active DEFAULT (1),
-    payment_method NVARCHAR(120) NULL
-  );
-END
-ELSE
-BEGIN
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'category_slug') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD category_slug NVARCHAR(80) NULL;
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'item_kind') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD item_kind NVARCHAR(20) NULL;
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'display_name') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD display_name NVARCHAR(300) NULL;
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'initials') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD initials NVARCHAR(20) NULL;
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'sort_order') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD sort_order INT NOT NULL CONSTRAINT DF_hub_item_sort_missing DEFAULT (0);
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'is_active') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD is_active BIT NOT NULL CONSTRAINT DF_hub_item_active_missing DEFAULT (1);
-  IF COL_LENGTH('dbo.hub_payment_category_items', 'payment_method') IS NULL
-    ALTER TABLE dbo.hub_payment_category_items ADD payment_method NVARCHAR(120) NULL;
-END;
-GO
-
-IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM dbo.hub_payment_category_items)
-BEGIN
-  INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active, payment_method)
-  VALUES
-    (N'businesses', N'business', N'Okahandja Traders', NULL, 10, 1, N'PayToday Wallet · Visa / Mastercard'),
-    (N'businesses', N'business', N'Windhoek Fresh Market', NULL, 20, 1, N'Wallet · Card · SnapScan (demo)'),
-    (N'businesses', N'business', N'Namibia Auto Parts', NULL, 30, 1, N'EFT ref · Card · Wallet'),
-    (N'contacts', N'contact', N'Anna Nghipondoka', N'AN', 10, 1, N'Wallet only · P2P'),
-    (N'contacts', N'contact', N'Johan van Wyk', N'JW', 20, 1, N'Wallet · Instant'),
-    (N'contacts', N'contact', N'Lisa #Shapumba', N'LS', 30, 1, N'Wallet · Card'),
-    (N'airtime', N'business', N'MTC Prepaid', NULL, 10, 1, N'Wallet · MTC app · USSD'),
-    (N'airtime', N'business', N'TN Mobile', NULL, 20, 1, N'Card · TN Mobile voucher'),
-    (N'electricity', N'business', N'Nampower Prepaid', NULL, 10, 1, N'Meter number · Card · Wallet'),
-    (N'bills', N'business', N'Municipality — Windhoek', NULL, 10, 1, N'Municipal ref · EFT · Card'),
-    (N'food', N'business', N'Local Eats Collective', NULL, 10, 1, N'Order link · Card · Wallet'),
-    (N'fuel', N'business', N'Engen Rewards', NULL, 10, 1, N'Engen card · Wallet'),
-    (N'parking', N'business', N'CBD Parking Zone A', NULL, 10, 1, N'Bay code · Wallet'),
-    (N'vouchers', N'business', N'National Bookstore', NULL, 10, 1, N'Voucher PIN · Card'),
-    (N'stay', N'business', N'Coastal Guesthouse', NULL, 10, 1, N'Booking ref · Card · Wallet'),
-    (N'services', N'business', N'PayToday Service Desk', NULL, 10, 1, N'Invoice · Card · Wallet');
-END;
-GO
-
-/* Backfill captions / payment_method when rows existed before those columns were added. */
-IF OBJECT_ID(N'dbo.hub_navigation_tiles', N'U') IS NOT NULL AND COL_LENGTH('dbo.hub_navigation_tiles', 'payment_methods_caption') IS NOT NULL
-BEGIN
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · USSD' WHERE hub_kind = N'services' AND slug = N'airtime' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · EFT · Municipality ref' WHERE hub_kind = N'services' AND slug = N'water' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Prepaid meter · Card · Wallet' WHERE hub_kind = N'services' AND slug = N'electricity' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Tap to pay' WHERE hub_kind = N'services' AND slug = N'parking' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Voucher code' WHERE hub_kind = N'services' AND slug = N'vouchers' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Debit order' WHERE hub_kind = N'services' AND slug = N'insurance' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'USSD · *120# (demo)' WHERE hub_kind = N'services' AND slug = N'ussd' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Pickup' WHERE hub_kind = N'services' AND slug = N'store' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · QR' WHERE hub_kind = N'payments' AND slug = N'businesses' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Instant pay' WHERE hub_kind = N'payments' AND slug = N'contacts' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · Airtime PIN' WHERE hub_kind = N'payments' AND slug = N'airtime' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Prepaid token · Card · Wallet' WHERE hub_kind = N'payments' AND slug = N'electricity' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · Reference' WHERE hub_kind = N'payments' AND slug = N'bills' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Order ahead' WHERE hub_kind = N'payments' AND slug = N'food' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Fleet card · Wallet' WHERE hub_kind = N'payments' AND slug = N'fuel' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Plate / bay ref' WHERE hub_kind = N'payments' AND slug = N'parking' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Gift code' WHERE hub_kind = N'payments' AND slug = N'vouchers' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Card · Wallet · Deposit' WHERE hub_kind = N'payments' AND slug = N'stay' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-  UPDATE dbo.hub_navigation_tiles SET payment_methods_caption = N'Wallet · Card · Invoice ref' WHERE hub_kind = N'payments' AND slug = N'services' AND (payment_methods_caption IS NULL OR LTRIM(RTRIM(payment_methods_caption)) = N'');
-END;
-GO
-
-IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL AND COL_LENGTH('dbo.hub_payment_category_items', 'payment_method') IS NOT NULL
-BEGIN
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'PayToday Wallet · Visa / Mastercard' WHERE category_slug = N'businesses' AND display_name = N'Okahandja Traders' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Wallet · Card · SnapScan (demo)' WHERE category_slug = N'businesses' AND display_name = N'Windhoek Fresh Market' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'EFT ref · Card · Wallet' WHERE category_slug = N'businesses' AND display_name = N'Namibia Auto Parts' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Wallet only · P2P' WHERE category_slug = N'contacts' AND display_name = N'Anna Nghipondoka' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Wallet · Instant' WHERE category_slug = N'contacts' AND display_name = N'Johan van Wyk' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Wallet · Card' WHERE category_slug = N'contacts' AND display_name = N'Lisa #Shapumba' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Wallet · MTC app · USSD' WHERE category_slug = N'airtime' AND display_name = N'MTC Prepaid' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Card · TN Mobile voucher' WHERE category_slug = N'airtime' AND display_name = N'TN Mobile' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Meter number · Card · Wallet' WHERE category_slug = N'electricity' AND display_name = N'Nampower Prepaid' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Municipal ref · EFT · Card' WHERE category_slug = N'bills' AND display_name = N'Municipality — Windhoek' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Order link · Card · Wallet' WHERE category_slug = N'food' AND display_name = N'Local Eats Collective' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Engen card · Wallet' WHERE category_slug = N'fuel' AND display_name = N'Engen Rewards' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Bay code · Wallet' WHERE category_slug = N'parking' AND display_name = N'CBD Parking Zone A' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Voucher PIN · Card' WHERE category_slug = N'vouchers' AND display_name = N'National Bookstore' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Booking ref · Card · Wallet' WHERE category_slug = N'stay' AND display_name = N'Coastal Guesthouse' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-  UPDATE dbo.hub_payment_category_items SET payment_method = N'Invoice · Card · Wallet' WHERE category_slug = N'services' AND display_name = N'PayToday Service Desk' AND (payment_method IS NULL OR LTRIM(RTRIM(payment_method)) = N'');
-END;
-GO
-
-GO
-
-/* Line-level checkout reservations. Drops index/FKs first, then adds columns (GO between batches).
-   FK and CREATE INDEX use EXEC so SQL Server does not validate variant_id/warehouse_id until runtime
-   after prior batches have added those columns. Final batch drops the index if present then recreates
-   to clear "index already exists" from partial runs. */
-IF OBJECT_ID(N'dbo.inventory_reservations', N'U') IS NULL
-  THROW 51000, N'Missing dbo.inventory_reservations — create DB from paytoday-full-setup.sql first.', 1;
-GO
-
-IF EXISTS (
-  SELECT 1 FROM sys.indexes i
-  WHERE i.object_id = OBJECT_ID(N'dbo.inventory_reservations')
-    AND i.name = N'UX_inventory_reservations_order_variant_wh'
-)
-  DROP INDEX UX_inventory_reservations_order_variant_wh ON dbo.inventory_reservations;
-GO
-
-DECLARE @cn sysname;
-DECLARE @drop nvarchar(400);
-DECLARE fkcur CURSOR LOCAL FAST_FORWARD FOR
-  SELECT f.name
-  FROM sys.foreign_keys f
-  WHERE f.parent_object_id = OBJECT_ID(N'dbo.inventory_reservations');
-OPEN fkcur;
-FETCH NEXT FROM fkcur INTO @cn;
-WHILE @@FETCH_STATUS = 0
-BEGIN
-  SET @drop = N'ALTER TABLE dbo.inventory_reservations DROP CONSTRAINT ' + QUOTENAME(@cn) + N';';
-  EXEC sp_executesql @drop;
-  FETCH NEXT FROM fkcur INTO @cn;
-END
-CLOSE fkcur;
-DEALLOCATE fkcur;
-GO
-
-IF COL_LENGTH(N'dbo.inventory_reservations', N'variant_id') IS NULL
-  ALTER TABLE dbo.inventory_reservations ADD variant_id UNIQUEIDENTIFIER NULL;
-GO
-
-IF COL_LENGTH(N'dbo.inventory_reservations', N'warehouse_id') IS NULL
-  ALTER TABLE dbo.inventory_reservations ADD warehouse_id UNIQUEIDENTIFIER NULL;
-GO
-
-IF COL_LENGTH(N'dbo.inventory_reservations', N'quantity') IS NULL
-  ALTER TABLE dbo.inventory_reservations ADD quantity INT NOT NULL CONSTRAINT DF_inv_reservation_qty DEFAULT (0);
-GO
-
-IF COL_LENGTH(N'dbo.inventory_reservations', N'variant_id') IS NOT NULL
-  DELETE FROM dbo.inventory_reservations WHERE variant_id IS NULL;
-GO
-
-IF OBJECT_ID(N'dbo.inventory_reservations', N'U') IS NOT NULL
-  AND COL_LENGTH(N'dbo.inventory_reservations', N'variant_id') IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM sys.foreign_keys
-    WHERE parent_object_id = OBJECT_ID(N'dbo.inventory_reservations')
-      AND referenced_object_id = OBJECT_ID(N'dbo.product_variants')
-  )
-  EXEC (N'ALTER TABLE dbo.inventory_reservations ADD CONSTRAINT FK_inventory_reservations_variant FOREIGN KEY (variant_id) REFERENCES dbo.product_variants(id);');
-GO
-
-IF OBJECT_ID(N'dbo.inventory_reservations', N'U') IS NOT NULL
-  AND COL_LENGTH(N'dbo.inventory_reservations', N'warehouse_id') IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM sys.foreign_keys
-    WHERE parent_object_id = OBJECT_ID(N'dbo.inventory_reservations')
-      AND referenced_object_id = OBJECT_ID(N'dbo.warehouses')
-  )
-  EXEC (N'ALTER TABLE dbo.inventory_reservations ADD CONSTRAINT FK_inventory_reservations_warehouse FOREIGN KEY (warehouse_id) REFERENCES dbo.warehouses(id);');
-GO
-
-IF OBJECT_ID(N'dbo.inventory_reservations', N'U') IS NOT NULL
-  AND COL_LENGTH(N'dbo.inventory_reservations', N'order_id') IS NOT NULL
-  AND COL_LENGTH(N'dbo.inventory_reservations', N'variant_id') IS NOT NULL
-  AND COL_LENGTH(N'dbo.inventory_reservations', N'warehouse_id') IS NOT NULL
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM sys.indexes i
-    WHERE i.object_id = OBJECT_ID(N'dbo.inventory_reservations')
-      AND i.name = N'UX_inventory_reservations_order_variant_wh'
-  )
-    EXEC (N'DROP INDEX UX_inventory_reservations_order_variant_wh ON dbo.inventory_reservations;');
-  IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes i
-    WHERE i.object_id = OBJECT_ID(N'dbo.inventory_reservations')
-      AND i.name = N'UX_inventory_reservations_order_variant_wh'
-  )
-    EXEC (N'CREATE UNIQUE NONCLUSTERED INDEX UX_inventory_reservations_order_variant_wh ON dbo.inventory_reservations(order_id, variant_id, warehouse_id);');
-END;
-GO
-
-GO
-
-/*
-  Drill-down payment_method text on hub_payment_category_items.
-  Split from 003: references to payment_method must not live in the same compile unit as
-  conditional DDL when the column may be missing (skipped/partial migrations).
-
-  Batch 1 ensures the column. Batch 2 runs UPDATE/INSERT only via EXEC so missing columns
-  do not make the outer batch fail at compile time.
-*/
-
-IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL
-  AND COL_LENGTH(N'dbo.hub_payment_category_items', N'payment_method') IS NULL
-  ALTER TABLE dbo.hub_payment_category_items ADD payment_method NVARCHAR(120) NULL;
-GO
-
-IF OBJECT_ID(N'dbo.hub_payment_category_items', N'U') IS NOT NULL
-  AND COL_LENGTH(N'dbo.hub_payment_category_items', N'payment_method') IS NOT NULL
-BEGIN
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''PayToday Wallet · Visa / Mastercard''
-  WHERE category_slug = N''businesses'' AND display_name = N''Okahandja Traders'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Card · SnapScan (demo)''
-  WHERE category_slug = N''businesses'' AND display_name = N''Windhoek Fresh Market'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''EFT ref · Card · Wallet''
-  WHERE category_slug = N''businesses'' AND display_name = N''Namibia Auto Parts'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet only · P2P''
-  WHERE category_slug = N''contacts'' AND display_name = N''Anna Nghipondoka'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Instant''
-  WHERE category_slug = N''contacts'' AND display_name = N''Johan van Wyk'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · Card''
-  WHERE category_slug = N''contacts'' AND display_name = N''Lisa #Shapumba'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Wallet · MTC app · USSD''
-  WHERE category_slug = N''airtime'' AND display_name = N''MTC Prepaid'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Card · TN Mobile voucher''
-  WHERE category_slug = N''airtime'' AND display_name = N''TN Mobile'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Meter number · Card · Wallet''
-  WHERE category_slug = N''electricity'' AND display_name = N''Nampower Prepaid'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Municipal ref · EFT · Card''
-  WHERE category_slug = N''bills'' AND display_name = N''Municipality — Windhoek'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Order link · Card · Wallet''
-  WHERE category_slug = N''food'' AND display_name = N''Local Eats Collective'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Engen card · Wallet''
-  WHERE category_slug = N''fuel'' AND display_name = N''Engen Rewards'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Bay code · Wallet''
-  WHERE category_slug = N''parking'' AND display_name = N''CBD Parking Zone A'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Voucher PIN · Card''
-  WHERE category_slug = N''vouchers'' AND display_name = N''National Bookstore'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Booking ref · Card · Wallet''
-  WHERE category_slug = N''stay'' AND display_name = N''Coastal Guesthouse'';');
-  EXEC (N'UPDATE dbo.hub_payment_category_items SET payment_method = N''Invoice · Card · Wallet''
-  WHERE category_slug = N''services'' AND display_name = N''PayToday Service Desk'';');
-  EXEC (N'IF NOT EXISTS (SELECT 1 FROM dbo.hub_payment_category_items WHERE category_slug = N''airtime'' AND display_name = N''Leap Mobile (demo)'')
-  INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active, payment_method)
-  VALUES (N''airtime'', N''business'', N''Leap Mobile (demo)'', NULL, 25, 1, N''Wallet · USSD *123#'');');
-  EXEC (N'IF NOT EXISTS (SELECT 1 FROM dbo.hub_payment_category_items WHERE category_slug = N''electricity'' AND display_name = N''RED prepaid (demo)'')
-  INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active, payment_method)
-  VALUES (N''electricity'', N''business'', N''RED prepaid (demo)'', NULL, 20, 1, N''Meter · Card · Apple Pay (demo)'');');
-  EXEC (N'IF NOT EXISTS (SELECT 1 FROM dbo.hub_payment_category_items WHERE category_slug = N''bills'' AND display_name = N''TV licence — NBC'')
-  INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active, payment_method)
-  VALUES (N''bills'', N''business'', N''TV licence — NBC'', NULL, 20, 1, N''Customer ref · Card · Wallet'');');
-  EXEC (N'IF NOT EXISTS (SELECT 1 FROM dbo.hub_payment_category_items WHERE category_slug = N''fuel'' AND display_name = N''Shell Go+'')
-  INSERT INTO dbo.hub_payment_category_items (category_slug, item_kind, display_name, initials, sort_order, is_active, payment_method)
-  VALUES (N''fuel'', N''business'', N''Shell Go+'', NULL, 20, 1, N''Fleet card · Wallet'');');
-END;
-GO
-
-GO
-
-/* Correlates PayToday payment_intent_token on browser return when reference query is missing. */
-IF OBJECT_ID(N'dbo.orders', N'U') IS NOT NULL
-  AND COL_LENGTH(N'dbo.orders', N'paytoday_payment_intent_token') IS NULL
-  ALTER TABLE dbo.orders ADD paytoday_payment_intent_token NVARCHAR(128) NULL;
-GO
-
-GO
-
-/* Keycloak / OIDC users: password not used; link by keycloak_sub */
-ALTER TABLE dbo.users ALTER COLUMN password_hash NVARCHAR(500) NULL;
-GO
-
-IF COL_LENGTH('dbo.users', 'keycloak_sub') IS NULL
-BEGIN
-  ALTER TABLE dbo.users ADD keycloak_sub NVARCHAR(255) NULL;
-END;
-GO
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_users_keycloak_sub' AND object_id = OBJECT_ID('dbo.users'))
-BEGIN
-  CREATE UNIQUE INDEX UQ_users_keycloak_sub ON dbo.users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
-END;
-GO
-
-GO
-
-/*
-  Runtime integration secrets and URLs (Keycloak, PayToday, notify service).
-  Non-empty values override process.env for the same logical key (see backend/src/services/integrationRuntimeConfig.ts).
-  Full key list + MERGE examples: backend/scripts/seed-integration-settings.template.sql
-
-  Example (SSMS) — move secrets out of .env after bootstrap:
-    MERGE dbo.integration_settings AS t
-    USING (SELECT N'KEYCLOAK_CLIENT_SECRET' AS setting_key, N'your-secret' AS setting_value) AS s
-    ON t.setting_key = s.setting_key
-    WHEN MATCHED THEN UPDATE SET setting_value = s.setting_value, updated_at = SYSUTCDATETIME()
-    WHEN NOT MATCHED THEN INSERT (setting_key, setting_value) VALUES (s.setting_key, s.setting_value);
-*/
-
-IF OBJECT_ID(N'dbo.integration_settings', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.integration_settings (
-    setting_key NVARCHAR(128) NOT NULL CONSTRAINT PK_integration_settings PRIMARY KEY,
-    setting_value NVARCHAR(MAX) NULL,
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_integration_settings_updated DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-GO
-
-/* ---- Record migration versions (so Node migrate.ts skips 001–009) ---- */
-IF OBJECT_ID(N'dbo.schema_migrations', N'U') IS NOT NULL
-BEGIN
-  ;WITH v(version) AS (
-    SELECT N'001_product_brands' UNION ALL
-    SELECT N'002_user_notifications' UNION ALL
-    SELECT N'003_hub_payment_methods' UNION ALL
-    SELECT N'004_hub_tables_bootstrap' UNION ALL
-    SELECT N'005_inventory_reservation_lines' UNION ALL
-    SELECT N'006_hub_payment_category_items_drilldown' UNION ALL
-    SELECT N'007_orders_paytoday_intent_token' UNION ALL
-    SELECT N'008_users_keycloak' UNION ALL
-    SELECT N'009_integration_settings'
-  )
-  INSERT INTO dbo.schema_migrations (version)
-  SELECT v.version FROM v
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.schema_migrations m WHERE m.version = v.version);
-END;
-GO
-
-PRINT N'All-in-one PayToday database script finished.';
+PRINT N'All-in-one seed complete. From repo: npm run db:migrate';
 GO

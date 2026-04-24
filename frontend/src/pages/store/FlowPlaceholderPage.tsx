@@ -1,11 +1,14 @@
-import { Stack, Typography } from '@mui/material'
+import { Typography } from '@mui/material'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 
 export function FlowPlaceholderPage({ title, body }: { title: string; body: string }) {
   return (
-    <Stack spacing={2} sx={{ maxWidth: 520, mx: 'auto' }}>
+    <ProfilePageShell>
       <WalletSubheader title={title} />
-      <Typography color="text.secondary">{body}</Typography>
-    </Stack>
+      <Typography color="text.secondary" variant="body2">
+        {body}
+      </Typography>
+    </ProfilePageShell>
   )
 }

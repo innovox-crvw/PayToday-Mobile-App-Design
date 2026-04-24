@@ -3,6 +3,7 @@
  */
 
 import { formatMoney } from '../lib/money'
+import { APP_WALLET_DISPLAY_NAME } from '../theme/branding'
 
 /** Shown on wallet overview when the visitor is not signed in. */
 export const WALLET_BALANCE_CENTS = 14355
@@ -68,7 +69,7 @@ export const MOCK_TRANSACTIONS: WalletTransaction[] = [
     amountCents: -1000,
     type: 'Purchase',
     source: 'wallet',
-    paymentMethod: 'PayToday Wallet',
+    paymentMethod: APP_WALLET_DISPLAY_NAME,
     contact: '+264 81 000 0000',
   },
   {

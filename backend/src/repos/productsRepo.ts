@@ -1,4 +1,7 @@
-import type { ConnectionPool } from 'mssql'
+import type { ConnectionPool, Transaction } from 'mssql'
+
+/** Pool or open transaction — both expose `.request()` for the same SQL batch scope. */
+export type SqlExecutor = ConnectionPool | Transaction
 import type { InventoryPolicy, ProductDto, ProductImageDto, ProductVariantDto, VariantOptionDto } from '../types/catalogue.js'
 
 function isMissingBrandColumnError(e: unknown): boolean {
@@ -8,9 +11,14 @@ function isMissingBrandColumnError(e: unknown): boolean {
 
 function isMissingCatalogueScopeColumnError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e)
-  return /compare_at_price_cents|inventory_policy|product_variant_options|parent_id|variant_id|Invalid column name|Invalid object name/i.test(
+  return /compare_at_price_cents|inventory_policy|package_length_mm|package_width_mm|package_height_mm|gross_weight_g|product_variant_options|parent_id|variant_id|Invalid column name|Invalid object name/i.test(
     msg,
   )
+}
+
+export function isMissingPayTodayMerchantIdColumnError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /pay_today_merchant_id|Invalid column name/i.test(msg)
 }
 
 export function normalizeInventoryPolicy(raw: string | null | undefined): InventoryPolicy {
@@ -39,6 +47,10 @@ interface ProductRow {
   inventory_policy: string | null
   stock: number | null
   imageUrl: string | null
+  package_length_mm: number | null
+  package_width_mm: number | null
+  package_height_mm: number | null
+  gross_weight_g: number | null
 }
 
 function groupProducts(rows: ProductRow[]): ProductDto[] {
@@ -72,6 +84,10 @@ function groupProducts(rows: ProductRow[]): ProductDto[] {
       compareAtPriceCents: r.compare_at_price_cents != null ? Number(r.compare_at_price_cents) : null,
       inventoryPolicy: normalizeInventoryPolicy(r.inventory_policy),
       options: [],
+      packageLengthMm: r.package_length_mm != null ? Number(r.package_length_mm) : null,
+      packageWidthMm: r.package_width_mm != null ? Number(r.package_width_mm) : null,
+      packageHeightMm: r.package_height_mm != null ? Number(r.package_height_mm) : null,
+      grossWeightG: r.gross_weight_g != null ? Number(r.gross_weight_g) : null,
     }
     p.variants.push(v)
   }
@@ -83,6 +99,13 @@ export type ListProductsOptions = {
   categorySlug?: string
   brandSlug?: string
   sort?: 'name' | 'price_asc' | 'price_desc'
+  /** When true, attach full `images[]` per product (batch query) for storefront grids. */
+  includeImages?: boolean
+  /**
+   * When non-empty, restrict to these PayToday merchant ids (`dbo.products.pay_today_merchant_id`).
+   * Admin catalogue only; storefront `listProducts` ignores this.
+   */
+  payTodayMerchantIds?: number[]
 }
 
 function buildListSql(
@@ -105,9 +128,17 @@ function buildListSql(
 
   const variantCols = includeScopeColumns
     ? `v.compare_at_price_cents,
-      v.inventory_policy,`
+      v.inventory_policy,
+      v.package_length_mm,
+      v.package_width_mm,
+      v.package_height_mm,
+      v.gross_weight_g,`
     : `CAST(NULL AS INT) AS compare_at_price_cents,
-      CAST(N'track' AS NVARCHAR(20)) AS inventory_policy,`
+      CAST(N'track' AS NVARCHAR(20)) AS inventory_policy,
+      CAST(NULL AS INT) AS package_length_mm,
+      CAST(NULL AS INT) AS package_width_mm,
+      CAST(NULL AS INT) AS package_height_mm,
+      CAST(NULL AS INT) AS gross_weight_g,`
 
   const imageSub = includeScopeColumns
     ? `COALESCE(
@@ -165,6 +196,11 @@ function buildListSql(
   if (brandSlug && includeBrandColumns) {
     sql += ` AND LOWER(LTRIM(RTRIM(p.brand_slug))) = LOWER(LTRIM(RTRIM(@brandSlug)))`
   }
+  const merchantIds = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
+  if (merchantIds.length > 0) {
+    const ph = merchantIds.map((_, i) => `@mid${i}`).join(', ')
+    sql += ` AND p.pay_today_merchant_id IN (${ph})`
+  }
   if (sort === 'price_asc') {
     sql += ` ORDER BY v.price_cents ASC, p.name, v.sku`
   } else if (sort === 'price_desc') {
@@ -197,6 +233,10 @@ async function listProductsQuery(
   }
   if (brandSlug && includeBrandColumns) {
     req.input('brandSlug', brandSlug)
+  }
+  const merchantIds = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
+  for (let i = 0; i < merchantIds.length; i++) {
+    req.input(`mid${i}`, merchantIds[i]!)
   }
   const r = await req.query<ProductRow>(sql)
   return groupProducts(r.recordset)
@@ -236,11 +276,26 @@ async function runFirstSuccessful(attempts: Array<() => Promise<ProductDto[]>>):
 }
 
 export async function listProducts(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
-  return runFirstSuccessful(listProductAttempts(pool, opts, false))
+  const list = await runFirstSuccessful(listProductAttempts(pool, opts, false))
+  if (opts?.includeImages && list.length > 0) {
+    await attachProductImagesToList(pool, list)
+  }
+  return list
 }
 
 export async function listProductsAdmin(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
-  const list = await runFirstSuccessful(listProductAttempts(pool, opts, true))
+  const merchantIds = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
+  const scopedOpts = merchantIds.length > 0 ? opts : { ...opts, payTodayMerchantIds: undefined }
+  let list: ProductDto[]
+  try {
+    list = await runFirstSuccessful(listProductAttempts(pool, scopedOpts, true))
+  } catch (e) {
+    if (merchantIds.length > 0 && isMissingPayTodayMerchantIdColumnError(e)) {
+      list = await runFirstSuccessful(listProductAttempts(pool, { ...opts, payTodayMerchantIds: undefined }, true))
+    } else {
+      throw e
+    }
+  }
   for (const p of list) {
     try {
       p.images = await loadProductImages(pool, p.id)
@@ -249,6 +304,54 @@ export async function listProductsAdmin(pool: ConnectionPool, opts?: ListProduct
     }
   }
   return list
+}
+
+export type ProductMerchantLookup =
+  | { ok: true; exists: boolean; payTodayMerchantId: number | null }
+  | { ok: false; reason: 'no_merchant_column' }
+
+/** For admin access checks; `ok: false` means merchant column is absent (legacy DB — skip scope enforcement). */
+export async function lookupProductPayTodayMerchantId(
+  pool: ConnectionPool,
+  productId: string,
+): Promise<ProductMerchantLookup> {
+  try {
+    const r = await pool
+      .request()
+      .input('id', productId)
+      .query<{ mid: number | null }>(`SELECT pay_today_merchant_id AS mid FROM dbo.products WHERE id = @id`)
+    const row = r.recordset[0]
+    if (!row) return { ok: true, exists: false, payTodayMerchantId: null }
+    const mid = row.mid
+    return { ok: true, exists: true, payTodayMerchantId: mid != null ? Number(mid) : null }
+  } catch (e) {
+    if (isMissingPayTodayMerchantIdColumnError(e)) return { ok: false, reason: 'no_merchant_column' }
+    throw e
+  }
+}
+
+/** Admin access: resolve `pay_today_merchant_id` for a variant via its product. */
+export async function lookupVariantPayTodayMerchantId(
+  pool: ConnectionPool,
+  variantId: string,
+): Promise<ProductMerchantLookup> {
+  try {
+    const r = await pool
+      .request()
+      .input('vid', variantId)
+      .query<{ mid: number | null }>(
+        `SELECT p.pay_today_merchant_id AS mid
+         FROM dbo.product_variants v
+         INNER JOIN dbo.products p ON p.id = v.product_id
+         WHERE v.id = @vid`,
+      )
+    const row = r.recordset[0]
+    if (!row) return { ok: true, exists: false, payTodayMerchantId: null }
+    return { ok: true, exists: true, payTodayMerchantId: row.mid != null ? Number(row.mid) : null }
+  } catch (e) {
+    if (isMissingPayTodayMerchantIdColumnError(e)) return { ok: false, reason: 'no_merchant_column' }
+    throw e
+  }
 }
 
 async function getProductBySlugQuery(
@@ -266,9 +369,17 @@ async function getProductBySlugQuery(
       CAST(NULL AS NVARCHAR(160)) AS brandName,`
   const variantCols = includeScopeColumns
     ? `v.compare_at_price_cents,
-      v.inventory_policy,`
+      v.inventory_policy,
+      v.package_length_mm,
+      v.package_width_mm,
+      v.package_height_mm,
+      v.gross_weight_g,`
     : `CAST(NULL AS INT) AS compare_at_price_cents,
-      CAST(N'track' AS NVARCHAR(20)) AS inventory_policy,`
+      CAST(N'track' AS NVARCHAR(20)) AS inventory_policy,
+      CAST(NULL AS INT) AS package_length_mm,
+      CAST(NULL AS INT) AS package_width_mm,
+      CAST(NULL AS INT) AS package_height_mm,
+      CAST(NULL AS INT) AS gross_weight_g,`
 
   const imageSub = includeScopeColumns
     ? `COALESCE(
@@ -330,6 +441,83 @@ async function loadProductImages(pool: ConnectionPool, productId: string): Promi
   } catch (e) {
     if (/Invalid object name|product_images/i.test(String(e))) throw e
     throw e
+  }
+}
+
+const IMAGE_BATCH = 80
+
+async function loadProductImagesForProductIds(
+  pool: ConnectionPool,
+  productIds: string[],
+): Promise<Map<string, ProductImageDto[]>> {
+  const map = new Map<string, ProductImageDto[]>()
+  const ids = [...new Set(productIds.map((x) => x.trim()).filter(Boolean))]
+  for (const id of ids) map.set(id, [])
+  if (ids.length === 0) return map
+  for (let off = 0; off < ids.length; off += IMAGE_BATCH) {
+    const chunk = ids.slice(off, off + IMAGE_BATCH)
+    if (chunk.length === 0) break
+    const req = pool.request()
+    /* Avoid @p0/@p1 names — some drivers or batches treat them as colliding with other statements. */
+    const ph = chunk.map((_, i) => `@imgPid${off}_${i}`).join(', ')
+    chunk.forEach((id, i) => {
+      req.input(`imgPid${off}_${i}`, id)
+    })
+    try {
+      const r = await req.query<{
+        product_id: string
+        id: string
+        url: string
+        sort_order: number
+        variant_id: string | null
+      }>(`
+        SELECT CAST(product_id AS NVARCHAR(36)) AS product_id,
+               CAST(id AS NVARCHAR(36)) AS id, url, sort_order,
+               CAST(variant_id AS NVARCHAR(36)) AS variant_id
+        FROM dbo.product_images
+        WHERE product_id IN (${ph})
+        ORDER BY product_id, sort_order, id
+      `)
+      for (const row of r.recordset) {
+        const pid = row.product_id
+        const list = map.get(pid) ?? []
+        list.push({
+          id: row.id,
+          url: row.url,
+          sortOrder: row.sort_order,
+          variantId: row.variant_id,
+        })
+        map.set(pid, list)
+      }
+    } catch (e) {
+      if (/Invalid object name|product_images/i.test(String(e))) return map
+      throw e
+    }
+  }
+  return map
+}
+
+export async function attachProductImagesToList(pool: ConnectionPool, items: ProductDto[]): Promise<void> {
+  const ids = items.map((p) => p.id)
+  const imgMap = await loadProductImagesForProductIds(pool, ids)
+  for (const p of items) {
+    const imgs = imgMap.get(p.id) ?? []
+    p.images = imgs
+    if (imgs.length > 0 && !p.imageUrl) {
+      p.imageUrl = imgs[0]!.url
+    }
+  }
+}
+
+export async function countProductImagesForProduct(pool: ConnectionPool, productId: string): Promise<number> {
+  try {
+    const r = await pool
+      .request()
+      .input('pid', productId)
+      .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_images WHERE product_id = @pid`)
+    return Number(r.recordset[0]?.c ?? 0)
+  } catch {
+    return 0
   }
 }
 
@@ -412,17 +600,17 @@ export async function getProductBySlug(pool: ConnectionPool, slug: string): Prom
 }
 
 export async function replaceVariantOptions(
-  pool: ConnectionPool,
+  exec: SqlExecutor,
   variantId: string,
   options: { name: string; value: string }[],
 ): Promise<void> {
-  await pool.request().input('vid', variantId).query(`DELETE FROM dbo.product_variant_options WHERE variant_id = @vid`)
+  await exec.request().input('vid', variantId).query(`DELETE FROM dbo.product_variant_options WHERE variant_id = @vid`)
   let ord = 0
   for (const o of options) {
     const nm = o.name.trim()
     const val = o.value.trim()
     if (!nm || !val) continue
-    await pool
+    await exec
       .request()
       .input('vid', variantId)
       .input('nm', nm.slice(0, 60))
@@ -436,7 +624,7 @@ export async function replaceVariantOptions(
 }
 
 export async function createProductSimple(
-  pool: ConnectionPool,
+  exec: SqlExecutor,
   input: {
     slug: string
     name: string
@@ -453,6 +641,12 @@ export async function createProductSimple(
     compareAtPriceCents?: number | null
     inventoryPolicy?: InventoryPolicy
     variantOptions?: { name: string; value: string }[]
+    packageLengthMm?: number | null
+    packageWidthMm?: number | null
+    packageHeightMm?: number | null
+    grossWeightG?: number | null
+    /** When set and the column exists, stamps `dbo.products.pay_today_merchant_id` after insert. */
+    payTodayMerchantId?: number | null
   },
 ): Promise<{ productId: string; variantId: string }> {
   const invPol = input.inventoryPolicy ?? 'track'
@@ -465,7 +659,7 @@ export async function createProductSimple(
       throw new Error('List price (compare-at) must be greater than sale price (priceCents)')
     }
   }
-  const r1 = pool.request()
+  const r1 = exec.request()
   r1.input('slug', input.slug)
   r1.input('name', input.name)
   r1.input('description', input.description)
@@ -474,17 +668,19 @@ export async function createProductSimple(
   const bn = input.brandName?.trim() || null
   r1.input('brandSlug', bs)
   r1.input('brandName', bn)
+  const img = input.imageUrl?.trim()
+  const isActiveInsert = img ? 1 : 0
   let productId: string
   try {
     const pRes = await r1.query<{ id: string }>(`
       INSERT INTO dbo.products (category_id, slug, name, description, brand_slug, brand_name, is_active)
       OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-      VALUES (@categoryId, @slug, @name, @description, @brandSlug, @brandName, 1)
+      VALUES (@categoryId, @slug, @name, @description, @brandSlug, @brandName, ${isActiveInsert})
     `)
     productId = pRes.recordset[0].id
   } catch (e) {
     if (!isMissingBrandColumnError(e)) throw e
-    const r0 = pool.request()
+    const r0 = exec.request()
     r0.input('slug', input.slug)
     r0.input('name', input.name)
     r0.input('description', input.description)
@@ -492,12 +688,25 @@ export async function createProductSimple(
     const pRes = await r0.query<{ id: string }>(`
       INSERT INTO dbo.products (category_id, slug, name, description, is_active)
       OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-      VALUES (@categoryId, @slug, @name, @description, 1)
+      VALUES (@categoryId, @slug, @name, @description, ${isActiveInsert})
     `)
     productId = pRes.recordset[0].id
   }
 
-  const r2 = pool.request()
+  const mid = input.payTodayMerchantId
+  if (mid != null && typeof mid === 'number' && Number.isInteger(mid) && mid >= 0) {
+    try {
+      await exec
+        .request()
+        .input('pid', productId)
+        .input('mid', mid)
+        .query(`UPDATE dbo.products SET pay_today_merchant_id = @mid WHERE id = @pid`)
+    } catch {
+      /* Column or FK missing on older schemas */
+    }
+  }
+
+  const r2 = exec.request()
   r2.input('productId', productId)
   r2.input('sku', input.sku)
   r2.input('variantName', input.variantName)
@@ -515,7 +724,7 @@ export async function createProductSimple(
     variantId = vRes.recordset[0].id
   } catch (e) {
     if (!isMissingCatalogueScopeColumnError(e)) throw e
-    const vRes = await pool.request().input('productId', productId).input('sku', input.sku).input('variantName', input.variantName).input('priceCents', input.priceCents).input('currency', input.currency).query<{ id: string }>(`
+    const vRes = await exec.request().input('productId', productId).input('sku', input.sku).input('variantName', input.variantName).input('priceCents', input.priceCents).input('currency', input.currency).query<{ id: string }>(`
       INSERT INTO dbo.product_variants (product_id, sku, name, price_cents, currency)
       OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
       VALUES (@productId, @sku, @variantName, @priceCents, @currency)
@@ -523,14 +732,28 @@ export async function createProductSimple(
     variantId = vRes.recordset[0].id
   }
 
-  const rWh = pool.request()
+  const dimPatch: VariantPackageDimensionPatch = {}
+  if (input.packageLengthMm !== undefined) dimPatch.packageLengthMm = input.packageLengthMm
+  if (input.packageWidthMm !== undefined) dimPatch.packageWidthMm = input.packageWidthMm
+  if (input.packageHeightMm !== undefined) dimPatch.packageHeightMm = input.packageHeightMm
+  if (input.grossWeightG !== undefined) dimPatch.grossWeightG = input.grossWeightG
+  if (
+    Object.prototype.hasOwnProperty.call(dimPatch, 'packageLengthMm') ||
+    Object.prototype.hasOwnProperty.call(dimPatch, 'packageWidthMm') ||
+    Object.prototype.hasOwnProperty.call(dimPatch, 'packageHeightMm') ||
+    Object.prototype.hasOwnProperty.call(dimPatch, 'grossWeightG')
+  ) {
+    await persistVariantPackageDimensionsPool(exec, variantId, dimPatch)
+  }
+
+  const rWh = exec.request()
   const wh = await rWh.query<{ id: string }>(`SELECT TOP 1 CAST(id AS NVARCHAR(36)) AS id FROM dbo.warehouses ORDER BY code`)
   const warehouseId = wh.recordset[0]?.id
   if (!warehouseId) {
     throw new Error('No warehouse configured')
   }
 
-  const r3 = pool.request()
+  const r3 = exec.request()
   r3.input('variantId', variantId)
   r3.input('warehouseId', warehouseId)
   r3.input('qty', input.initialStock)
@@ -538,9 +761,8 @@ export async function createProductSimple(
     INSERT INTO dbo.inventory_quantity (variant_id, warehouse_id, quantity) VALUES (@variantId, @warehouseId, @qty)
   `)
 
-  const img = input.imageUrl?.trim()
   if (img) {
-    const r4 = pool.request()
+    const r4 = exec.request()
     r4.input('productId', productId)
     r4.input('url', img.slice(0, 2000))
     await r4.query(`
@@ -551,7 +773,7 @@ export async function createProductSimple(
   const opts = input.variantOptions?.filter((o) => o.name.trim() && o.value.trim()) ?? []
   if (opts.length > 0) {
     try {
-      await replaceVariantOptions(pool, variantId, opts)
+      await replaceVariantOptions(exec, variantId, opts)
     } catch {
       /* table may not exist */
     }
@@ -721,6 +943,15 @@ export async function updateProductAdmin(
         .query(`UPDATE dbo.products SET description = @description WHERE id = @id`)
     }
     if (patch.isActive !== undefined) {
+      if (patch.isActive === true) {
+        const cnt = await tx
+          .request()
+          .input('id', productId)
+          .query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.product_images WHERE product_id = @id`)
+        if (Number(cnt.recordset[0]?.c ?? 0) === 0) {
+          throw new Error('Active products must have at least one catalog image')
+        }
+      }
       await tx
         .request()
         .input('id', productId)
@@ -741,6 +972,106 @@ export async function updateProductAdmin(
   }
 }
 
+function validateVariantDimensionPatch(patch: {
+  packageLengthMm?: number | null
+  packageWidthMm?: number | null
+  packageHeightMm?: number | null
+  grossWeightG?: number | null
+}): void {
+  const keys: Array<'packageLengthMm' | 'packageWidthMm' | 'packageHeightMm'> = [
+    'packageLengthMm',
+    'packageWidthMm',
+    'packageHeightMm',
+  ]
+  const present = keys.filter((k) => Object.prototype.hasOwnProperty.call(patch, k) && patch[k] !== undefined)
+  if (present.length > 0 && present.length < 3) {
+    throw new Error('packageLengthMm, packageWidthMm, and packageHeightMm must be sent together (or omit all three)')
+  }
+  if (present.length === 3) {
+    const l = patch.packageLengthMm
+    const w = patch.packageWidthMm
+    const h = patch.packageHeightMm
+    for (const [label, v] of [
+      ['packageLengthMm', l],
+      ['packageWidthMm', w],
+      ['packageHeightMm', h],
+    ] as const) {
+      if (v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0)) {
+        throw new Error(`${label} must be null or a non-negative integer (mm)`)
+      }
+    }
+    const anySet = l != null || w != null || h != null
+    if (anySet && (l == null || w == null || h == null)) {
+      throw new Error('When setting package size, all of packageLengthMm, packageWidthMm, and packageHeightMm are required')
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'grossWeightG') && patch.grossWeightG !== undefined && patch.grossWeightG != null) {
+    const g = patch.grossWeightG
+    if (typeof g !== 'number' || !Number.isInteger(g) || g < 0) {
+      throw new Error('grossWeightG must be null or a non-negative integer (grams)')
+    }
+  }
+}
+
+export type VariantPackageDimensionPatch = {
+  packageLengthMm?: number | null
+  packageWidthMm?: number | null
+  packageHeightMm?: number | null
+  grossWeightG?: number | null
+}
+
+async function persistVariantPackageDimensionsPool(
+  exec: SqlExecutor,
+  variantId: string,
+  patch: VariantPackageDimensionPatch,
+): Promise<void> {
+  if (
+    !Object.prototype.hasOwnProperty.call(patch, 'packageLengthMm') &&
+    !Object.prototype.hasOwnProperty.call(patch, 'packageWidthMm') &&
+    !Object.prototype.hasOwnProperty.call(patch, 'packageHeightMm') &&
+    !Object.prototype.hasOwnProperty.call(patch, 'grossWeightG')
+  ) {
+    return
+  }
+  validateVariantDimensionPatch(patch)
+  try {
+    if (Object.prototype.hasOwnProperty.call(patch, 'packageLengthMm')) {
+      await exec
+        .request()
+        .input('vid', variantId)
+        .input('pl', patch.packageLengthMm ?? null)
+        .query(`UPDATE dbo.product_variants SET package_length_mm = @pl WHERE id = @vid`)
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'packageWidthMm')) {
+      await exec
+        .request()
+        .input('vid', variantId)
+        .input('pw', patch.packageWidthMm ?? null)
+        .query(`UPDATE dbo.product_variants SET package_width_mm = @pw WHERE id = @vid`)
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'packageHeightMm')) {
+      await exec
+        .request()
+        .input('vid', variantId)
+        .input('ph', patch.packageHeightMm ?? null)
+        .query(`UPDATE dbo.product_variants SET package_height_mm = @ph WHERE id = @vid`)
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'grossWeightG')) {
+      await exec
+        .request()
+        .input('vid', variantId)
+        .input('gw', patch.grossWeightG ?? null)
+        .query(`UPDATE dbo.product_variants SET gross_weight_g = @gw WHERE id = @vid`)
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/package_length_mm|Invalid column name/i.test(msg)) {
+      throw new Error('Package dimension columns missing — run database migrations (019_product_variant_package_dimensions.sql)')
+    }
+    throw e
+  }
+}
+
 export async function updateVariantAdmin(
   pool: ConnectionPool,
   productId: string,
@@ -753,6 +1084,10 @@ export async function updateVariantAdmin(
     compareAtPriceCents?: number | null
     inventoryPolicy?: InventoryPolicy
     options?: { name: string; value: string }[]
+    packageLengthMm?: number | null
+    packageWidthMm?: number | null
+    packageHeightMm?: number | null
+    grossWeightG?: number | null
   },
 ): Promise<void> {
   if (Object.keys(patch).length === 0) {
@@ -841,6 +1176,50 @@ export async function updateVariantAdmin(
         await tx.request().input('vid', variantId).input('pol', pol).query(`UPDATE dbo.product_variants SET inventory_policy = @pol WHERE id = @vid`)
       } catch {
         throw new Error('inventory_policy column missing — run database migrations')
+      }
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'packageLengthMm') ||
+      Object.prototype.hasOwnProperty.call(patch, 'packageWidthMm') ||
+      Object.prototype.hasOwnProperty.call(patch, 'packageHeightMm') ||
+      Object.prototype.hasOwnProperty.call(patch, 'grossWeightG')
+    ) {
+      validateVariantDimensionPatch(patch)
+      try {
+        if (Object.prototype.hasOwnProperty.call(patch, 'packageLengthMm')) {
+          await tx
+            .request()
+            .input('vid', variantId)
+            .input('pl', patch.packageLengthMm ?? null)
+            .query(`UPDATE dbo.product_variants SET package_length_mm = @pl WHERE id = @vid`)
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'packageWidthMm')) {
+          await tx
+            .request()
+            .input('vid', variantId)
+            .input('pw', patch.packageWidthMm ?? null)
+            .query(`UPDATE dbo.product_variants SET package_width_mm = @pw WHERE id = @vid`)
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'packageHeightMm')) {
+          await tx
+            .request()
+            .input('vid', variantId)
+            .input('ph', patch.packageHeightMm ?? null)
+            .query(`UPDATE dbo.product_variants SET package_height_mm = @ph WHERE id = @vid`)
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'grossWeightG')) {
+          await tx
+            .request()
+            .input('vid', variantId)
+            .input('gw', patch.grossWeightG ?? null)
+            .query(`UPDATE dbo.product_variants SET gross_weight_g = @gw WHERE id = @vid`)
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (/package_length_mm|Invalid column name/i.test(msg)) {
+          throw new Error('Package dimension columns missing — run database migrations (019_product_variant_package_dimensions.sql)')
+        }
+        throw e
       }
     }
     if (patch.options !== undefined) {

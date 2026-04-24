@@ -17,6 +17,7 @@ import {
 } from '@mui/material'
 import LocationOnOutlinedIcon from '@mui/icons-material/LocationOnOutlined'
 import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
@@ -177,16 +178,18 @@ export function ProfileAddressesPage() {
 
   if (loading) {
     return (
-      <Stack alignItems="center" py={6}>
-        <CircularProgress size={36} />
-      </Stack>
+      <ProfilePageShell>
+        <Stack alignItems="center" py={6}>
+          <CircularProgress size={36} />
+        </Stack>
+      </ProfilePageShell>
     )
   }
 
   if (!user) {
     return (
-      <Stack spacing={2.5} sx={{ maxWidth: 560, mx: 'auto', pb: 4 }}>
-        <WalletSubheader title="Address book" />
+      <ProfilePageShell>
+        <WalletSubheader title="Addresses" />
         <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
           <CardContent sx={{ py: 4, textAlign: 'center' }}>
             <Box sx={{ color: 'text.secondary', mb: 2 }}>
@@ -196,22 +199,22 @@ export function ProfileAddressesPage() {
               Sign in required
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
-              Save delivery addresses for checkout. Sign in to manage your address book.
+              Sign in to save addresses for checkout.
             </Typography>
             <Button component={RouterLink} to={profileHubPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
-              Go to My account
+              Account
             </Button>
           </CardContent>
         </Card>
-      </Stack>
+      </ProfilePageShell>
     )
   }
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 560, mx: 'auto', pb: 4 }}>
-      <WalletSubheader title="Address book" />
+    <ProfilePageShell>
+      <WalletSubheader title="Addresses" />
       <Typography variant="body2" color="text.secondary">
-        Add, edit, or remove saved addresses. The default address is pre-selected at checkout when you choose home delivery.
+        Add or edit saved addresses. Default is used first at checkout.
       </Typography>
 
       {msg ? (
@@ -307,6 +310,6 @@ export function ProfileAddressesPage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Stack>
+    </ProfilePageShell>
   )
 }

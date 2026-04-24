@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, Link as RouterLink } from 'react-router-dom'
 import { Alert, Button, CircularProgress, Stack, Typography } from '@mui/material'
+import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { apiFetch } from '../../api/client'
@@ -18,7 +19,7 @@ export function ProfileConfirmEmailPage() {
   useEffect(() => {
     if (!token) {
       setStatus('err')
-      setMessage('Missing verification token. Open the link from your email, or paste the full URL including ?token=…')
+      setMessage('Missing token. Use the link from your email (includes ?token=…).')
       return
     }
     let cancelled = false
@@ -34,7 +35,7 @@ export function ProfileConfirmEmailPage() {
           return
         }
         setStatus('ok')
-        setMessage(data.message ?? 'Your email is verified.')
+        setMessage(data.message ?? 'Email verified.')
         window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
       } catch (e) {
         if (!cancelled) {
@@ -49,7 +50,7 @@ export function ProfileConfirmEmailPage() {
   }, [token])
 
   return (
-    <Stack spacing={3} sx={{ maxWidth: 480, mx: 'auto', pb: 4 }}>
+    <ProfilePageShell>
       <WalletSubheader title="Confirm email" />
       {status === 'loading' ? (
         <Stack alignItems="center" py={4}>
@@ -63,12 +64,12 @@ export function ProfileConfirmEmailPage() {
         <Alert severity="success">
           {message}
           <Button component={RouterLink} to={profilePath} sx={{ mt: 1, display: 'block' }} variant="text">
-            Back to personal details
+            Personal
           </Button>
         </Alert>
       ) : null}
       {status === 'err' && message ? <Alert severity="error">{message}</Alert> : null}
       {status === 'idle' && !token ? <Typography color="text.secondary">No token in this link.</Typography> : null}
-    </Stack>
+    </ProfilePageShell>
   )
 }

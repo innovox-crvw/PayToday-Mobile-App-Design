@@ -3,16 +3,30 @@ import type { SqlExecutor } from '../db/sqlExecutor.js'
 import crypto from 'node:crypto'
 import { env } from '../config/env.js'
 import { getVariantInventoryPolicy } from '../repos/productsRepo.js'
+import { findUserById } from '../repos/usersRepo.js'
 
 const CART_COOKIE = 'pt_cart_session'
 
 export { CART_COOKIE }
 
+const SQL_USER_ID_RE = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i
+
+/**
+ * Only attach `carts.user_id` when the id exists in `dbo.users` (JWT `sub` can be stale after DB reset / user delete).
+ */
+async function resolveCartUserId(pool: ConnectionPool, raw: string | undefined): Promise<string | undefined> {
+  const t = raw?.trim()
+  if (!t || !SQL_USER_ID_RE.test(t)) return undefined
+  const row = await findUserById(pool, t)
+  return row ? t : undefined
+}
+
 export async function getOrCreateCartId(
   pool: ConnectionPool,
   sessionToken: string | undefined,
-  userId: string | undefined,
+  rawUserId: string | undefined,
 ): Promise<{ cartId: string; sessionToken: string }> {
+  const userId = await resolveCartUserId(pool, rawUserId)
   let token = sessionToken
   if (!token) {
     token = crypto.randomBytes(24).toString('hex')
@@ -65,7 +79,10 @@ function weightedUnitPriceCents(q1: number, p1: number, q2: number, p2: number):
   return Math.round((p1 * q1 + p2 * q2) / t)
 }
 
-export async function mergeGuestCartIntoUser(pool: ConnectionPool, sessionToken: string, userId: string): Promise<void> {
+export async function mergeGuestCartIntoUser(pool: ConnectionPool, sessionToken: string, rawUserId: string): Promise<void> {
+  const userId = await resolveCartUserId(pool, rawUserId)
+  if (!userId) return
+
   const g = await pool
     .request()
     .input('st', sessionToken)

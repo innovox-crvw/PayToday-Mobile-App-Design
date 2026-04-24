@@ -9,6 +9,7 @@ import {
   Divider,
   IconButton,
   InputAdornment,
+  Link,
   Paper,
   Stack,
   TextField,
@@ -19,14 +20,16 @@ import LoginOutlinedIcon from '@mui/icons-material/LoginOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import PersonAddAltOutlinedIcon from '@mui/icons-material/PersonAddAltOutlined'
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined'
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined'
+import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
 import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined'
+import { AppBrandLogo } from '../../components/brand/AppBrandLogo'
 import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { useAuthMethods } from '../../hooks/useAuthMethods'
-import { HEADER_APP_GRADIENT, SIGNIN_PAGE_BACKDROP } from '../../theme/branding'
+import { APP_DISPLAY_NAME, HEADER_APP_GRADIENT, SIGNIN_PAGE_BACKDROP } from '../../theme/branding'
+import { parseEmailString, parseOptionalDisplayName } from '../../lib/inputValidators'
 
 type Mode = 'signin' | 'register'
 type Method = 'local' | 'paytoday'
@@ -214,13 +217,18 @@ export function OnboardingLoginPage() {
   async function submitLogin() {
     setError(null)
     setNotice(null)
+    const emailCheck = parseEmailString(email, 'email')
+    if (!emailCheck.ok) {
+      setError(emailCheck.message)
+      return
+    }
     setSubmitting(true)
     try {
       await fetchCsrfToken()
       const body =
         signInMethod === 'paytoday'
-          ? { email, password, authSource: 'paytoday' as const }
-          : { email, password, authSource: 'local' as const }
+          ? { email: emailCheck.value, password, authSource: 'paytoday' as const }
+          : { email: emailCheck.value, password, authSource: 'local' as const }
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -236,11 +244,11 @@ export function OnboardingLoginPage() {
         }
         if (data.code === 'use_paytoday_account') {
           setSignInMethod('paytoday')
-          setNotice('This email uses a PayToday account — switched to PayToday sign-in.')
+          setNotice(`This email uses a ${APP_DISPLAY_NAME} account — switched to ${APP_DISPLAY_NAME} sign-in.`)
           return
         }
         if (data.code === 'paytoday_login_failed') {
-          setError("PayToday sign-in isn't available right now. Try again later or use your store account.")
+          setError(`${APP_DISPLAY_NAME} sign-in isn't available right now. Try again later or use your store account.`)
           return
         }
         setError(data.error ?? 'Sign in failed')
@@ -259,18 +267,30 @@ export function OnboardingLoginPage() {
   async function submitRegister() {
     setError(null)
     setNotice(null)
+    const emailCheck = parseEmailString(email, 'email')
+    if (!emailCheck.ok) {
+      setError(emailCheck.message)
+      return
+    }
+    const fullNameCheck = parseOptionalDisplayName(fullName, 'fullName')
+    if (!fullNameCheck.ok) {
+      setError(fullNameCheck.message)
+      return
+    }
     setSubmitting(true)
     try {
       await fetchCsrfToken()
       const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, fullName }),
+        body: JSON.stringify({ email: emailCheck.value, password, fullName: fullNameCheck.value }),
       })
       const data = await readResponseJson<ApiError & { ok?: boolean }>(res)
       if (!res.ok) {
         if (data.code === 'paytoday_account_exists') {
-          setError('This email already has a PayToday account. Switch to sign-in and choose PayToday account.')
+          setError(
+            `This email already has a ${APP_DISPLAY_NAME} account. Switch to sign-in and choose ${APP_DISPLAY_NAME} account.`,
+          )
           return
         }
         setError(data.error ?? 'Registration failed')
@@ -303,7 +323,7 @@ export function OnboardingLoginPage() {
   const paytodayDisabled = !paytodaySignInEnabled
   const paytodayTabHelper =
     mode === 'signin' && signInMethod === 'paytoday' && paytodayDisabled && methodsLoaded && !methodsFetchFailed
-      ? "PayToday sign-in isn't available right now. Use your store account below."
+      ? `${APP_DISPLAY_NAME} sign-in isn't available right now. Use your store account below.`
       : null
 
   const registerBlocked = mode === 'register' && !localPasswordLoginAllowed
@@ -341,22 +361,18 @@ export function OnboardingLoginPage() {
         zIndex: (t) => t.zIndex.modal,
       }}
     >
-      <Typography
-        aria-hidden
+      <Box
         sx={{
           position: 'absolute',
           top: { xs: 10, sm: 14 },
           right: { xs: 14, sm: 18 },
-          color: PT_PRIMARY,
-          fontWeight: 900,
-          letterSpacing: 2.2,
-          fontSize: 10,
+          lineHeight: 0,
           userSelect: 'none',
-          opacity: 0.85,
+          '& a': { lineHeight: 0 },
         }}
       >
-        PAY TODAY
-      </Typography>
+        <AppBrandLogo to={prefix || '/'} compact wordmarkTone="onLight" />
+      </Box>
 
       <Paper
         elevation={0}
@@ -408,7 +424,7 @@ export function OnboardingLoginPage() {
           >
             {mode === 'register'
               ? 'Set up your store profile to track orders and pay faster.'
-              : 'Sign in to your PayToday Store account'}
+              : `Sign in to your ${APP_DISPLAY_NAME} store account`}
           </Typography>
         </Box>
 
@@ -477,14 +493,14 @@ export function OnboardingLoginPage() {
                         setError(null)
                         setNotice(null)
                       }}
-                      icon={<HubOutlinedIcon sx={{ fontSize: 18 }} />}
-                      label="PayToday"
+                      icon={<AccountBalanceWalletOutlinedIcon sx={{ fontSize: 18 }} />}
+                      label={APP_DISPLAY_NAME}
                     />
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
                     {paytodayTabHelper ??
                       (signInMethod === 'paytoday'
-                        ? 'Use your PayToday IdP email and password (same session as the store).'
+                        ? `Use your ${APP_DISPLAY_NAME} account email and password (same session as the store).`
                         : 'Use your store email and password.')}
                   </Typography>
                 </Stack>
@@ -582,15 +598,11 @@ export function OnboardingLoginPage() {
 
                 <Typography variant="body2" textAlign="center">
                   {signInMethod === 'paytoday' && paytodayForgotUrl ? (
-                    <Typography
-                      component="a"
-                      href={paytodayForgotUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      variant="body2"
-                      sx={linkInlineSx}
-                    >
-                      Forgot your password?
+                    <Typography variant="body2" component="span" sx={{ lineHeight: 1.6 }}>
+                      <strong>Forgot password ({APP_DISPLAY_NAME}):</strong>{' '}
+                      <Link href={paytodayForgotUrl} target="_blank" rel="noopener noreferrer" sx={linkInlineSx}>
+                        Reset link
+                      </Link>
                     </Typography>
                   ) : signInMethod === 'paytoday' ? null : (
                     <Typography component={RouterLink} to={`${prefix}/forgot-password`} variant="body2" sx={linkInlineSx}>
@@ -612,9 +624,9 @@ export function OnboardingLoginPage() {
 
                 {registerBlocked ? (
                   <Alert severity="info">
-                    New store accounts aren&apos;t currently allowed. If you have a PayToday account,{' '}
+                    New store accounts aren&apos;t currently allowed. If you have a {APP_DISPLAY_NAME} account,{' '}
                     <Typography component={RouterLink} to={paytodaySignInHref} variant="body2" sx={linkInlineSx}>
-                      sign in with PayToday
+                      sign in with {APP_DISPLAY_NAME}
                     </Typography>
                     .
                   </Alert>

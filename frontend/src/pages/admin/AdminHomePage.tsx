@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import { Alert, Box, Button, Divider, Paper, Stack, Typography } from '@mui/material'
 import { apiUrl } from '../../lib/apiOrigin'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
+import { useAuthMe } from '../../hooks/useAuthMe'
 import { AdminOverviewCharts, type AdminOverviewDto } from './AdminOverviewCharts'
 
 type LowStockRow = { sku: string; product_name: string; quantity: number; low_stock_threshold: number | null }
 
 export function AdminHomePage() {
+  const { user: authUser } = useAuthMe()
   const [overview, setOverview] = useState<AdminOverviewDto | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(true)
   const [overviewError, setOverviewError] = useState<string | null>(null)
@@ -79,12 +82,19 @@ export function AdminHomePage() {
     <Stack spacing={3} sx={{ maxWidth: 1200 }}>
       <Box>
         <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.8, fontWeight: 700 }}>
-          PayToday operations
+          {APP_DISPLAY_NAME} operations
         </Typography>
         <Typography variant="h4" component="h1" fontWeight={800} sx={{ mt: 0.5, letterSpacing: -0.5 }}>
           Overview
         </Typography>
       </Box>
+
+      {(authUser?.role === 'admin' || authUser?.role === 'fulfillment') && (authUser.merchants?.length ?? 0) > 0 ? (
+        <Alert severity="info">
+          Dashboard metrics (orders, revenue, inventory totals, top products) reflect your linked store(s):{' '}
+          <strong>{authUser.merchants!.map((m) => m.name).join(', ')}</strong>.
+        </Alert>
+      ) : null}
 
       <AdminOverviewCharts data={overview} loading={overviewLoading} error={overviewError} />
 

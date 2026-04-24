@@ -4,11 +4,12 @@ import AddCardIcon from '@mui/icons-material/AddCard'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
 import { WalletSubheader } from './WalletSubheader'
 
 const actions = [
   { key: 'fund', label: 'Fund My Wallet', sub: 'Add money from a card or bank', icon: <AddCardIcon /> },
-  { key: 'transfer', label: 'Transfer My Wallet', sub: 'Send to another PayToday user', icon: <SwapHorizIcon /> },
+  { key: 'transfer', label: 'Transfer My Wallet', sub: `Send to another ${APP_DISPLAY_NAME} user`, icon: <SwapHorizIcon /> },
   { key: 'withdraw', label: 'Withdraw to Bank Account', sub: 'Move balance to your linked account', icon: <AccountBalanceIcon /> },
 ] as const
 
@@ -18,7 +19,7 @@ export function WalletPayTodayPage() {
 
   return (
     <Stack spacing={2} sx={{ maxWidth: 560, mx: 'auto' }}>
-      <WalletSubheader title="PayToday Wallet" />
+      <WalletSubheader title={APP_WALLET_DISPLAY_NAME} />
       <Typography variant="body2" color="text.secondary" sx={{ px: 0.5 }}>
         Manage how you add, move, or withdraw your wallet balance.
       </Typography>

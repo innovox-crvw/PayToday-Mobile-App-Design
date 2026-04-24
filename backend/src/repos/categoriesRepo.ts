@@ -1,4 +1,6 @@
 import type { ConnectionPool } from 'mssql'
+import { isValidCategoryIconKey, normalizeCategoryIconKey } from '../lib/categoryIconKeys.js'
+
 
 export type CategoryRow = {
   id: string
@@ -7,11 +9,81 @@ export type CategoryRow = {
   parentId: string | null
   sortOrder: number
   isActive: boolean
+  /** Allowlisted storefront icon key; null = default icon in UI. */
+  iconKey: string | null
+}
+
+function mapRow(row: {
+  id: string
+  slug: string
+  name: string
+  parent_id: string | null
+  sort_order: number
+  is_active: number | boolean
+  icon_key?: string | null
+}): CategoryRow {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    parentId: row.parent_id,
+    sortOrder: row.sort_order,
+    isActive: Boolean(row.is_active),
+    iconKey: row.icon_key?.trim() ? normalizeCategoryIconKey(row.icon_key.trim()) : null,
+  }
 }
 
 export async function listCategories(pool: ConnectionPool, opts?: { includeInactive?: boolean }): Promise<CategoryRow[]> {
   const includeInactive = opts?.includeInactive ?? false
   const where = includeInactive ? '' : 'WHERE COALESCE(is_active, 1) = 1'
+
+  try {
+    const r = await pool.request().query<{
+      id: string
+      slug: string
+      name: string
+      parent_id: string | null
+      sort_order: number
+      is_active: number | boolean
+      icon_key: string | null
+    }>(`
+      SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
+             CAST(parent_id AS NVARCHAR(36)) AS parent_id,
+             sort_order, is_active,
+             LTRIM(RTRIM(icon_key)) AS icon_key
+      FROM dbo.categories
+      ${where}
+      ORDER BY sort_order, name
+    `)
+    return r.recordset.map((row) => mapRow(row))
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (!/icon_key|Invalid column name/i.test(msg)) {
+      /* not missing icon_key — try catalogue-scope shape without icon_key */
+    } else {
+      try {
+        const r = await pool.request().query<{
+          id: string
+          slug: string
+          name: string
+          parent_id: string | null
+          sort_order: number
+          is_active: number | boolean
+        }>(`
+          SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
+                 CAST(parent_id AS NVARCHAR(36)) AS parent_id,
+                 sort_order, is_active
+          FROM dbo.categories
+          ${where}
+          ORDER BY sort_order, name
+        `)
+        return r.recordset.map((row) => mapRow({ ...row, icon_key: null }))
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+
   try {
     const r = await pool.request().query<{
       id: string
@@ -28,14 +100,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       ${where}
       ORDER BY sort_order, name
     `)
-    return r.recordset.map((row) => ({
-      id: row.id,
-      slug: row.slug,
-      name: row.name,
-      parentId: row.parent_id,
-      sortOrder: row.sort_order,
-      isActive: Boolean(row.is_active),
-    }))
+    return r.recordset.map((row) => mapRow({ ...row, icon_key: null }))
   } catch {
     const r = await pool.request().query<{ id: string; slug: string; name: string }>(`
       SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name
@@ -49,6 +114,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       parentId: null,
       sortOrder: 0,
       isActive: true,
+      iconKey: null,
     }))
   }
 }
@@ -78,7 +144,7 @@ async function assertNoCycle(pool: ConnectionPool, categoryId: string, newParent
 
 export async function createCategory(
   pool: ConnectionPool,
-  input: { slug: string; name: string; parentId?: string | null; sortOrder?: number },
+  input: { slug: string; name: string; parentId?: string | null; sortOrder?: number; iconKey?: string | null },
 ): Promise<string> {
   const slug = input.slug.trim().toLowerCase().replace(/\s+/g, '-')
   const name = input.name.trim()
@@ -87,6 +153,10 @@ export async function createCategory(
   }
   const parentId = input.parentId?.trim() || null
   const sortOrder = Number.isFinite(input.sortOrder ?? 0) ? Math.floor(Number(input.sortOrder)) : 0
+  const iconKey = input.iconKey != null && String(input.iconKey).trim() ? normalizeCategoryIconKey(String(input.iconKey)) : null
+  if (input.iconKey != null && String(input.iconKey).trim() && !iconKey) {
+    throw new Error('iconKey must be one of the allowlisted storefront icons (or omit)')
+  }
   if (parentId) {
     const ex = await pool.request().input('id', parentId).query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.categories WHERE id = @id`)
     if (Number(ex.recordset[0]?.c ?? 0) === 0) {
@@ -100,14 +170,46 @@ export async function createCategory(
       .input('name', name.slice(0, 200))
       .input('pid', parentId)
       .input('so', sortOrder)
+      .input('ik', iconKey)
       .query<{ id: string }>(`
-        INSERT INTO dbo.categories (slug, name, parent_id, sort_order, is_active)
+        INSERT INTO dbo.categories (slug, name, parent_id, sort_order, is_active, icon_key)
         OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-        VALUES (@slug, @name, @pid, @so, 1)
+        VALUES (@slug, @name, @pid, @so, 1, @ik)
       `)
     return ins.recordset[0]!.id
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    if (/Invalid column name|icon_key/i.test(msg)) {
+      try {
+        const ins = await pool
+          .request()
+          .input('slug', slug.slice(0, 120))
+          .input('name', name.slice(0, 200))
+          .input('pid', parentId)
+          .input('so', sortOrder)
+          .query<{ id: string }>(`
+            INSERT INTO dbo.categories (slug, name, parent_id, sort_order, is_active)
+            OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
+            VALUES (@slug, @name, @pid, @so, 1)
+          `)
+        return ins.recordset[0]!.id
+      } catch (e2) {
+        const msg2 = e2 instanceof Error ? e2.message : String(e2)
+        if (/Invalid column name|parent_id|is_active|sort_order/i.test(msg2)) {
+          const ins = await pool
+            .request()
+            .input('slug', slug.slice(0, 120))
+            .input('name', name.slice(0, 200))
+            .query<{ id: string }>(`
+              INSERT INTO dbo.categories (slug, name)
+              OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
+              VALUES (@slug, @name)
+            `)
+          return ins.recordset[0]!.id
+        }
+        throw e2
+      }
+    }
     if (/Invalid column name|parent_id|is_active|sort_order/i.test(msg)) {
       const ins = await pool
         .request()
@@ -127,11 +229,23 @@ export async function createCategory(
 export async function updateCategory(
   pool: ConnectionPool,
   categoryId: string,
-  patch: { slug?: string; name?: string; parentId?: string | null; sortOrder?: number; isActive?: boolean },
+  patch: {
+    slug?: string
+    name?: string
+    parentId?: string | null
+    sortOrder?: number
+    isActive?: boolean
+    iconKey?: string | null
+  },
 ): Promise<void> {
   const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k)
-  if (!has('slug') && !has('name') && !has('parentId') && !has('sortOrder') && !has('isActive')) {
+  if (!has('slug') && !has('name') && !has('parentId') && !has('sortOrder') && !has('isActive') && !has('iconKey')) {
     throw new Error('No fields to update')
+  }
+  if (patch.iconKey !== undefined && patch.iconKey != null && String(patch.iconKey).trim()) {
+    if (!isValidCategoryIconKey(String(patch.iconKey))) {
+      throw new Error('iconKey must be one of the allowlisted storefront icons (or null to clear)')
+    }
   }
   if (patch.parentId !== undefined) {
     const p = patch.parentId
@@ -171,11 +285,24 @@ export async function updateCategory(
         .input('a', patch.isActive ? 1 : 0)
         .query(`UPDATE dbo.categories SET is_active = @a WHERE id = @id`)
     }
+    if (patch.iconKey !== undefined) {
+      const ik =
+        patch.iconKey == null || !String(patch.iconKey).trim()
+          ? null
+          : normalizeCategoryIconKey(String(patch.iconKey))
+      try {
+        await tx.request().input('id', categoryId).input('ik', ik).query(`UPDATE dbo.categories SET icon_key = @ik WHERE id = @id`)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (!/icon_key|Invalid column name/i.test(msg)) throw e
+        throw new Error('Run database migration 018_categories_icon_key.sql to enable category icons.')
+      }
+    }
     await tx.commit()
   } catch (e) {
     await tx.rollback()
     const msg = e instanceof Error ? e.message : String(e)
-    if (/Invalid column name|parent_id|is_active|sort_order/i.test(msg)) {
+    if (/Invalid column name|parent_id|is_active|sort_order/i.test(msg) && !/icon_key/i.test(msg)) {
       throw new Error('Run database migration 012_catalogue_scope.sql to enable full category editing.')
     }
     throw e

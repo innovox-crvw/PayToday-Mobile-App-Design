@@ -152,5 +152,6 @@ export function startNotificationWorker(getPool: () => Promise<ConnectionPool | 
   }
 
   void tick()
-  setInterval(() => void tick(), 30_000)
+  /* 15s: in-app rows should appear soon after outbox enqueue (UI polls unread-count on a similar cadence). */
+  setInterval(() => void tick(), 15_000)
 }

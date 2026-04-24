@@ -24,6 +24,12 @@ export interface ProductVariantDto {
   compareAtPriceCents: number | null
   inventoryPolicy: InventoryPolicy
   options: VariantOptionDto[]
+  /** Outer package L × W × H in millimetres (nullable; all three null when unset). */
+  packageLengthMm?: number | null
+  packageWidthMm?: number | null
+  packageHeightMm?: number | null
+  /** Gross weight in grams (nullable). */
+  grossWeightG?: number | null
 }
 
 export interface ProductDto {

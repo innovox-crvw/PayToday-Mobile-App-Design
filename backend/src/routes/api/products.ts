@@ -34,8 +34,10 @@ productsRouter.get('/', async (req, res) => {
   const categorySlug = typeof req.query.category === 'string' ? req.query.category : undefined
   const brandSlug = typeof req.query.brand === 'string' ? req.query.brand : undefined
   const sort = parseSort(req.query.sort)
+  const includeImages =
+    String(req.query.includeImages ?? '').trim() === '1' || String(req.query.includeGallery ?? '').trim() === '1'
 
-  const listOpts: ListProductsOptions = { search: q, categorySlug, brandSlug, sort }
+  const listOpts: ListProductsOptions = { search: q, categorySlug, brandSlug, sort, includeImages }
 
   if (!pool) {
     return noDatabaseResponse(res, false)

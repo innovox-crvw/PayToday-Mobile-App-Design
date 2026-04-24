@@ -24,6 +24,6 @@ app.listen(env.port, async () => {
   /* Drain notification_outbox whenever SQL is configured — ticks no-op until getSqlPool() connects. */
   if (env.sqlConnectionString?.trim()) {
     startNotificationWorker(getSqlPool)
-    console.log('Notification worker: started (30s interval; requires pool for each tick).')
+    console.log('Notification worker: started (15s interval; requires pool for each tick).')
   }
 })

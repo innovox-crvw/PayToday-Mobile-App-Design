@@ -12,9 +12,10 @@
 2. From the project root: `docker compose up -d`  
    This starts SQL Server 2022 on port **1433** with the password in `docker-compose.yml` / `.env.example`.
 3. Copy `.env.example` to `.env` and ensure `SQL_CONNECTION_STRING` matches (same `sa` password and `Database=paytoday`).
-4. Create the database (if needed) and apply migrations: `npm run db:setup`  
-   - `db:prepare` connects to `master` and creates `paytoday` when missing (retries while the container starts).  
-   - `db:migrate` runs `backend/migrations/*.sql` in order.
+4. Create the database, load **demo schema + products + users**, then apply newer migrations:  
+   - **`npm run db:demo-setup`** — runs `db:prepare`, then **`db:bootstrap`** (executes [`backend/scripts/paytoday-full-setup.sql`](../backend/scripts/paytoday-full-setup.sql); **dev reset**, drops core tables), then `db:migrate`.  
+   - For an **existing** database that already has the full catalogue, use **`npm run db:setup`** (`db:prepare` + `db:migrate` only).  
+   - `db:prepare` connects to `master` and creates `paytoday` when missing (retries while the container starts).
 5. Start the app: `npm run dev` — the API uses `SQL_CONNECTION_STRING` from `.env` via `dotenv`.
 
 Stop the container (data kept in volume): `docker compose down`. Remove data: `docker compose down -v`.

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" aria-hidden="true">
+  <circle cx="20" cy="78" r="8.5" fill="#8B1FD2"/>
+  <circle cx="80" cy="22" r="8.5" fill="#8B1FD2"/>
+  <!-- Royal blue: top-left arch (inverted U), flows into centre -->
+  <path
+    d="M 22 76 Q 18 28 50 48"
+    stroke="#2B25E1"
+    stroke-width="11"
+    fill="none"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Teal: centre to bottom-right upright U leg -->
+  <path
+    d="M 50 48 Q 82 26 78 24"
+    stroke="#30F0D5"
+    stroke-width="11"
+    fill="none"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

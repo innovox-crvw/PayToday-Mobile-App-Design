@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link as RouterLink, useLocation } from 'react-router-dom'
-import { Alert, Button, Stack, TextField, Typography } from '@mui/material'
-import { apiFetch, fetchCsrfToken } from '../../api/client'
+import { Alert, Button, Link, Stack, TextField, Typography } from '@mui/material'
+import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
+import { apiUrl } from '../../lib/apiOrigin'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 
 export function ForgotPasswordPage() {
   const { pathname } = useLocation()
@@ -12,6 +14,20 @@ export function ForgotPasswordPage() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [devToken, setDevToken] = useState<string | null>(null)
+  const [paytodayForgotUrl, setPaytodayForgotUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/auth/public-config'), { credentials: 'include' })
+        if (!res.ok) return
+        const data = await readResponseJson<{ paytodayForgotPasswordUrl?: string }>(res)
+        if (data.paytodayForgotPasswordUrl) setPaytodayForgotUrl(data.paytodayForgotPasswordUrl)
+      } catch {
+        /* optional */
+      }
+    })()
+  }, [])
 
   async function submit() {
     setMsg(null)
@@ -48,6 +64,14 @@ export function ForgotPasswordPage() {
       <Typography variant="body2" color="text.secondary">
         Enter the email for your store password account. If it exists, you can set a new password from the link we send (or use the dev token below when enabled on the server).
       </Typography>
+      {paytodayForgotUrl ? (
+        <Typography variant="body2">
+          <strong>Forgot password ({APP_DISPLAY_NAME}):</strong>{' '}
+          <Link href={paytodayForgotUrl} target="_blank" rel="noopener noreferrer" fontWeight={600}>
+            Reset link
+          </Link>
+        </Typography>
+      ) : null}
       <TextField
         label="Email"
         type="email"

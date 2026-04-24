@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from 'react'
+import type { MouseEvent } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -7,42 +7,52 @@ import {
   Button,
   ButtonBase,
   Card,
+  Chip,
   CircularProgress,
   IconButton,
   InputBase,
   Paper,
   Stack,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
   useMediaQuery,
   useTheme,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import SearchIcon from '@mui/icons-material/Search'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
-import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined'
-import DirectionsCarOutlinedIcon from '@mui/icons-material/DirectionsCarOutlined'
-import PhoneIphoneOutlinedIcon from '@mui/icons-material/PhoneIphoneOutlined'
-import CheckroomOutlinedIcon from '@mui/icons-material/CheckroomOutlined'
-import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
-import LocalGroceryStoreOutlinedIcon from '@mui/icons-material/LocalGroceryStoreOutlined'
 import type { PopularStoreDto, StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
-import { apiUrl, readApiError } from '../../lib/apiOrigin'
-import { getRecentVisits, MAX_RECENT_VISIT_ITEMS, recentVisitLink, type RecentVisitRecord } from '../../lib/recentVisits'
+import type { HubPaymentCategoryItemDto, HubPaymentCategoryItemsResponse } from '../../types/paymentCategoryItems'
+import type { ProductDto, ProductListResponse } from '../../types/catalogue'
+import { apiUrl } from '../../lib/apiOrigin'
+import { resolvePromotionDisplayUrl } from '../../lib/promotionImageUrl'
+import { PAYMENTS_HUB_TILES, SERVICES_HUB_TILES } from '../../data/hubNavigationStatic'
+import { hubNavIcon } from '../../lib/hubNavIcons'
+import { useAuthMe } from '../../hooks/useAuthMe'
 import { SurfaceSection } from '../../components/page/SurfaceSection'
 import {
-  CHROME_SHADOW_SOFT,
-  HEADER_CHROME_GRADIENT,
+  APP_DISPLAY_NAME,
+  SERVICES_CARD_GRADIENT,
+  STORE_HOME_CARD_SHADOW,
+  STORE_HOME_HERO_DOT_ACTIVE,
+  STORE_HOME_HERO_DOT_INACTIVE,
+  STORE_HOME_HERO_SLIDE_SCRIM,
+  STORE_DESKTOP_CANVAS_GREY,
+  STORE_HOME_SURFACE_RADIUS_PX,
   SURFACE_BORDER,
   SURFACE_SHADOW,
-  SURFACE_SHADOW_HOVER,
 } from '../../theme/branding'
-import CardGiftcardOutlinedIcon from '@mui/icons-material/CardGiftcardOutlined'
-import UmbrellaOutlinedIcon from '@mui/icons-material/UmbrellaOutlined'
-import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined'
+import { AppBrandLogo } from '../../components/brand/AppBrandLogo'
+import { formatMoney } from '../../lib/money'
+import { storefrontVariantPriceRange, variantSavingsCents } from '../../lib/productStock'
+import { StoreHomeProductRailCard } from '../../components/store/StoreHomeProductRailCard'
+import { PrepaidProviderLogo } from '../../components/store/PrepaidProviderLogo'
+import { SHOP_V2 } from '../../theme/storeV2'
+
+/** Light outline so tiles and section shells read clearly on the grey home canvas. */
+const homeOutline = `1px solid ${SURFACE_BORDER}`
 
 type Brand = { id: string; abbr: string; bg: string; color?: string }
 
@@ -55,36 +65,44 @@ const STATIC_POPULAR_BRANDS: Brand[] = [
   { id: 'paratus', abbr: 'PR', bg: '#1565C0' },
 ]
 
-function formatPopularDateRange(fromIso: string | null | undefined, toIso: string | null | undefined): string {
-  if (!fromIso?.trim() || !toIso?.trim()) return ''
-  try {
-    const from = new Date(fromIso)
-    const to = new Date(toIso)
-    const df = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-    return `${df.format(from)} – ${df.format(to)}`
-  } catch {
-    return ''
+/** Fixed window for `/api/storefront/popular-stores` (UI no longer exposes range controls). */
+const POPULAR_STORES_RANK_WINDOW_DAYS = 30
+
+function hubLogoHue(name: string): string {
+  let h = 0
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  const hue = h % 360
+  return `hsl(${hue}, 55%, 42%)`
+}
+
+function dealScore(p: ProductDto): number {
+  let max = 0
+  for (const v of p.variants) {
+    const s = variantSavingsCents(v)
+    if (s != null && s > max) max = s
   }
+  return max
 }
 
-/** Stock-style placement art when `image_url` is empty (Unsplash, free to use). */
-const HERO_PLACEHOLDER_IMAGES: Record<string, string> = {
-  welcome:
-    'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?auto=format&fit=crop&w=1400&q=80',
-  pickup:
-    'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1400&q=80',
-  secure:
-    'https://images.unsplash.com/photo-1563013544-824ae1b704d3?auto=format&fit=crop&w=1400&q=80',
+function hasDeal(p: ProductDto): boolean {
+  return dealScore(p) > 0
 }
 
-const DEFAULT_HERO_IMAGE =
-  'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?auto=format&fit=crop&w=1400&q=80'
+function selectHomeDealProducts(items: ProductDto[], cap: number): ProductDto[] {
+  const deals = items.filter(hasDeal)
+  const sorted = [...deals].sort((a, b) => dealScore(b) - dealScore(a))
+  if (sorted.length >= cap) return sorted.slice(0, cap)
+  const filler = items.filter((p) => !hasDeal(p))
+  return [...sorted, ...filler].slice(0, cap)
+}
 
-function resolveHeroImageUrl(slug: string | null | undefined, imageUrl: string | null | undefined): string {
-  const trimmed = imageUrl?.trim()
-  if (trimmed) return trimmed
-  const key = (slug ?? '').toLowerCase()
-  return HERO_PLACEHOLDER_IMAGES[key] ?? DEFAULT_HERO_IMAGE
+function railPriceLabel(p: ProductDto): string {
+  const v0 = p.variants[0]
+  const range = storefrontVariantPriceRange(p)
+  if (range && p.variants.length > 1 && range.min !== range.max) {
+    return `From ${formatMoney(range.min, range.currency)}`
+  }
+  return v0 ? formatMoney(v0.priceCents, v0.currency) : '—'
 }
 
 type HeroSlide = {
@@ -101,7 +119,7 @@ const fallbackHeroSlides: {
   subtitle: string
   linkPath: '/shop' | '/wallet'
 }[] = [
-  { slug: 'welcome', title: 'Deals near you', subtitle: 'Pay with PayToday in one tap.', linkPath: '/shop' },
+  { slug: 'welcome', title: 'Deals near you', subtitle: `Pay with ${APP_DISPLAY_NAME} in one tap.`, linkPath: '/shop' },
   { slug: 'pickup', title: 'Store pickup', subtitle: 'Order online, collect at a pickup point.', linkPath: '/shop' },
   { slug: 'secure', title: 'Secure payments', subtitle: 'Your wallet, your way.', linkPath: '/wallet' },
 ]
@@ -112,69 +130,6 @@ function resolveStoreLink(linkPath: string | null | undefined, pathPrefix: strin
   const rel = p.replace(/^\//, '')
   if (!pathPrefix) return `/${rel}`
   return `${pathPrefix}/${rel}`.replace(/\/+/g, '/')
-}
-
-function categoryIcon(slug: string | null | undefined): ReactNode {
-  const s = (slug ?? '').toLowerCase()
-  const sx = { fontSize: 36, color: 'primary.main' } as const
-  if (s === 'electronics') return <PhoneIphoneOutlinedIcon sx={sx} />
-  if (s === 'fashion') return <CheckroomOutlinedIcon sx={sx} />
-  if (s === 'home') return <HomeOutlinedIcon sx={sx} />
-  if (s === 'groceries') return <LocalGroceryStoreOutlinedIcon sx={sx} />
-  return <HomeOutlinedIcon sx={sx} />
-}
-
-const services = [
-  { key: 'classifieds', label: 'Classifieds', icon: <NoteAltOutlinedIcon sx={{ color: '#F87171' }} /> },
-  { key: 'parking', label: 'Parking', icon: <DirectionsCarOutlinedIcon sx={{ color: '#93C5FD' }} /> },
-  {
-    key: 'vouchers',
-    label: 'Vouchers',
-    icon: <CardGiftcardOutlinedIcon sx={{ color: '#FCD34D' }} />,
-  },
-  {
-    key: 'insurance',
-    label: 'Insurance',
-    icon: <UmbrellaOutlinedIcon sx={{ color: '#C4B5FD' }} />,
-  },
-  {
-    key: 'store',
-    label: 'Store',
-    icon: <ShoppingCartOutlinedIcon sx={{ color: '#5B21D6' }} />,
-  },
-]
-
-function PayTodayLogo({ to }: { to: string }) {
-  return (
-    <Typography
-      component={RouterLink}
-      to={to}
-      sx={{
-        fontWeight: 800,
-        letterSpacing: 2,
-        color: '#fff',
-        textDecoration: 'none',
-        fontSize: '0.95rem',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 0.75,
-      }}
-    >
-      PAY
-      <Box
-        component="span"
-        sx={{
-          border: '2px solid rgba(255,255,255,0.95)',
-          px: 1,
-          py: 0.25,
-          borderRadius: 0.5,
-          letterSpacing: 3,
-        }}
-      >
-        TODAY
-      </Box>
-    </Typography>
-  )
 }
 
 function recentShortcutAccent(label: string): string {
@@ -190,60 +145,6 @@ function twoLetterAbbr(label: string): string {
   const w = parts[0] ?? ''
   if (!w) return '?'
   return w.slice(0, 2).toUpperCase()
-}
-
-function RecentShortcutChip({ to, label }: { to: string; label: string }) {
-  const abbr = twoLetterAbbr(label)
-  return (
-    <Box sx={{ flexShrink: 0, width: 76, textAlign: 'center' }}>
-      <Box
-        component={RouterLink}
-        to={to}
-        sx={{
-          textDecoration: 'none',
-          color: 'inherit',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 0.75,
-        }}
-      >
-        <Box
-          sx={{
-            width: 64,
-            height: 64,
-            borderRadius: 1,
-            background: recentShortcutAccent(label),
-            color: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 14px rgba(15,23,42,0.12)',
-            fontWeight: 900,
-            fontSize: '1rem',
-            lineHeight: 1,
-            letterSpacing: 0.5,
-          }}
-        >
-          {abbr}
-        </Box>
-        <Typography
-          variant="caption"
-          sx={{
-            fontWeight: 700,
-            lineHeight: 1.2,
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-            maxWidth: '100%',
-          }}
-        >
-          {label}
-        </Typography>
-      </Box>
-    </Box>
-  )
 }
 
 /** Hide native scrollbar; row still scrolls with touch/mouse wheel on the tiles. */
@@ -275,6 +176,8 @@ function BrandChip({ b, to }: { b: Brand; to: string }) {
         justifyContent: 'center',
         textDecoration: 'none',
         boxShadow: '0 4px 14px rgba(15,23,42,0.12)',
+        border: homeOutline,
+        boxSizing: 'border-box',
       }}
     >
       <Typography sx={{ fontWeight: 900, fontSize: '1.35rem', lineHeight: 1 }}>{b.abbr}</Typography>
@@ -286,13 +189,12 @@ function PopularStoreChip({ item, to }: { item: PopularStoreDto; to: string }) {
   const label = (item.brandName?.trim() || item.brandSlug).trim()
   const abbr = twoLetterAbbr(label)
   const bg = recentShortcutAccent(label)
-  const stats = `${item.unitsSold} sold · ${item.orderCount} orders`
   return (
     <Box sx={{ flexShrink: 0, width: 76, textAlign: 'center' }}>
       <Box
         component={RouterLink}
         to={to}
-        aria-label={`${label}, ${stats}`}
+        aria-label={label}
         sx={{
           textDecoration: 'none',
           color: 'inherit',
@@ -317,6 +219,8 @@ function PopularStoreChip({ item, to }: { item: PopularStoreDto; to: string }) {
             fontSize: '1.1rem',
             lineHeight: 1,
             letterSpacing: 0.5,
+            border: homeOutline,
+            boxSizing: 'border-box',
           }}
         >
           {abbr}
@@ -335,9 +239,6 @@ function PopularStoreChip({ item, to }: { item: PopularStoreDto; to: string }) {
         >
           {label}
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.58rem', lineHeight: 1.2, fontWeight: 600 }}>
-          {stats}
-        </Typography>
       </Box>
     </Box>
   )
@@ -350,6 +251,7 @@ export function StoreHomePage() {
   const navigate = useNavigate()
   const { pathname, search: locationSearch } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
+  useAuthMe()
   const shop = `${pathPrefix}/shop`
   const profilePath = `${pathPrefix}/profile`
   const notificationsPath = `${pathPrefix}/notifications`
@@ -366,27 +268,28 @@ export function StoreHomePage() {
   const [memberGreeting, setMemberGreeting] = useState<string | undefined>(undefined)
   const [categories, setCategories] = useState<StoreCategoryDto[]>([])
   const [promotions, setPromotions] = useState<StorePromotionDto[]>([])
-  const [recentVisits, setRecentVisits] = useState<RecentVisitRecord[]>(() => getRecentVisits())
-  const [popularDays, setPopularDays] = useState<7 | 30 | 90>(30)
   const [popularItems, setPopularItems] = useState<PopularStoreDto[]>([])
-  const [popularRangeFrom, setPopularRangeFrom] = useState<string | null>(null)
-  const [popularRangeTo, setPopularRangeTo] = useState<string | null>(null)
-  const [popularSource, setPopularSource] = useState<string | null>(null)
   const [popularLoading, setPopularLoading] = useState(true)
-  const [popularError, setPopularError] = useState<string | null>(null)
+  const [dealProducts, setDealProducts] = useState<ProductDto[]>([])
+  const [dealsLoading, setDealsLoading] = useState(true)
+  const [airtimeItems, setAirtimeItems] = useState<HubPaymentCategoryItemDto[]>([])
+  const [voucherItems, setVoucherItems] = useState<HubPaymentCategoryItemDto[]>([])
+  const [hubAirtimeLoading, setHubAirtimeLoading] = useState(true)
+  const [hubVoucherLoading, setHubVoucherLoading] = useState(true)
 
-  const welcomeTitle =
-    memberGreeting === undefined
-      ? 'Welcome'
-      : memberGreeting
-        ? `Welcome back, ${memberGreeting}`
-        : 'Welcome to PayToday'
-  const welcomeSubtitle: string | null =
-    memberGreeting === undefined
-      ? null
-      : memberGreeting
-        ? 'Good to see you again.'
-        : 'Browse the shop, pay bills, and more in one place.'
+  const sortedCategories = useMemo(
+    () =>
+      [...categories]
+        .filter((c) => Boolean(c?.slug?.trim()))
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name)),
+    [categories],
+  )
+
+  const welcomeTitle = useMemo(() => {
+    if (memberGreeting === undefined) return 'Welcome'
+    if (!memberGreeting) return `Welcome to ${APP_DISPLAY_NAME}`
+    return `Welcome back, ${memberGreeting}`
+  }, [memberGreeting])
 
   const heroSlides: HeroSlide[] = useMemo(() => {
     if (promotions.length > 0) {
@@ -395,7 +298,7 @@ export function StoreHomePage() {
         title: p.title,
         subtitle: p.subtitle ?? '',
         link: resolveStoreLink(p.linkPath, pathPrefix, shop),
-        imageUrl: resolveHeroImageUrl(p.slug, p.imageUrl),
+        imageUrl: resolvePromotionDisplayUrl(p.slug, p.imageUrl),
       }))
     }
     return fallbackHeroSlides.map((h) => ({
@@ -403,7 +306,7 @@ export function StoreHomePage() {
       title: h.title,
       subtitle: h.subtitle,
       link: resolveStoreLink(h.linkPath, pathPrefix, shop),
-      imageUrl: resolveHeroImageUrl(h.slug, null),
+      imageUrl: resolvePromotionDisplayUrl(h.slug, null),
     }))
   }, [promotions, pathPrefix, shop])
 
@@ -443,17 +346,6 @@ export function StoreHomePage() {
     }, 5000)
     return () => window.clearInterval(t)
   }, [heroSlides.length])
-
-  useEffect(() => {
-    const syncRecent = () => setRecentVisits(getRecentVisits())
-    syncRecent()
-    window.addEventListener('pt-recent-visits-updated', syncRecent)
-    window.addEventListener('storage', syncRecent)
-    return () => {
-      window.removeEventListener('pt-recent-visits-updated', syncRecent)
-      window.removeEventListener('storage', syncRecent)
-    }
-  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -512,40 +404,22 @@ export function StoreHomePage() {
     let cancelled = false
     ;(async () => {
       setPopularLoading(true)
-      setPopularError(null)
       try {
         const res = await fetch(
-          apiUrl(`/api/storefront/popular-stores?days=${popularDays}&limit=12`),
+          apiUrl(`/api/storefront/popular-stores?days=${POPULAR_STORES_RANK_WINDOW_DAYS}&limit=12`),
         )
         if (!res.ok) {
-          const msg = await readApiError(res)
-          if (!cancelled) {
-            setPopularItems([])
-            setPopularRangeFrom(null)
-            setPopularRangeTo(null)
-            setPopularSource('error')
-            setPopularError(msg)
-          }
+          if (!cancelled) setPopularItems([])
           return
         }
         const data = (await res.json()) as {
-          source?: string
           items?: PopularStoreDto[]
-          rangeFromIso?: string | null
-          rangeToIso?: string | null
         }
         if (cancelled) return
         setPopularItems(Array.isArray(data.items) ? data.items : [])
-        setPopularRangeFrom(data.rangeFromIso ?? null)
-        setPopularRangeTo(data.rangeToIso ?? null)
-        setPopularSource(data.source ?? null)
-      } catch (e) {
+      } catch {
         if (!cancelled) {
           setPopularItems([])
-          setPopularRangeFrom(null)
-          setPopularRangeTo(null)
-          setPopularSource('error')
-          setPopularError(e instanceof Error ? e.message : 'Could not load popular stores')
         }
       } finally {
         if (!cancelled) setPopularLoading(false)
@@ -554,9 +428,73 @@ export function StoreHomePage() {
     return () => {
       cancelled = true
     }
-  }, [popularDays])
+  }, [])
 
-  /** Popular + categories + recent: horizontal strips; `minWidth: 0` so flex doesn’t swallow overflow on mobile. */
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setDealsLoading(true)
+      try {
+        const res = await fetch(apiUrl('/api/products?sort=price_asc&includeImages=1'))
+        if (!res.ok) {
+          if (!cancelled) setDealProducts([])
+          return
+        }
+        const data = (await res.json()) as ProductListResponse
+        if (cancelled) return
+        setDealProducts(selectHomeDealProducts(data.items ?? [], 12))
+      } catch {
+        if (!cancelled) setDealProducts([])
+      } finally {
+        if (!cancelled) setDealsLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setHubAirtimeLoading(true)
+      setHubVoucherLoading(true)
+      try {
+        const [aRes, vRes] = await Promise.all([
+          fetch(apiUrl('/api/hub/payment-category-items?category=airtime')),
+          fetch(apiUrl('/api/hub/payment-category-items?category=vouchers')),
+        ])
+        if (cancelled) return
+        if (aRes.ok) {
+          const a = (await aRes.json()) as HubPaymentCategoryItemsResponse
+          setAirtimeItems(Array.isArray(a.items) ? a.items : [])
+        } else {
+          setAirtimeItems([])
+        }
+        if (vRes.ok) {
+          const v = (await vRes.json()) as HubPaymentCategoryItemsResponse
+          setVoucherItems(Array.isArray(v.items) ? v.items : [])
+        } else {
+          setVoucherItems([])
+        }
+      } catch {
+        if (!cancelled) {
+          setAirtimeItems([])
+          setVoucherItems([])
+        }
+      } finally {
+        if (!cancelled) {
+          setHubAirtimeLoading(false)
+          setHubVoucherLoading(false)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /** Popular + categories + horizontal strips; `minWidth: 0` so flex doesn’t swallow overflow on mobile. */
   const homeHorizontalStripSx = useMemo(
     () => ({
       display: 'flex',
@@ -579,7 +517,7 @@ export function StoreHomePage() {
     [reduceMotion],
   )
 
-  /** Recent + Services: below `md`, 2-column grid; `md+` horizontal strip (scrollbar hidden). */
+  /** Services: below `md`, 2-column grid; `md+` horizontal strip (scrollbar hidden). */
   const homeSectionTilesSx = useMemo(
     () => ({
       display: { xs: 'grid', md: 'flex' },
@@ -623,23 +561,16 @@ export function StoreHomePage() {
         gap: 1,
         px: 2,
         py: 1.25,
-        borderRadius: 1,
         minWidth: 0,
         width: 1,
-        ...(isMobile
-          ? {
-              bgcolor: 'rgba(255,255,255,0.22)',
-              backdropFilter: 'blur(8px)',
-            }
-          : {
-              bgcolor: 'background.paper',
-              border: 1,
-              borderColor: 'divider',
-              boxShadow: SURFACE_SHADOW,
-            }),
+        borderRadius: 999,
+        bgcolor: 'background.paper',
+        border: 1,
+        borderColor: 'divider',
+        boxShadow: SURFACE_SHADOW,
       }}
     >
-      <SearchIcon sx={{ color: isMobile ? 'rgba(255,255,255,0.9)' : 'text.secondary' }} />
+      <SearchIcon sx={{ color: 'text.secondary' }} />
       <InputBase
         placeholder="Search"
         value={search}
@@ -647,9 +578,9 @@ export function StoreHomePage() {
         sx={{
           flex: 1,
           minWidth: 0,
-          color: isMobile ? '#fff' : 'text.primary',
+          color: 'text.primary',
           '& input::placeholder': {
-            color: isMobile ? 'rgba(255,255,255,0.75)' : 'text.secondary',
+            color: 'text.secondary',
             opacity: 1,
           },
         }}
@@ -657,38 +588,104 @@ export function StoreHomePage() {
     </Paper>
   )
 
+  /** Sections that sit on the grey home canvas (no white card shell). */
+  const homeSectionOnCanvasSx = {
+    borderRadius: `${STORE_HOME_SURFACE_RADIUS_PX}px`,
+    bgcolor: STORE_DESKTOP_CANVAS_GREY,
+    boxShadow: 'none',
+    border: homeOutline,
+    p: { xs: 2, sm: 2.5 },
+    overflow: 'hidden',
+  } as const
+
+  const sectionTitleSx = {
+    fontWeight: 800,
+    letterSpacing: -0.35,
+    fontSize: '1.05rem',
+    color: '#0f172a',
+  } as const
+
+  const shopBillPayAnchor = `${shop}#shop-bill-pay`
+  const shopProductsAnchor = `${shop}#shop-products`
+  const dealsViewMoreTo = `${shop}?sort=price_asc#shop-products`
+
+  function viewMoreAction(to: string) {
+    return (
+      <Button
+        component={RouterLink}
+        to={to}
+        size="small"
+        variant="text"
+        color="primary"
+        endIcon={<ChevronRightIcon sx={{ fontSize: '1.05rem !important' }} />}
+        sx={{ fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap', minWidth: 0 }}
+      >
+        View more
+      </Button>
+    )
+  }
+
   return (
-    <Stack spacing={0} sx={{ pb: 2, width: 1, minWidth: 0 }}>
+    <Stack
+      spacing={0}
+      sx={{
+        // Bottom nav clearance is on `StoreLayout` `Container` only — no extra `pb` here (avoids double tail / long scroll).
+        pb: { xs: 0, md: 2 },
+        minWidth: 0,
+        boxSizing: 'border-box',
+        // Mobile: bleed to viewport edges without `100vw` (avoids scrollbar gutter overflow + strip on the right).
+        bgcolor: STORE_DESKTOP_CANVAS_GREY,
+        ...(isMobile
+          ? {
+              width: { xs: (t) => `calc(100% + ${t.spacing(4)})`, sm: (t) => `calc(100% + ${t.spacing(6)})` },
+              maxWidth: 'none',
+              ml: { xs: -2, sm: -3 },
+              mr: { xs: -2, sm: -3 },
+            }
+          : {
+              width: 1,
+              mx: { xs: -2, sm: -3, md: -4, lg: -5 },
+            }),
+      }}
+    >
       {isMobile ? (
         <Box
           sx={{
-            background: HEADER_CHROME_GRADIENT,
-            color: '#fff',
-            borderRadius: { xs: '0 0 6px 6px', sm: '0 0 8px 8px' },
             pt: { xs: 1.75, sm: 2 },
-            pb: { xs: 2.5, sm: 3 },
+            pb: { xs: 2, sm: 2.5 },
             px: { xs: 2, sm: 2.5 },
-            mx: { xs: -2, sm: -3 },
-            boxShadow: CHROME_SHADOW_SOFT,
+            bgcolor: STORE_DESKTOP_CANVAS_GREY,
           }}
         >
-          <Stack spacing={{ xs: 1.75, sm: 2 }} sx={{ minWidth: 0 }}>
+          <Stack spacing={{ xs: 1.5, sm: 1.75 }} sx={{ minWidth: 0 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minWidth: 0 }}>
               <IconButton
                 component={RouterLink}
                 to={profilePath}
-                sx={{ color: '#fff', border: '1px solid rgba(255,255,255,0.35)', flexShrink: 0 }}
+                sx={{
+                  color: 'text.primary',
+                  border: 1,
+                  borderColor: 'divider',
+                  bgcolor: 'background.paper',
+                  flexShrink: 0,
+                }}
                 aria-label="My account"
               >
                 <PersonOutlineIcon />
               </IconButton>
               <Box sx={{ minWidth: 0, flex: 1, display: 'flex', justifyContent: 'center' }}>
-                <PayTodayLogo to={pathPrefix || '/'} />
+                <AppBrandLogo to={pathPrefix || '/'} wordmarkTone="onLight" />
               </Box>
               <IconButton
                 component={RouterLink}
                 to={notificationsPath}
-                sx={{ color: '#fff', flexShrink: 0 }}
+                sx={{
+                  color: 'text.primary',
+                  border: 1,
+                  borderColor: 'divider',
+                  bgcolor: 'background.paper',
+                  flexShrink: 0,
+                }}
                 aria-label="Notifications"
               >
                 <Badge color="error" variant="dot">
@@ -696,25 +693,19 @@ export function StoreHomePage() {
                 </Badge>
               </IconButton>
             </Box>
-            <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-              <Typography
-                component="h1"
-                sx={{
-                  fontWeight: 800,
-                  fontSize: { xs: 'clamp(1.1rem, 4.2vw, 1.35rem)', sm: '1.35rem' },
-                  letterSpacing: -0.3,
-                  lineHeight: 1.25,
-                  wordBreak: 'break-word',
-                }}
-              >
-                {welcomeTitle}
-              </Typography>
-              {welcomeSubtitle ? (
-                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.85)', lineHeight: 1.45 }}>
-                  {welcomeSubtitle}
-                </Typography>
-              ) : null}
-            </Stack>
+            <Typography
+              component="h1"
+              sx={{
+                fontWeight: 800,
+                fontSize: { xs: 'clamp(1.25rem, 4.5vw, 1.5rem)', sm: '1.5rem' },
+                letterSpacing: -0.5,
+                lineHeight: 1.2,
+                wordBreak: 'break-word',
+                color: 'text.primary',
+              }}
+            >
+              {welcomeTitle}
+            </Typography>
             {searchForm}
           </Stack>
         </Box>
@@ -723,11 +714,30 @@ export function StoreHomePage() {
       <Stack
         spacing={{ xs: 3, md: 4 }}
         sx={{
-          pt: { xs: 3, md: 2 },
+          pt: { xs: 2, md: 2 },
+          pb: { xs: 0, sm: 0, md: 0 },
           width: 1,
           minWidth: 0,
+          px: { xs: 2, sm: 3, md: 4, lg: 5 },
+          boxSizing: 'border-box',
+          bgcolor: STORE_DESKTOP_CANVAS_GREY,
         }}
       >
+        {!isMobile ? (
+          <Typography
+            component="h1"
+            variant="h4"
+            sx={{
+              fontWeight: 800,
+              letterSpacing: -0.55,
+              lineHeight: 1.2,
+              color: 'text.primary',
+            }}
+          >
+            {welcomeTitle}
+          </Typography>
+        ) : null}
+
         {/* Hero carousel: placement images + horizontal slide */}
         <Stack spacing={1.5} alignItems="center">
           <Card
@@ -738,9 +748,10 @@ export function StoreHomePage() {
             sx={{
               position: 'relative',
               width: '100%',
-              borderRadius: 1,
-              bgcolor: '#0f172a',
-              boxShadow: '0 8px 32px rgba(15,23,42,0.12)',
+              borderRadius: `${STORE_HOME_SURFACE_RADIUS_PX}px`,
+              bgcolor: 'background.paper',
+              boxShadow: STORE_HOME_CARD_SHADOW,
+              border: homeOutline,
               overflow: 'hidden',
             }}
           >
@@ -812,6 +823,7 @@ export function StoreHomePage() {
                       backgroundPosition: 'center',
                       backgroundRepeat: 'no-repeat',
                       outline: 'none',
+                      borderRadius: `${Math.max(STORE_HOME_SURFACE_RADIUS_PX - 6, 8)}px`,
                       '&:focus-visible': { boxShadow: (t) => `inset 0 0 0 3px ${t.palette.primary.main}` },
                     }}
                   >
@@ -820,8 +832,8 @@ export function StoreHomePage() {
                       sx={{
                         position: 'absolute',
                         inset: 0,
-                        background:
-                          'linear-gradient(to top, rgba(15,23,42,0.92) 0%, rgba(15,23,42,0.45) 42%, rgba(15,23,42,0.12) 100%)',
+                        background: STORE_HOME_HERO_SLIDE_SCRIM,
+                        borderRadius: 'inherit',
                       }}
                     />
                     <Stack
@@ -862,11 +874,11 @@ export function StoreHomePage() {
                   if (e.key === 'ArrowRight') goHeroNext()
                 }}
                 sx={{
-                  borderRadius: 0.5,
+                  borderRadius: 99,
                   width: i === heroIndex ? 18 : 6,
                   height: 6,
                   minWidth: 6,
-                  bgcolor: i === heroIndex ? 'primary.main' : 'action.disabledBackground',
+                  bgcolor: i === heroIndex ? STORE_HOME_HERO_DOT_ACTIVE : STORE_HOME_HERO_DOT_INACTIVE,
                   cursor: 'pointer',
                   transition: 'width 0.2s, background-color 0.2s',
                   '&:hover': { opacity: 0.92 },
@@ -876,245 +888,384 @@ export function StoreHomePage() {
             ))}
           </Box>
         </Stack>
-
-        <SurfaceSection title="Popular">
-          <Stack spacing={1.25}>
-            <Stack
-              direction="row"
-              alignItems="center"
-              justifyContent="space-between"
-              flexWrap="wrap"
-              gap={1}
-              sx={{ pr: { xs: 0, sm: 0.5 } }}
-            >
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, maxWidth: '100%' }}>
-                {popularLoading
-                  ? 'Loading top stores…'
-                  : popularItems.length > 0 && popularSource === 'database'
-                    ? `Top stores by units sold (${formatPopularDateRange(popularRangeFrom, popularRangeTo) || `last ${popularDays} days`})`
-                    : popularSource === 'database' && popularItems.length === 0
-                      ? `No paid orders in the last ${popularDays} days yet — sample stores below`
-                      : popularError
-                        ? 'Could not load rankings — sample stores below'
-                        : 'Sample stores — connect SQL and complete orders to see live rankings'}
-              </Typography>
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={popularDays}
-                onChange={(_e, v) => {
-                  if (v === 7 || v === 30 || v === 90) setPopularDays(v)
-                }}
-                aria-label="Date range for popular stores"
-              >
-                <ToggleButton value={7} sx={{ px: 1.25, fontWeight: 700 }}>
-                  7d
-                </ToggleButton>
-                <ToggleButton value={30} sx={{ px: 1.25, fontWeight: 700 }}>
-                  30d
-                </ToggleButton>
-                <ToggleButton value={90} sx={{ px: 1.25, fontWeight: 700 }}>
-                  90d
-                </ToggleButton>
-              </ToggleButtonGroup>
-            </Stack>
-            {popularLoading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
-                <CircularProgress size={28} aria-label="Loading popular stores" />
-              </Box>
-            ) : (
+        {sortedCategories.length > 0 ? (
+          <SurfaceSection title="Explore our shop" titleSx={sectionTitleSx} action={viewMoreAction(shopProductsAnchor)}>
+            <Box sx={{ ...homeSectionOnCanvasSx, py: { xs: 1.75, sm: 2 } }}>
               <Box
-                role="region"
-                aria-label="Popular stores — swipe left or right on the tiles to scroll"
-                sx={homeHorizontalStripSx}
+                sx={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 1,
+                  justifyContent: 'flex-start',
+                }}
               >
-                {popularItems.length > 0
-                  ? popularItems.map((item) => (
-                      <Box
-                        key={item.brandSlug}
-                        sx={{
-                          flexShrink: 0,
-                          scrollSnapAlign: 'start',
-                          display: 'flex',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <PopularStoreChip
-                          item={item}
-                          to={`${shop}?store=${encodeURIComponent(item.brandSlug)}`}
-                        />
-                      </Box>
-                    ))
-                  : STATIC_POPULAR_BRANDS.map((b) => (
-                      <Box
-                        key={`pop-${b.id}`}
-                        sx={{
-                          flexShrink: 0,
-                          scrollSnapAlign: 'start',
-                          display: 'flex',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <BrandChip b={b} to={`${shop}?store=${encodeURIComponent(b.id)}`} />
-                      </Box>
-                    ))}
+                {sortedCategories.map((c) => (
+                  <Chip
+                    key={`explore-${c.slug}`}
+                    component={RouterLink}
+                    to={`${shop}?category=${encodeURIComponent(c.slug)}`}
+                    clickable
+                    variant="outlined"
+                    label={c.name}
+                    sx={{
+                      fontWeight: 700,
+                      borderRadius: 2,
+                      border: homeOutline,
+                      bgcolor: 'background.paper',
+                      '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' },
+                    }}
+                  />
+                ))}
               </Box>
-            )}
-          </Stack>
-        </SurfaceSection>
+            </Box>
+          </SurfaceSection>
+        ) : null}
 
-        {categories.length > 0 ? (
-          <SurfaceSection title="Shop by category">
-            <Box role="region" aria-label="Categories — swipe left or right on the tiles to scroll" sx={homeHorizontalStripSx}>
-              {categories.filter((c) => Boolean(c?.slug?.trim())).map((c) => (
+        <SurfaceSection title="Instant pay" titleSx={sectionTitleSx} action={viewMoreAction(shopBillPayAnchor)}>
+          <Box sx={homeSectionOnCanvasSx}>
+            <Box
+              role="region"
+              aria-label="Bill pay categories — swipe to scroll"
+              sx={{
+                display: 'flex',
+                flexDirection: 'row',
+                flexWrap: 'nowrap',
+                gap: 2,
+                width: '100%',
+                maxWidth: '100%',
+                minWidth: 0,
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                py: 0.5,
+                ...hideHorizontalScrollbar(),
+              }}
+            >
+              {PAYMENTS_HUB_TILES.map((c) => (
                 <Box
                   key={c.slug}
+                  component={RouterLink}
+                  to={href(c.linkPath)}
                   sx={{
-                    flexShrink: 0,
-                    width: 108,
-                    scrollSnapAlign: 'start',
+                    flex: '0 0 auto',
+                    width: 76,
+                    textDecoration: 'none',
+                    color: 'inherit',
+                    textAlign: 'center',
+                  }}
+                >
+                  <Stack spacing={0.75} alignItems="center">
+                    <Box
+                      sx={(t) => ({
+                        width: 56,
+                        height: 56,
+                        borderRadius: '50%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        bgcolor: alpha(SHOP_V2.accent, 0.12),
+                        color: SHOP_V2.accent,
+                        border: homeOutline,
+                        boxShadow: `0 6px 16px ${alpha(SHOP_V2.accent, 0.15)}`,
+                        transition: t.transitions.create(['transform', 'box-shadow'], { duration: 160 }),
+                        '&:hover': {
+                          transform: 'scale(1.05)',
+                          boxShadow: `0 8px 20px ${alpha(SHOP_V2.accent, 0.22)}`,
+                        },
+                        '& svg': { fontSize: 26 },
+                      })}
+                    >
+                      {hubNavIcon(c.iconKey)}
+                    </Box>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.65rem',
+                        lineHeight: 1.2,
+                        maxWidth: 76,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {c.label}
+                    </Typography>
+                  </Stack>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        </SurfaceSection>
+
+        {dealsLoading || dealProducts.length > 0 ? (
+          <SurfaceSection title="Super deals" titleSx={sectionTitleSx} action={viewMoreAction(dealsViewMoreTo)}>
+            <Box sx={homeSectionOnCanvasSx}>
+              {dealsLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
+                  <CircularProgress size={28} aria-label="Loading deals" />
+                </Box>
+              ) : (
+                <Box
+                  role="region"
+                  aria-label="Deal products — swipe to scroll"
+                  sx={{ ...homeHorizontalStripSx, gap: 1.25, alignItems: 'stretch' }}
+                >
+                  {dealProducts.map((p) => (
+                    <StoreHomeProductRailCard
+                      key={p.id}
+                      product={p}
+                      pathPrefix={pathPrefix}
+                      priceLabel={railPriceLabel(p)}
+                    />
+                  ))}
+                </Box>
+              )}
+            </Box>
+          </SurfaceSection>
+        ) : null}
+
+        <SurfaceSection title="Popular" titleSx={sectionTitleSx} action={viewMoreAction(shopProductsAnchor)}>
+          <Box sx={homeSectionOnCanvasSx}>
+            <Stack spacing={1.25}>
+              {popularLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
+                  <CircularProgress size={28} aria-label="Loading popular stores" />
+                </Box>
+              ) : (
+                <Box
+                  role="region"
+                  aria-label="Popular stores — swipe left or right on the tiles to scroll"
+                  sx={homeHorizontalStripSx}
+                >
+                  {popularItems.length > 0
+                    ? popularItems.map((item) => (
+                        <Box
+                          key={item.brandSlug}
+                          sx={{
+                            flexShrink: 0,
+                            scrollSnapAlign: 'start',
+                            display: 'flex',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <PopularStoreChip
+                            item={item}
+                            to={`${shop}?store=${encodeURIComponent(item.brandSlug)}`}
+                          />
+                        </Box>
+                      ))
+                    : STATIC_POPULAR_BRANDS.map((b) => (
+                        <Box
+                          key={`pop-${b.id}`}
+                          sx={{
+                            flexShrink: 0,
+                            scrollSnapAlign: 'start',
+                            display: 'flex',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <BrandChip b={b} to={`${shop}?store=${encodeURIComponent(b.id)}`} />
+                        </Box>
+                      ))}
+                </Box>
+              )}
+            </Stack>
+          </Box>
+        </SurfaceSection>
+
+        {hubAirtimeLoading || airtimeItems.length > 0 ? (
+          <SurfaceSection title="Prepaids" titleSx={sectionTitleSx} action={viewMoreAction(href('payments/airtime'))}>
+            <Box sx={homeSectionOnCanvasSx}>
+              {hubAirtimeLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
+                  <CircularProgress size={28} aria-label="Loading airtime providers" />
+                </Box>
+              ) : (
+                <Box
+                  role="region"
+                  aria-label="Airtime providers — swipe to scroll"
+                  sx={{ ...homeHorizontalStripSx, gap: 1.75, justifyContent: 'flex-start' }}
+                >
+                  {airtimeItems.map((row) => (
+                    <Box
+                      key={row.id}
+                      component={RouterLink}
+                      to={href(`payments/airtime/pay/${encodeURIComponent(row.id)}`)}
+                      sx={{
+                        flexShrink: 0,
+                        width: 88,
+                        minWidth: 88,
+                        maxWidth: 88,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'flex-start',
+                        textAlign: 'left',
+                        textDecoration: 'none',
+                        color: 'inherit',
+                        scrollSnapAlign: 'start',
+                      }}
+                    >
+                      <PrepaidProviderLogo displayName={row.displayName} id={row.id} initials={row.initials} size={52} />
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          mt: 0.65,
+                          fontWeight: 700,
+                          lineHeight: 1.2,
+                          width: '100%',
+                          textAlign: 'left',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {row.displayName}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Box>
+          </SurfaceSection>
+        ) : null}
+
+        {hubVoucherLoading || voucherItems.length > 0 ? (
+          <SurfaceSection title="Vouchers" titleSx={sectionTitleSx} action={viewMoreAction(href('payments/vouchers'))}>
+            <Box sx={homeSectionOnCanvasSx}>
+              {hubVoucherLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
+                  <CircularProgress size={28} aria-label="Loading vouchers" />
+                </Box>
+              ) : (
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: 'repeat(3, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' },
+                    gap: 1,
+                  }}
+                >
+                  {voucherItems.map((row) => {
+                    const glyph = row.displayName.trim().charAt(0).toUpperCase() || '?'
+                    return (
+                      <Button
+                        key={row.id}
+                        component={RouterLink}
+                        to={href(`payments/vouchers/pay/${encodeURIComponent(row.id)}`)}
+                        variant="outlined"
+                        fullWidth
+                        sx={{
+                          justifyContent: 'flex-start',
+                          textAlign: 'left',
+                          textTransform: 'none',
+                          borderRadius: 2,
+                          py: 1,
+                          px: 1.25,
+                          border: homeOutline,
+                          bgcolor: 'background.paper',
+                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          minWidth: 0,
+                          '& .MuiButton-startIcon': { mr: 1 },
+                          '& .MuiButton-endIcon': { ml: 0.5, flexShrink: 0 },
+                          '&:hover': { bgcolor: alpha('#fff', 0.55), borderColor: SURFACE_BORDER },
+                        }}
+                        startIcon={
+                          <Box
+                            sx={{
+                              width: 36,
+                              height: 36,
+                              borderRadius: 1,
+                              flexShrink: 0,
+                              bgcolor: hubLogoHue(row.displayName),
+                              color: '#fff',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 800,
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            {glyph}
+                          </Box>
+                        }
+                        endIcon={<ChevronRightIcon sx={{ fontSize: '1.1rem', color: 'text.secondary' }} />}
+                      >
+                        <Box
+                          component="span"
+                          sx={{
+                            flex: 1,
+                            minWidth: 0,
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            lineHeight: 1.25,
+                            textAlign: 'left',
+                          }}
+                        >
+                          {row.displayName}
+                        </Box>
+                      </Button>
+                    )
+                  })}
+                </Box>
+              )}
+            </Box>
+          </SurfaceSection>
+        ) : null}
+
+        <SurfaceSection title="Services" titleSx={sectionTitleSx} action={viewMoreAction(href('services'))}>
+          <Box sx={homeSectionTilesSx}>
+            {SERVICES_HUB_TILES.map((s) => {
+              const to = href(s.linkPath)
+              return (
+                <Box
+                  key={s.slug}
+                  sx={{
+                    width: { xs: '100%', md: 132 },
+                    minWidth: 0,
+                    flexShrink: { md: 0 },
                     textAlign: 'center',
                   }}
                 >
                   <Card
                     component={RouterLink}
-                    to={`${shop}?category=${encodeURIComponent(c.slug)}`}
+                    to={to}
                     elevation={0}
                     sx={{
-                      borderRadius: 1,
-                      border: 1,
-                      borderColor: 'divider',
-                      textDecoration: 'none',
-                      height: 118,
+                      height: { xs: 108, md: 118 },
+                      borderRadius: `${STORE_HOME_SURFACE_RADIUS_PX}px`,
+                      background: SERVICES_CARD_GRADIENT,
+                      border: homeOutline,
+                      boxSizing: 'border-box',
                       display: 'flex',
-                      flexDirection: 'column',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: 1,
+                      textDecoration: 'none',
+                      boxShadow: '0 10px 28px rgba(79, 70, 229, 0.35)',
                       width: 1,
-                      boxSizing: 'border-box',
-                      px: 0.5,
-                      py: 1,
-                      transition: 'transform 0.15s',
-                      '&:hover': { transform: 'translateY(-2px)' },
+                      transition: 'transform 0.15s, box-shadow 0.15s',
+                      color: '#fff',
+                      '& .MuiSvgIcon-root': { fontSize: { xs: '2.5rem', md: '3rem' } },
+                      '&:hover': {
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 14px 36px rgba(79, 70, 229, 0.42)',
+                      },
                     }}
                   >
-                    {categoryIcon(c.slug)}
-                    <Typography
-                      sx={{
-                        fontWeight: 700,
-                        fontSize: '0.8rem',
-                        px: 0.25,
-                        lineHeight: 1.2,
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                        wordBreak: 'break-word',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {c.name}
-                    </Typography>
+                    {hubNavIcon(s.iconKey)}
                   </Card>
+                  <Typography sx={{ mt: 1, fontWeight: 700, fontSize: '0.875rem', color: 'text.secondary' }}>
+                    {s.label}
+                  </Typography>
                 </Box>
-              ))}
-            </Box>
-          </SurfaceSection>
-        ) : null}
-
-        <SurfaceSection title="Recent">
-          {recentVisits.length === 0 ? (
-            <Stack spacing={1.25} alignItems="flex-start">
-              <Typography variant="body2" color="text.secondary">
-                Shortcuts appear here after you open categories and services.
-              </Typography>
-              <Button
-                component={RouterLink}
-                to={shop}
-                size="small"
-                variant="outlined"
-                sx={{ fontWeight: 700, borderRadius: 1 }}
-              >
-                Browse store
-              </Button>
-            </Stack>
-          ) : (
-            <Box role="region" aria-label="Recent shortcuts — swipe left or right on the tiles to scroll" sx={homeHorizontalStripSx}>
-              {recentVisits.slice(0, MAX_RECENT_VISIT_ITEMS).map((r) => (
-                <Box
-                  key={r.dedupeKey}
-                  sx={{
-                    flexShrink: 0,
-                    width: 76,
-                    scrollSnapAlign: 'start',
-                    display: 'flex',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <RecentShortcutChip to={recentVisitLink(r.relPath, pathPrefix)} label={r.label} />
-                </Box>
-              ))}
-            </Box>
-          )}
-        </SurfaceSection>
-
-        <SurfaceSection title="Services">
-          <Box sx={homeSectionTilesSx}>
-            {services.map((s) => {
-              const to =
-                s.key === 'classifieds'
-                  ? href('classifieds')
-                  : s.key === 'parking'
-                    ? `${href('shop')}#shop-bill-pay`
-                    : s.key === 'vouchers' || s.key === 'insurance'
-                      ? href('services')
-                      : s.key === 'store'
-                        ? shop
-                        : shop
-              return (
-              <Box
-                key={s.key}
-                sx={{
-                  width: { xs: '100%', md: 132 },
-                  minWidth: 0,
-                  flexShrink: { md: 0 },
-                  textAlign: 'center',
-                }}
-              >
-                <Card
-                  component={RouterLink}
-                  to={to}
-                  elevation={0}
-                  sx={{
-                    height: { xs: 108, md: 118 },
-                    borderRadius: 1,
-                    bgcolor: 'background.paper',
-                    border: `1px solid ${SURFACE_BORDER}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textDecoration: 'none',
-                    boxShadow: SURFACE_SHADOW,
-                    width: 1,
-                    boxSizing: 'border-box',
-                    transition: 'transform 0.15s, box-shadow 0.15s',
-                    '&:hover': { transform: 'translateY(-2px)', boxShadow: SURFACE_SHADOW_HOVER },
-                    '& .MuiSvgIcon-root': { fontSize: { xs: '2.5rem', md: '3rem' } },
-                  }}
-                >
-                  {s.icon}
-                </Card>
-                <Typography sx={{ mt: 1, fontWeight: 700, fontSize: '0.875rem', color: 'text.primary' }}>{s.label}</Typography>
-              </Box>
               )
             })}
           </Box>
         </SurfaceSection>
 
-        <Typography variant="caption" color="text.secondary" textAlign="center" sx={{ display: 'block', pt: 1 }}>
-          Recent and Popular open the store. Classifieds, parking, vouchers, and insurance link into those flows.
-        </Typography>
       </Stack>
     </Stack>
   )

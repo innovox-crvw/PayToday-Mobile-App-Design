@@ -123,14 +123,6 @@ export function WalletTransactionsPage() {
         <MenuItem
           onClick={() => {
             setExportAnchor(null)
-            window.alert('Export CSV — connect to reporting API when ready.')
-          }}
-        >
-          CSV
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            setExportAnchor(null)
             window.alert('Export PDF — connect to reporting API when ready.')
           }}
         >

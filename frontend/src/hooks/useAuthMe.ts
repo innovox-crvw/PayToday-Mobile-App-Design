@@ -10,6 +10,13 @@ export type AuthMeStore = {
   name: string
 }
 
+export type AuthMeMerchant = {
+  payTodayMerchantId: number
+  name: string
+  slug: string | null
+  isPrimary: boolean
+}
+
 export type AuthMeUser = {
   sub?: string
   email: string
@@ -19,6 +26,10 @@ export type AuthMeUser = {
   fullName?: string | null
   notificationChannel?: string
   emailVerified?: boolean
+  /** Present when `/api/auth/me` merged a SQL row: local bcrypt vs PayToday (Keycloak-linked). */
+  accountKind?: 'local' | 'paytoday'
+  /** Linked PayToday merchants (migration 022); empty when none or legacy schema. */
+  merchants?: AuthMeMerchant[]
 }
 
 export function useAuthMe() {

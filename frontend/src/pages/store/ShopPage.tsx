@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom'
-import { Alert, Box, Card, CardActionArea, Divider, Snackbar, Stack, Typography } from '@mui/material'
+import { Alert, Box, Card, CardActionArea, Divider, Stack, Typography } from '@mui/material'
+import { ProductImage } from '../../components/store/ProductImage'
+import { resolvePromotionDisplayUrl } from '../../lib/promotionImageUrl'
 import Grid from '@mui/material/Grid2'
 import type { ProductDto, ProductListResponse } from '../../types/catalogue'
 import type { StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
@@ -14,7 +16,6 @@ import { ShopPageSection } from '../../components/store/ShopPageSection'
 import { ShopCatalogStickyBar } from '../../components/store/ShopCatalogStickyBar'
 import { ShopProductCard } from '../../components/store/ShopProductCard'
 import { getDemoStoreBySlug, getDemoStoreSlugForProduct, getDemoStoreForProduct } from '../../data/demoStores'
-import { addVariantToCart } from '../../lib/cartClient'
 import { SHOP_V2 } from '../../theme/storeV2'
 
 type SortKey = 'name' | 'price_asc' | 'price_desc'
@@ -58,7 +59,6 @@ export function ShopPage() {
   const [error, setError] = useState<string | null>(null)
   const [sqlWarning, setSqlWarning] = useState<string | null>(null)
   const [catalogTick, setCatalogTick] = useState(0)
-  const [cartSnack, setCartSnack] = useState<string | null>(null)
   const productsFetchSeq = useRef(0)
 
   useEffect(() => {
@@ -173,15 +173,6 @@ export function ShopPage() {
 
   const activeStoreMeta = useMemo(() => (storeSlug ? getDemoStoreBySlug(storeSlug) : null), [storeSlug])
 
-  const handleQuickAdd = useCallback(async (variantId: string) => {
-    try {
-      await addVariantToCart(variantId, 1)
-      setCartSnack('Added to cart')
-    } catch (e) {
-      setCartSnack(e instanceof Error ? e.message : 'Could not add to cart')
-    }
-  }, [])
-
   if (error) {
     return (
       <Typography color="error" role="alert">
@@ -197,7 +188,6 @@ export function ShopPage() {
         mx: { xs: -2, sm: -3 },
         px: { xs: 2, sm: 3 },
         py: { xs: 0.5, sm: 1 },
-        mb: { xs: -2, sm: -3 },
         borderRadius: { md: SHOP_V2.radius },
       }}
     >
@@ -272,29 +262,51 @@ export function ShopPage() {
                 <Typography component="h3" sx={{ fontWeight: 700, fontSize: '0.9rem' }}>
                   Featured
                 </Typography>
-                <Stack direction="row" gap={1.5} sx={{ overflowX: 'auto', pb: 0.5, scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}>
-                  {promotions.map((pr) => (
-                    <Card
-                      key={pr.id}
-                      variant="outlined"
-                      sx={{ flexShrink: 0, width: 220, borderRadius: SHOP_V2.radius, borderColor: 'divider' }}
-                    >
-                      <CardActionArea
-                        component={RouterLink}
-                        to={resolvePromoHref(pr.linkPath, pathPrefix, shop)}
-                        sx={{ p: 2, textAlign: 'left', minHeight: 88 }}
+                <Stack
+                  direction="row"
+                  gap={1.5}
+                  sx={{ overflowX: 'auto', pb: 0.5, scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}
+                >
+                  {promotions.map((pr) => {
+                    const promoImg = resolvePromotionDisplayUrl(pr.slug, pr.imageUrl)
+                    return (
+                      <Card
+                        key={pr.id}
+                        variant="outlined"
+                        sx={{
+                          flexShrink: 0,
+                          width: { xs: 200, sm: 240 },
+                          borderRadius: SHOP_V2.radius,
+                          borderColor: 'divider',
+                          overflow: 'hidden',
+                        }}
                       >
-                        <Typography fontWeight={800} fontSize="0.9rem">
-                          {pr.title}
-                        </Typography>
-                        {pr.subtitle ? (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                            {pr.subtitle}
-                          </Typography>
-                        ) : null}
-                      </CardActionArea>
-                    </Card>
-                  ))}
+                        <CardActionArea
+                          component={RouterLink}
+                          to={resolvePromoHref(pr.linkPath, pathPrefix, shop)}
+                          sx={{ display: 'block', textAlign: 'left' }}
+                        >
+                          <ProductImage
+                            imageUrl={promoImg}
+                            alt={pr.title}
+                            ratio="16 / 9"
+                            imageLayout="hero"
+                            frame="default"
+                          />
+                          <Box sx={{ px: 1.75, py: 1.5 }}>
+                            <Typography fontWeight={800} fontSize="0.9rem" sx={{ lineHeight: 1.25 }}>
+                              {pr.title}
+                            </Typography>
+                            {pr.subtitle ? (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, lineHeight: 1.35 }}>
+                                {pr.subtitle}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                        </CardActionArea>
+                      </Card>
+                    )
+                  })}
                 </Stack>
               </Stack>
             ) : null}
@@ -315,7 +327,7 @@ export function ShopPage() {
               </Typography>
             ) : null}
 
-            <Grid container spacing={{ xs: 1.25, sm: 1.5 }}>
+            <Grid container spacing={{ xs: 2, sm: 1.75, md: 1.5 }}>
               {displayItems.map((p) => {
                 const v0 = p.variants[0]
                 const range = storefrontVariantPriceRange(p)
@@ -327,13 +339,12 @@ export function ShopPage() {
                       : '—'
                 const demoStore = getDemoStoreForProduct(p.slug)
                 return (
-                  <Grid key={p.id} size={{ xs: 4, sm: 3, md: 3, lg: 2 }}>
+                  <Grid key={p.id} size={{ xs: 6, sm: 4, md: 3, lg: 2 }}>
                     <ShopProductCard
                       product={p}
                       pathPrefix={pathPrefix}
                       priceLabel={price}
                       demoStore={demoStore ? { name: demoStore.name, slug: demoStore.slug } : null}
-                      onQuickAdd={handleQuickAdd}
                     />
                   </Grid>
                 )
@@ -343,13 +354,6 @@ export function ShopPage() {
         </ShopPageSection>
       </Stack>
 
-      <Snackbar
-        open={Boolean(cartSnack)}
-        message={cartSnack ?? ''}
-        autoHideDuration={3200}
-        onClose={() => setCartSnack(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      />
     </Box>
   )
 }

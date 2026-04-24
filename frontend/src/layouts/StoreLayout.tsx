@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link as RouterLink, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { parseLocationForRecent, recordRecentVisit } from '../lib/recentVisits'
 import { readResponseJson } from '../api/client'
 import { apiUrl } from '../lib/apiOrigin'
 import { NOTIFICATIONS_CHANGED_EVENT } from '../lib/notificationEvents'
-import { SESSION_CHANGED_EVENT } from '../hooks/useAuthMe'
+import { SESSION_CHANGED_EVENT, useAuthMe } from '../hooks/useAuthMe'
 import {
   AppBar,
   Badge,
@@ -29,19 +29,33 @@ import {
   useTheme,
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
-import { HEADER_APP_GRADIENT, SURFACE_BORDER } from '../theme/branding'
+import { HEADER_APP_GRADIENT, STORE_DESKTOP_CANVAS_GREY } from '../theme/branding'
 import { StoreAppBarBrand } from '../components/layout/StoreAppBarBrand'
 import { StoreDesktopNav } from '../components/layout/StoreDesktopNav'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined'
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined'
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined'
-import ShoppingBasketOutlinedIcon from '@mui/icons-material/ShoppingBasketOutlined'
+import ElectricBoltOutlinedIcon from '@mui/icons-material/ElectricBoltOutlined'
+import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
 import SearchIcon from '@mui/icons-material/Search'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
 import CloseIcon from '@mui/icons-material/Close'
 import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined'
+import {
+  STORE_COMPACT_BOTTOM_NAV_BAR_HEIGHT_CAP_PX,
+  STORE_COMPACT_BOTTOM_NAV_MEASUREMENT_FUDGE_PX,
+  STORE_COMPACT_FALLBACK_BOTTOM_NAV_HEIGHT_PX,
+  storeCompactOutletContainerPb,
+  storeCompactScrollBottomInsetPx,
+} from '../lib/storeCompactShellPadding'
+import {
+  SERVICES_HUB_NAV_SHORT_LABELS,
+  servicesCompactNavSlot,
+  servicesEssentialsHref,
+  servicesInsuranceHref,
+} from '../lib/servicesHubTabs'
 
 const appBarIconFocus = {
   '&:focus-visible': {
@@ -67,23 +81,26 @@ const navValue = (pathname: string): number => {
   if (p.startsWith('/shop')) return 1
   if (p.startsWith('/wallet')) return 2
   if (p.startsWith('/orders')) return 3
-  if (p.startsWith('/services')) return 4
+  const servicesSlot = servicesCompactNavSlot(pathname)
+  if (servicesSlot !== null) return servicesSlot
   if (p.startsWith('/cart') || p.startsWith('/checkout')) return -1
   return -1
 }
 
 export function StoreLayout() {
   const theme = useTheme()
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
+  /** Viewports below `md`: fixed bottom tab bar + compact header rules (phones and tablets). */
+  const isCompactShell = useMediaQuery(theme.breakpoints.down('md'))
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
+  const { user } = useAuthMe()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const homePath = pathPrefix || '/'
   const base = storeBasePath(pathname)
   const isHome = base === '/'
   const isServicesFlow = base === '/services' || base.startsWith('/services/')
   const isOnboardingLoginFullScreen = base === '/onboarding/login'
-  const hideChromeAppBar = isMobile && (isHome || isServicesFlow || isOnboardingLoginFullScreen)
+  const hideChromeAppBar = isCompactShell && (isHome || isServicesFlow || isOnboardingLoginFullScreen)
 
   const profilePath = `${pathPrefix}/profile`
   const notificationsPath = `${pathPrefix}/notifications`
@@ -94,7 +111,8 @@ export function StoreLayout() {
     pathPrefix ? `${pathPrefix}/shop` : '/shop',
     pathPrefix ? `${pathPrefix}/wallet` : '/wallet',
     ordersPath,
-    pathPrefix ? `${pathPrefix}/services` : '/services',
+    servicesEssentialsHref(pathPrefix),
+    servicesInsuranceHref(pathPrefix),
   ] as const
   const cartPath = `${pathPrefix}/cart`
   const shopPath = `${pathPrefix}/shop`
@@ -107,14 +125,18 @@ export function StoreLayout() {
 
   useEffect(() => {
     const parsed = parseLocationForRecent(pathname, search)
-    if (parsed) recordRecentVisit(parsed)
-  }, [pathname, search])
+    const scope = user?.sub?.trim() || user?.email?.trim() || 'guest'
+    if (parsed) recordRecentVisit(parsed, { scope })
+  }, [pathname, search, user?.sub, user?.email])
 
   useEffect(() => {
     const sp = new URLSearchParams(search)
     const q = sp.get('q') ?? ''
-    setSearchQ(q)
-    setMobileSearchDraft(q)
+    // Avoid synchronous setState in effects (lint rule); defer to next microtask.
+    queueMicrotask(() => {
+      setSearchQ(q)
+      setMobileSearchDraft(q)
+    })
   }, [search])
 
   useEffect(() => {
@@ -158,12 +180,115 @@ export function StoreLayout() {
     const on = () => void loadUnread()
     window.addEventListener(NOTIFICATIONS_CHANGED_EVENT, on)
     window.addEventListener(SESSION_CHANGED_EVENT, on)
+    const sub = user?.sub?.trim() ?? ''
+    const hasSqlUser =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sub)
+    let poll: ReturnType<typeof setInterval> | undefined
+    if (hasSqlUser) {
+      poll = setInterval(() => {
+        if (document.visibilityState === 'visible') void loadUnread()
+      }, 20_000)
+    }
     return () => {
       cancelled = true
+      if (poll) clearInterval(poll)
       window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, on)
       window.removeEventListener(SESSION_CHANGED_EVENT, on)
     }
-  }, [pathname])
+  }, [pathname, user?.sub])
+
+  const bottomNavRef = useRef<HTMLDivElement | null>(null)
+  const lastBottomNavBarPxRef = useRef(STORE_COMPACT_FALLBACK_BOTTOM_NAV_HEIGHT_PX)
+
+  useLayoutEffect(() => {
+    const clearDocInsets = () => {
+      document.documentElement.style.removeProperty('--pt-store-bottom-nav-height')
+      document.documentElement.style.removeProperty('--pt-store-scroll-bottom-inset')
+      document.documentElement.style.removeProperty('scroll-padding-bottom')
+    }
+
+    if (!isCompactShell || isOnboardingLoginFullScreen) {
+      lastBottomNavBarPxRef.current = STORE_COMPACT_FALLBACK_BOTTOM_NAV_HEIGHT_PX
+      clearDocInsets()
+      return
+    }
+
+    /** Bottom inset = measured bottom navigation height only (mobile + tablet). */
+    const applyDocInsets = (bar: number) => {
+      /** Single inset for scroll-padding, FAB offset, and outlet tail — `ceil(bar)` with a small floor only. */
+      const padded = storeCompactScrollBottomInsetPx(bar)
+      document.documentElement.style.setProperty('--pt-store-bottom-nav-height', `${padded}px`)
+      document.documentElement.style.setProperty('--pt-store-scroll-bottom-inset', `${padded}px`)
+      document.documentElement.style.scrollPaddingBottom = `${padded}px`
+    }
+
+    applyDocInsets(
+      Math.min(
+        Math.max(lastBottomNavBarPxRef.current, STORE_COMPACT_FALLBACK_BOTTOM_NAV_HEIGHT_PX) +
+          STORE_COMPACT_BOTTOM_NAV_MEASUREMENT_FUDGE_PX,
+        STORE_COMPACT_BOTTOM_NAV_BAR_HEIGHT_CAP_PX,
+      ),
+    )
+
+    const el = bottomNavRef.current
+    if (!el) {
+      return () => {
+        clearDocInsets()
+      }
+    }
+
+    const sync = () => {
+      const rect = el.getBoundingClientRect()
+      const raw = Math.ceil(rect.height)
+      const merged =
+        raw > 8
+          ? raw
+          : lastBottomNavBarPxRef.current > 8
+            ? lastBottomNavBarPxRef.current
+            : STORE_COMPACT_FALLBACK_BOTTOM_NAV_HEIGHT_PX
+      /**
+       * Use measured bar height (+ fudge), capped — do **not** use `viewportH - rect.top` here: that is distance from
+       * the top of the viewport to the top of the nav (often ~600px+), not nav height, and it pinned inset to the cap
+       * and produced a large empty strip above the tabs.
+       */
+      const bar = Math.min(
+        Math.max(merged, 56) + STORE_COMPACT_BOTTOM_NAV_MEASUREMENT_FUDGE_PX,
+        STORE_COMPACT_BOTTOM_NAV_BAR_HEIGHT_CAP_PX,
+      )
+      lastBottomNavBarPxRef.current = bar
+      applyDocInsets(bar)
+    }
+
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    window.addEventListener('resize', sync)
+
+    let raf = 0
+    const vv = window.visualViewport
+    const onVisualViewport = () => {
+      if (raf) cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        sync()
+      })
+    }
+    if (vv) {
+      vv.addEventListener('resize', onVisualViewport)
+      vv.addEventListener('scroll', onVisualViewport)
+    }
+
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', sync)
+      if (vv) {
+        vv.removeEventListener('resize', onVisualViewport)
+        vv.removeEventListener('scroll', onVisualViewport)
+      }
+      if (raf) cancelAnimationFrame(raf)
+      clearDocInsets()
+    }
+  }, [isCompactShell, isOnboardingLoginFullScreen, theme, pathname])
 
   const currentNav = navValue(pathname)
 
@@ -183,11 +308,33 @@ export function StoreLayout() {
     setMobileSearchOpen(false)
   }
 
-  const desktopChrome = !isMobile && !hideChromeAppBar && !isOnboardingLoginFullScreen
+  const desktopChrome = !isCompactShell && !hideChromeAppBar && !isOnboardingLoginFullScreen
 
   return (
-    <Box sx={{ minHeight: '100dvh', bgcolor: desktopChrome ? '#f1f5f9' : 'background.default', display: 'flex', flexDirection: 'column' }}>
-      {!hideChromeAppBar && isMobile && (
+    <Box
+      sx={{
+        minHeight: '100dvh',
+        height: '100%',
+        width: 1,
+        maxWidth: '100%',
+        overflowX: 'hidden',
+        bgcolor: desktopChrome ? STORE_DESKTOP_CANVAS_GREY : 'background.default',
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+      }}
+    >
+      <Box
+        sx={{
+          flex: isCompactShell && !isOnboardingLoginFullScreen ? '0 1 auto' : 1,
+          minHeight: 0,
+          width: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          boxSizing: 'border-box',
+        }}
+      >
+      {!hideChromeAppBar && isCompactShell && (
         <AppBar
           position="sticky"
           elevation={0}
@@ -337,14 +484,12 @@ export function StoreLayout() {
             pt: { md: 1.5, lg: 1.75 },
             pb: { md: 1.75, lg: 2 },
             borderBottom: '1px solid rgba(255,255,255,0.1)',
-            boxShadow: '0 12px 40px rgba(15, 23, 42, 0.08)',
           }}
         >
           <Box
             sx={{
               width: 1,
-              maxWidth: (t) => t.breakpoints.values.xl,
-              mx: 'auto',
+              maxWidth: 'none',
               px: { md: 2.5, lg: 4 },
               boxSizing: 'border-box',
             }}
@@ -385,12 +530,8 @@ export function StoreLayout() {
                   overflowX: 'auto',
                   overflowY: 'hidden',
                   WebkitOverflowScrolling: 'touch',
-                  scrollbarWidth: 'thin',
-                  '&::-webkit-scrollbar': { height: 4 },
-                  '&::-webkit-scrollbar-thumb': {
-                    borderRadius: 99,
-                    bgcolor: 'rgba(255,255,255,0.3)',
-                  },
+                  scrollbarWidth: 'none',
+                  '&::-webkit-scrollbar': { display: 'none', width: 0, height: 0 },
                 }}
               >
                 <StoreDesktopNav pathPrefix={pathPrefix} />
@@ -495,15 +636,23 @@ export function StoreLayout() {
       <Box
         component="main"
         sx={{
-          flex: 1,
+          // Compact: do not grow to fill the viewport — avoids a long empty scroll past page content (e.g. home).
+          flex: isCompactShell && !isOnboardingLoginFullScreen ? '0 1 auto' : 1,
+          minHeight: isCompactShell ? 'min-content' : '100%',
           display: 'flex',
           flexDirection: 'column',
           width: 1,
           ...(desktopChrome
             ? {
-                bgcolor: '#ffffff',
+                bgcolor: STORE_DESKTOP_CANVAS_GREY,
               }
             : {}),
+          ...(isCompactShell && !isOnboardingLoginFullScreen
+            ? {
+                pb: 0,
+                bgcolor: 'background.default',
+              }
+            : { pb: 0 }),
         }}
       >
         {isOnboardingLoginFullScreen ? (
@@ -516,35 +665,33 @@ export function StoreLayout() {
               flexDirection: 'column',
               p: 0,
               m: 0,
-              pb: isMobile ? 'env(safe-area-inset-bottom, 0px)' : 0,
+              pb: isCompactShell ? 'env(safe-area-inset-bottom, 0px)' : 0,
             }}
           >
             <Outlet />
           </Box>
         ) : (
           <Container
-            maxWidth="xl"
+            maxWidth={desktopChrome ? false : 'xl'}
             sx={{
-              flex: 1,
+              flex: isCompactShell ? '0 1 auto' : 1,
               width: 1,
-              minHeight: 0,
-              py: hideChromeAppBar ? { xs: 0, sm: 3, md: 4 } : { xs: 2, sm: 3, md: desktopChrome ? 4 : 4 },
-              px: { xs: 2, sm: 3, md: desktopChrome ? 4 : 4, lg: 5 },
-              // Clear fixed bottom nav (tall bar + labels + optional FAB lift) + home indicator / gesture bar
-              pb: isMobile
-                ? (t) => `calc(${t.spacing(20)} + env(safe-area-inset-bottom, 0px))`
-                : { md: 6 },
+              minHeight: isCompactShell ? 'min-content' : '100%',
+              ...(isCompactShell
+                ? {
+                    pt: hideChromeAppBar ? { xs: 0, sm: 3, md: 4 } : { xs: 2, sm: 3, md: desktopChrome ? 4 : 4 },
+                    px: { xs: 2, sm: 3, md: desktopChrome ? 4 : 4, lg: 5 },
+                    pb: (t) => storeCompactOutletContainerPb(t),
+                  }
+                : {
+                    py: hideChromeAppBar ? { xs: 0, sm: 3, md: 4 } : { xs: 2, sm: 3, md: desktopChrome ? 4 : 4 },
+                    px: { xs: 2, sm: 3, md: desktopChrome ? 4 : 4, lg: 5 },
+                    pb: { md: 6 },
+                  }),
               ...(desktopChrome
                 ? {
-                    bgcolor: 'background.paper',
-                    borderRadius: '6px 6px 0 0',
-                    border: `1px solid ${SURFACE_BORDER}`,
-                    borderBottom: 'none',
-                    mt: 0,
-                    pt: { md: 4 },
-                    boxShadow: '0 -10px 34px rgba(15, 23, 42, 0.06)',
-                    maxWidth: 'lg',
-                    mx: 'auto',
+                    bgcolor: 'transparent',
+                    maxWidth: 'none',
                   }
                 : {}),
             }}
@@ -553,9 +700,11 @@ export function StoreLayout() {
           </Container>
         )}
       </Box>
+      </Box>
 
-      {isMobile && !isOnboardingLoginFullScreen && (
+      {isCompactShell && !isOnboardingLoginFullScreen && (
         <BottomNavigation
+          ref={bottomNavRef}
           value={currentNav < 0 ? false : currentNav}
           onChange={(_e, newValue) => {
             navigate(mobilePaths[newValue])
@@ -567,10 +716,11 @@ export function StoreLayout() {
             left: 0,
             right: 0,
             zIndex: theme.zIndex.appBar - 1,
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
             borderTop: 1,
             borderColor: 'divider',
             bgcolor: 'background.paper',
-            '& .MuiBottomNavigationAction-root': { minWidth: 52, maxWidth: 76, py: 0.5 },
+            '& .MuiBottomNavigationAction-root': { minWidth: 44, maxWidth: 72, py: 0.5, px: 0.2 },
           }}
         >
           <BottomNavigationAction label="Home" icon={<HomeOutlinedIcon />} />
@@ -608,7 +758,8 @@ export function StoreLayout() {
             }}
           />
           <BottomNavigationAction label="My orders" icon={<ReceiptLongOutlinedIcon />} />
-          <BottomNavigationAction label="Services" icon={<ShoppingBasketOutlinedIcon />} />
+          <BottomNavigationAction label={SERVICES_HUB_NAV_SHORT_LABELS.essentials} icon={<ElectricBoltOutlinedIcon />} />
+          <BottomNavigationAction label={SERVICES_HUB_NAV_SHORT_LABELS.insurance} icon={<PolicyOutlinedIcon />} />
         </BottomNavigation>
       )}
     </Box>

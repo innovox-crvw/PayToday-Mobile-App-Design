@@ -80,3 +80,71 @@ Run API + SPA (`npm run dev` or deployed equivalents).
 
 - Add `GET /api/payment/config` returning `vi` or `business_id` to the browser.
 - Call PayToday Payment Intent from Vite client code (CORS, secret leakage).
+
+---
+
+## Webhook receiver (operations and audit)
+
+Code: [`backend/src/routes/webhooks/paytoday.ts`](../backend/src/routes/webhooks/paytoday.ts). Mount order: registered on `createApp()` **before** `express.json()` with `express.raw({ type: '*/*', limit: '2mb' })` so HMAC is computed over the exact bytes PayToday sent ([`backend/src/app.ts`](../backend/src/app.ts)).
+
+### Endpoints
+
+| Method | Path | Body |
+|--------|------|------|
+| `POST` | `/api/webhooks/paytoday` | Raw JSON (parsed after verify) |
+| `POST` | `/api/payments/webhook` | Same handler (alias for portal configuration flexibility) |
+
+### Signature verification
+
+| Item | Detail |
+|------|--------|
+| Header | `x-paytoday-signature` or `X-PayToday-Signature` (first non-empty wins in code) |
+| Algorithm | `HMAC-SHA256(secret, rawBody)` → **hex** string, compared with `crypto.timingSafeEqual` to the header bytes |
+| Secret | `PAYTODAY_WEBHOOK_SECRET` merged via `mergePayTodayRuntime` / integration settings (see `integrationRuntimeConfig`) |
+| Production | If the secret is empty, verification **fails** (no accidental open webhooks) |
+| Development | Empty secret allows webhooks through **only** when `NODE_ENV !== 'production'` (still discouraged) |
+
+Failure: **401** `{ "error": "Invalid webhook signature" }`. Malformed body: **400** (`Expected raw body` / `Invalid JSON`).
+
+### Idempotency and ordering
+
+1. **Event id:** Derived from payload fields (`eventId`, `id`, `paymentId`, `event_id`, or `reference` + status, else SHA-256 of raw body) — capped for storage.
+2. **Deduplication:** When SQL is available, `INSERT` into `dbo.payment_webhook_events` only if `event_id` is new; duplicate → **200** `{ ok: true, duplicate: true }` without re-applying business logic.
+3. **No SQL pool:** In-memory `Set` for the process lifetime only (dev / degraded).
+
+Duplicate or out-of-order delivery should therefore be safe: second delivery short-circuits at persistence.
+
+### Resolving the order
+
+Order id resolution (first match wins):
+
+1. JSON `orderId` (string).
+2. `reference` starting with `PTSTORE-` → suffix is UUID string.
+3. `payment_intent_token` or `paymentIntentToken` → lookup `dbo.orders.paytoday_payment_intent_token` (requires migration **007** if that column is used).
+
+If no order: **200** `{ ok: true, received: true, orderId: null, note: 'order not resolved' }` — acknowledged without mutation.
+
+### Payment outcome interpretation
+
+Handler uses heuristic flags on the parsed object:
+
+- **Paid:** status / `payment_status` in `paid`, `success`, `completed`, `captured`, `succeeded`; or `success === true`; or `eventType` indicating payment success (including `payment.succeeded`).
+- **Failed / cancelled:** status in failed/declined/error/rejected or cancelled/void variants.
+
+**Apply logic** (`applyWebhook`):
+
+- **Paid:** `confirmOrderPaid`, `markPaymentWebhookProcessed` when applicable; no-op if order already in a terminal paid-ish state.
+- **Failed or cancelled:** If order not already shipped/delivered/paid, attempts `cancelUnshippedOrderAdmin`, then `markPaymentFailedFromWebhook`. If already terminal paid, returns **noop** (no reversal from webhook alone).
+
+### Responses and operations
+
+| HTTP | Meaning |
+|------|---------|
+| 200 | Event accepted (possibly duplicate, noop, or applied) |
+| 401 | Bad or missing signature |
+| 400 | Not a buffer body or invalid JSON |
+| 500 | Unexpected error after accept path started |
+
+**Replay / testing:** Use a signed payload from the PayToday portal or internal smoke tooling; confirm row in `payment_webhook_events` and order status in `dbo.orders`. See [PAYTODAY_E2E_SMOKE.md](PAYTODAY_E2E_SMOKE.md).
+
+**Observability:** Server logs warnings on unexpected cancel errors; success path returns JSON including `eventId`, `orderId`, and `action` (`paid` | `failed` | `cancelled` | `noop`).

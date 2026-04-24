@@ -2,24 +2,53 @@ import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { requireAuth, requireRole } from '../../middleware/auth.js'
 import {
+  isPayTodayMerchantIdAllowedForScope,
+  resolveAdminMerchantScopeFromRequest,
+} from '../../lib/adminMerchantScope.js'
+import {
   isUuidString,
   listInventoryOverview,
+  listLowStockSkus,
   listRecentStockMovements,
   setVariantLowStockThreshold,
   setVariantWarehouseQuantityAdmin,
 } from '../../repos/inventoryRepo.js'
+import { lookupVariantPayTodayMerchantId } from '../../repos/productsRepo.js'
+import type { Response } from 'express'
+import type { ConnectionPool } from 'mssql'
+
+async function requireAdminVariantMutationAccess(
+  pool: ConnectionPool,
+  variantId: string,
+  scope: number[] | undefined,
+  res: Response,
+): Promise<boolean> {
+  if (!scope?.length) return true
+  const lu = await lookupVariantPayTodayMerchantId(pool, variantId)
+  if (!lu.ok) return true
+  if (!lu.exists) {
+    res.status(404).json({ error: 'Variant not found' })
+    return false
+  }
+  if (!isPayTodayMerchantIdAllowedForScope(scope, lu.payTodayMerchantId)) {
+    res.status(403).json({ error: 'Not allowed to manage inventory for this product' })
+    return false
+  }
+  return true
+}
 
 export const adminInventoryRouter = Router()
 adminInventoryRouter.use(requireAuth, requireRole('admin', 'ops', 'fulfillment'))
 
-adminInventoryRouter.get('/', async (_req, res) => {
+adminInventoryRouter.get('/', async (req, res) => {
   const pool = await getSqlPool()
   if (!pool) {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
   try {
-    const items = await listInventoryOverview(pool)
+    const { scope } = await resolveAdminMerchantScopeFromRequest(pool, req)
+    const items = await listInventoryOverview(pool, scope?.length ? { payTodayMerchantIds: scope } : undefined)
     res.json({ items })
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'List failed' })
@@ -34,35 +63,31 @@ adminInventoryRouter.get('/movements', async (req, res) => {
   }
   const lim = typeof req.query.limit === 'string' ? Number(req.query.limit) : 40
   try {
-    const items = await listRecentStockMovements(pool, lim)
+    const { scope } = await resolveAdminMerchantScopeFromRequest(pool, req)
+    const items = await listRecentStockMovements(
+      pool,
+      lim,
+      scope?.length ? { payTodayMerchantIds: scope } : undefined,
+    )
     res.json({ items })
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'List failed' })
   }
 })
 
-adminInventoryRouter.get('/low-stock', async (_req, res) => {
+adminInventoryRouter.get('/low-stock', async (req, res) => {
   const pool = await getSqlPool()
   if (!pool) {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
-  const r = await pool.request().query<{
-    sku: string
-    product_name: string
-    quantity: number
-    low_stock_threshold: number | null
-  }>(`
-    SELECT v.sku, p.name AS product_name, SUM(iq.quantity) AS quantity, v.low_stock_threshold
-    FROM dbo.inventory_quantity iq
-    INNER JOIN dbo.product_variants v ON v.id = iq.variant_id
-    INNER JOIN dbo.products p ON p.id = v.product_id
-    WHERE v.low_stock_threshold IS NOT NULL
-    GROUP BY v.sku, p.name, v.low_stock_threshold
-    HAVING SUM(iq.quantity) <= v.low_stock_threshold
-    ORDER BY SUM(iq.quantity) ASC
-  `)
-  res.json({ items: r.recordset })
+  try {
+    const { scope } = await resolveAdminMerchantScopeFromRequest(pool, req)
+    const items = await listLowStockSkus(pool, scope?.length ? { payTodayMerchantIds: scope } : undefined)
+    res.json({ items })
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'List failed' })
+  }
 })
 
 adminInventoryRouter.patch('/variants/:variantId', async (req, res) => {
@@ -71,11 +96,13 @@ adminInventoryRouter.patch('/variants/:variantId', async (req, res) => {
     res.status(503).json({ error: 'Database not configured' })
     return
   }
+  const { scope } = await resolveAdminMerchantScopeFromRequest(pool, req)
   const variantId = String(req.params.variantId ?? '')
   if (!isUuidString(variantId)) {
     res.status(400).json({ error: 'Invalid variant id' })
     return
   }
+  if (!(await requireAdminVariantMutationAccess(pool, variantId, scope, res))) return
 
   const hasQty = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'quantityTarget')
   const hasTh = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'lowStockThreshold')
@@ -103,7 +130,7 @@ adminInventoryRouter.patch('/variants/:variantId', async (req, res) => {
       const q = Number((req.body as { quantityTarget?: unknown }).quantityTarget)
       await setVariantWarehouseQuantityAdmin(pool, variantId, q)
     }
-    const items = await listInventoryOverview(pool)
+    const items = await listInventoryOverview(pool, scope?.length ? { payTodayMerchantIds: scope } : undefined)
     const row = items.find((i) => i.variantId.toLowerCase() === variantId.toLowerCase())
     res.json({ ok: true, variant: row ?? null })
   } catch (e) {

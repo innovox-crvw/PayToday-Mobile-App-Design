@@ -24,7 +24,17 @@ import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js
 import { shippingCentsForDelivery, taxCentsForSubtotal } from '../../services/shipping.js'
 import { findUserById } from '../../repos/usersRepo.js'
 import { setPaymentProcessing, updatePaymentReference } from '../../repos/paymentsRepo.js'
+import { parseEmailString, parseOptionalGuestPersonName, parseOptionalPhoneDigits } from '../../lib/inputValidators.js'
 import type { NextFunction, Request, Response } from 'express'
+
+class CheckoutValidationError extends Error {
+  readonly field: string
+  constructor(message: string, field: string) {
+    super(message)
+    this.name = 'CheckoutValidationError'
+    this.field = field
+  }
+}
 
 export const checkoutRouter = Router()
 checkoutRouter.use(optionalAuth)
@@ -39,13 +49,6 @@ function checkoutSignInGate(req: Request, res: Response, next: NextFunction): vo
 
 const CHECKOUT_DB_HINT =
   'Start Microsoft SQL Server on the host and port in SQL_CONNECTION_STRING, then run npm run db:setup from the project root. Check the API console on startup for “MS SQL connected” vs “not reachable”.'
-
-function trimPaymentField(value: unknown, maxLen: number): string | null {
-  if (typeof value !== 'string') return null
-  const t = value.trim()
-  if (!t) return null
-  return t.slice(0, maxLen)
-}
 
 function splitFullName(fullName: string | null | undefined): { first: string | null; last: string | null } {
   const t = fullName?.trim()
@@ -62,9 +65,15 @@ async function payerFieldsForPaymentIntent(
   req: Request,
   ctx: { userId: string | null; accountFullName: string | null },
 ): Promise<{ userFirstName: string | null; userLastName: string | null; userPhone: string | null }> {
-  let first = trimPaymentField(req.body?.guestFirstName, 120)
-  let last = trimPaymentField(req.body?.guestLastName, 120)
-  const phone = trimPaymentField(req.body?.guestPhone, 40)
+  const gf = parseOptionalGuestPersonName(req.body?.guestFirstName, 'guestFirstName')
+  if (!gf.ok) throw new CheckoutValidationError(gf.message, gf.field)
+  const gl = parseOptionalGuestPersonName(req.body?.guestLastName, 'guestLastName')
+  if (!gl.ok) throw new CheckoutValidationError(gl.message, gl.field)
+  const gp = parseOptionalPhoneDigits(req.body?.guestPhone, 'guestPhone')
+  if (!gp.ok) throw new CheckoutValidationError(gp.message, gp.field)
+  let first = gf.value
+  let last = gl.value
+  const phone = gp.value
   if (ctx.userId) {
     const full =
       ctx.accountFullName ?? (await findUserById(pool, ctx.userId))?.full_name ?? null
@@ -190,6 +199,10 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
           idempotent: true,
         })
       } catch (e) {
+        if (e instanceof CheckoutValidationError) {
+          res.status(400).json({ error: e.message, field: e.field, code: 'validation_error' })
+          return
+        }
         if (e instanceof PayTodayPaymentIntentError) {
           res.status(e.statusCode).json({ error: e.message })
           return
@@ -203,7 +216,31 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
   const deliveryMethod = req.body?.deliveryMethod === 'deposit_box' ? 'deposit_box' : 'home'
   const depositLocationId = typeof req.body?.depositLocationId === 'string' ? req.body.depositLocationId : null
   const shippingAddressId = typeof req.body?.shippingAddressId === 'string' ? req.body.shippingAddressId : null
-  const guestEmail = typeof req.body?.guestEmail === 'string' ? req.body.guestEmail : null
+  let guestEmail: string | null =
+    typeof req.body?.guestEmail === 'string' && req.body.guestEmail.trim() ? req.body.guestEmail.trim() : null
+  if (guestEmail) {
+    const ge = parseEmailString(guestEmail, 'guestEmail')
+    if (!ge.ok) {
+      res.status(400).json({ error: ge.message, field: ge.field, code: 'validation_error' })
+      return
+    }
+    guestEmail = ge.value
+  }
+
+  /** `orders.user_id` FK — only set when `dbo.users` still has this id (JWT can be stale after DB reset). */
+  let checkoutSqlUserId: string | null = null
+  const rawSub = req.user?.sub?.trim()
+  if (rawSub) {
+    const urow = await findUserById(pool, rawSub)
+    if (urow) checkoutSqlUserId = rawSub
+  }
+  if (req.user && !checkoutSqlUserId) {
+    res.status(401).json({
+      error:
+        'Your sign-in session does not match a user in this database (common after a data refresh). Sign out, sign in again, or clear site cookies for this app.',
+    })
+    return
+  }
 
   if (deliveryMethod === 'deposit_box' && !depositLocationId) {
     res.status(400).json({ error: 'depositLocationId required for deposit_box' })
@@ -222,7 +259,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
     const owns = await pool
       .request()
-      .input('uid', req.user.sub)
+      .input('uid', checkoutSqlUserId!)
       .input('aid', shippingAddressId.trim())
       .query<{ c: number }>(
         `SELECT COUNT(1) AS c FROM dbo.addresses WHERE id = @aid AND user_id = @uid`,
@@ -232,7 +269,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       return
     }
     try {
-      await validateShippingAddressComplete(pool, req.user.sub, shippingAddressId.trim())
+      await validateShippingAddressComplete(pool, checkoutSqlUserId!, shippingAddressId.trim())
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'Invalid delivery address' })
       return
@@ -249,13 +286,23 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
   }
 
   const sessionToken = req.cookies[CART_COOKIE] as string | undefined
-  const { cartId } = await getOrCreateCartId(pool, sessionToken, req.user?.sub)
+  const { cartId } = await getOrCreateCartId(pool, sessionToken, checkoutSqlUserId ?? undefined)
 
   const lines = await getCartLines(pool, cartId)
   if (lines.length === 0) {
     res.status(400).json({ error: 'Cart is empty' })
     return
   }
+
+  if (!checkoutSqlUserId && paymentMethod === 'paytoday' && isPaymentIntentMode(pt)) {
+    const ge = parseEmailString(req.body?.guestEmail, 'guestEmail')
+    if (!ge.ok) {
+      res.status(400).json({ error: ge.message, field: ge.field, code: 'validation_error' })
+      return
+    }
+    guestEmail = ge.value
+  }
+
   let subtotalCents = 0
   let currency = 'NAD'
   for (const l of lines) {
@@ -275,7 +322,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
    */
   try {
     const o = await createOrderFromCart(pool, cartId, {
-      userId: req.user?.sub,
+      userId: checkoutSqlUserId ?? undefined,
       guestEmail,
       deliveryMethod,
       shippingAddressId,
@@ -312,7 +359,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
   }
 
   if (paymentMethod === 'demo_wallet') {
-    const uid = req.user!.sub
+    const uid = checkoutSqlUserId!
     const debit = await tryDebitWalletStoreCheckout(pool, uid, orderId, totalCents, reference)
     if (!debit.ok) {
       try {
@@ -371,7 +418,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
   let redirectUrl: string
   try {
     const payer = await payerFieldsForPaymentIntent(pool, req, {
-      userId: req.user?.sub ?? null,
+      userId: checkoutSqlUserId,
       accountFullName: null,
     })
     const resolution = await resolvePaymentRedirect(
@@ -407,6 +454,10 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       console.warn('[checkout] payment lifecycle update (run db:migrate 015?)', e)
     }
   } catch (e) {
+    if (e instanceof CheckoutValidationError) {
+      res.status(400).json({ error: e.message, field: e.field, code: 'validation_error' })
+      return
+    }
     if (e instanceof PayTodayPaymentIntentError) {
       res.status(e.statusCode).json({ error: e.message })
       return
@@ -414,9 +465,9 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     throw e
   }
 
-  const channel = await resolveOutboxChannel(pool, req.user?.sub ?? null, guestEmail, 'checkout_pending_payment')
+  const channel = await resolveOutboxChannel(pool, checkoutSqlUserId, guestEmail, 'checkout_pending_payment')
   await enqueueNotification(pool, {
-    userId: req.user?.sub ?? null,
+    userId: checkoutSqlUserId,
     email: guestEmail ?? req.user?.email ?? null,
     channel,
     templateKey: 'checkout_pending_payment',

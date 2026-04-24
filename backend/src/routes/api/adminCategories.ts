@@ -27,12 +27,14 @@ adminCategoriesRouter.post('/', async (req, res) => {
   const name = typeof req.body?.name === 'string' ? req.body.name : ''
   const parentId = typeof req.body?.parentId === 'string' && req.body.parentId.trim() ? req.body.parentId.trim() : null
   const sortOrder = Number(req.body?.sortOrder ?? 0)
+  const rawIcon = (req.body as Record<string, unknown> | undefined)?.iconKey
+  const iconKey = rawIcon === null ? null : typeof rawIcon === 'string' ? rawIcon : undefined
   if (!slug.trim() || !name.trim()) {
     res.status(400).json({ error: 'slug and name required' })
     return
   }
   try {
-    const id = await createCategory(pool, { slug, name, parentId, sortOrder })
+    const id = await createCategory(pool, { slug, name, parentId, sortOrder, iconKey })
     res.status(201).json({ id })
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Create failed' })
@@ -66,6 +68,9 @@ adminCategoriesRouter.patch('/:categoryId', async (req, res) => {
   }
   if (Object.prototype.hasOwnProperty.call(body, 'isActive')) {
     patch.isActive = Boolean(body.isActive)
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'iconKey')) {
+    patch.iconKey = body.iconKey === null ? null : typeof body.iconKey === 'string' ? body.iconKey : undefined
   }
   try {
     await updateCategory(pool, categoryId, patch)

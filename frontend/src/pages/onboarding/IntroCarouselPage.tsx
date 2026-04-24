@@ -3,6 +3,7 @@ import { Link as RouterLink, useLocation } from 'react-router-dom'
 import { Box, Button, MobileStepper, Stack, Typography } from '@mui/material'
 import KeyboardArrowLeft from '@mui/icons-material/KeyboardArrowLeft'
 import KeyboardArrowRight from '@mui/icons-material/KeyboardArrowRight'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { ONBOARDING_GRADIENT, ONBOARDING_PANEL_BG, ONBOARDING_PANEL_BORDER, ONBOARDING_PANEL_SHADOW } from './onboardingBranding'
 
 type Slide = { title: string; subtitle: string }
@@ -17,12 +18,12 @@ export function IntroCarouselPage() {
 
   const slides = useMemo<Slide[]>(
     () => [
-      { title: 'Welcome to PayToday', subtitle: 'Your favourite way to pay.' },
+      { title: `Welcome to ${APP_DISPLAY_NAME}`, subtitle: 'Your favourite way to pay.' },
       { title: 'Store, services and wallet', subtitle: 'Pay bills, buy vouchers, and manage cards in one place.' },
       { title: 'Safe by design', subtitle: 'Sign in, confirm with PIN, and track every payment.' },
       { title: 'Ready to dive in?', subtitle: 'Sign in to get started.' },
     ],
-    [],
+    [APP_DISPLAY_NAME],
   )
 
   const [active, setActive] = useState(0)

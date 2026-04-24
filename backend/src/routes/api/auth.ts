@@ -6,11 +6,13 @@ import { env } from '../../config/env.js'
 import type { UserRole } from '../../types/roles.js'
 import { requireAuth } from '../../middleware/auth.js'
 import { getSqlPool } from '../../db/pool.js'
-import { isValidEmailFormat } from '../../lib/emailValidation.js'
+import { parseEmailString, parseOptionalDisplayName } from '../../lib/inputValidators.js'
 import {
   createUser,
+  deleteCustomerUserAccount,
   findUserByEmail,
   findUserById,
+  listMerchantsForUser,
   updateUserProfile,
   resetLoginFailures,
   recordFailedLogin,
@@ -77,6 +79,13 @@ const KEYCLOAK_HTTP_API_INDEX = [
     csrf: false,
     summary:
       'Returns paytodaySignInEnabled + localPasswordLoginAllowed so the SPA knows which /api/auth/login methods are available.',
+  },
+  {
+    method: 'POST' as const,
+    path: '/api/auth/delete-account',
+    csrf: true,
+    summary:
+      'Customer self-service: JSON { confirmEmail, currentPassword? }. confirmEmail must match the signed-in email; store-password accounts require currentPassword. Revokes sessions and deletes the SQL user (orders/carts detached).',
   },
 ]
 
@@ -167,8 +176,13 @@ async function completePaytodaySignIn(
     })
     return
   }
-  const emailLower = email.trim().toLowerCase()
-  if (emailLower && isValidEmailFormat(emailLower) && (await isKeycloakSignInLocked(pool, emailLower))) {
+  const emailParsed = parseEmailString(email, 'email')
+  if (!emailParsed.ok) {
+    res.status(400).json({ error: emailParsed.message, field: emailParsed.field, code: 'validation_error' })
+    return
+  }
+  const emailLower = emailParsed.value
+  if (await isKeycloakSignInLocked(pool, emailLower)) {
     res.status(423).json({
       error: 'Account temporarily locked due to failed sign-in attempts. Try again later.',
       code: 'account_locked',
@@ -204,12 +218,10 @@ async function completePaytodaySignIn(
     await setAuthCookiesForUser(res, pool, row.id, row.email, row.role)
     res.json({ ok: true, user: { id: row.id, email: row.email, role: row.role }, authSource: 'paytoday' })
   } catch (e) {
-    if (emailLower && isValidEmailFormat(emailLower)) {
-      try {
-        await recordKeycloakAuthFailure(pool, emailLower)
-      } catch {
-        /* ignore throttle DB errors */
-      }
+    try {
+      await recordKeycloakAuthFailure(pool, emailLower)
+    } catch {
+      /* ignore throttle DB errors */
     }
     if (e instanceof KeycloakAuthError) {
       res.status(e.statusCode).json({ error: e.message, code: 'paytoday_login_failed' })
@@ -226,22 +238,28 @@ authRouter.post('/register', async (req, res) => {
     res.status(503).json({ error: 'Database unavailable — start SQL Server or use login without registering' })
     return
   }
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim() : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
-  const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : null
-  if (!email || !password) {
+  if (!password) {
     res.status(400).json({ error: 'email and password required' })
     return
   }
-  if (!isValidEmailFormat(email)) {
-    res.status(400).json({ error: 'Invalid email format' })
+  const emailR = parseEmailString(req.body?.email, 'email')
+  if (!emailR.ok) {
+    res.status(400).json({ error: emailR.message, field: emailR.field, code: 'validation_error' })
     return
   }
+  const emailNorm = emailR.value
+  const fullNameR = parseOptionalDisplayName(req.body?.fullName, 'fullName')
+  if (!fullNameR.ok) {
+    res.status(400).json({ error: fullNameR.message, field: fullNameR.field, code: 'validation_error' })
+    return
+  }
+  const fullName = fullNameR.value
   if (password.length < 8) {
     res.status(400).json({ error: 'password must be at least 8 characters' })
     return
   }
-  const existing = await findUserByEmail(pool, email)
+  const existing = await findUserByEmail(pool, emailNorm)
   if (existing) {
     if (existing.keycloak_sub) {
       res.status(409).json({
@@ -254,7 +272,6 @@ authRouter.post('/register', async (req, res) => {
     return
   }
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
-  const emailNorm = email.toLowerCase()
   const userId = await createUser(pool, { email: emailNorm, passwordHash, fullName, role: 'customer' })
   const rawVerify = crypto.randomBytes(32).toString('hex')
   const verifyHash = crypto.createHash('sha256').update(rawVerify, 'utf8').digest()
@@ -298,12 +315,17 @@ authRouter.post('/login', async (req, res) => {
       })
       return
     }
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : ''
     const password = typeof req.body?.password === 'string' ? req.body.password : ''
-    if (!email || !password) {
+    if (!password) {
       res.status(400).json({ error: 'email and password required' })
       return
     }
+    const emailPayR = parseEmailString(req.body?.email, 'email')
+    if (!emailPayR.ok) {
+      res.status(400).json({ error: emailPayR.message, field: emailPayR.field, code: 'validation_error' })
+      return
+    }
+    const email = emailPayR.value
     if (!poolEarly) {
       res.status(503).json({
         error: 'Database required for PayToday sign-in',
@@ -316,16 +338,17 @@ authRouter.post('/login', async (req, res) => {
   }
 
   const pool = await getSqlPool()
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim() : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
-  if (!email || !password) {
+  if (!password) {
     res.status(400).json({ error: 'email and password required' })
     return
   }
-  if (!isValidEmailFormat(email)) {
-    res.status(400).json({ error: 'Invalid email format' })
+  const emailLocR = parseEmailString(req.body?.email, 'email')
+  if (!emailLocR.ok) {
+    res.status(400).json({ error: emailLocR.message, field: emailLocR.field, code: 'validation_error' })
     return
   }
+  const email = emailLocR.value
 
   let role: UserRole = 'customer'
   if (env.allowDevRoleHeader && env.nodeEnv !== 'production') {
@@ -435,9 +458,10 @@ authRouter.get('/verify-email', async (req, res) => {
 
 authRouter.post('/forgot-password', async (req, res) => {
   const pool = await getSqlPool()
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const emailR = parseEmailString(req.body?.email, 'email')
+  const email = emailR.ok ? emailR.value : ''
   const body: Record<string, unknown> = { ok: true, message: 'If an account exists, a reset link will be sent.' }
-  if (!pool || !email || !isValidEmailFormat(email)) {
+  if (!pool || !email) {
     res.json(body)
     return
   }
@@ -525,12 +549,20 @@ authRouter.get('/me', requireAuth, async (req, res) => {
     try {
       const row = await findUserById(pool, uid)
       if (row) {
+        const merchants = await listMerchantsForUser(pool, uid)
         res.json({
           user: {
             ...req.user,
             fullName: row.full_name,
             notificationChannel: row.notification_channel,
             emailVerified: Boolean(row.email_verified),
+            accountKind: row.password_hash ? 'local' : 'paytoday',
+            merchants: merchants.map((m) => ({
+              payTodayMerchantId: m.payTodayMerchantId,
+              name: m.name,
+              slug: m.slug,
+              isPrimary: m.isPrimary,
+            })),
           },
         })
         return
@@ -565,27 +597,29 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
   const body = req.body ?? {}
   let fullName: string | null | undefined
   if (Object.prototype.hasOwnProperty.call(body, 'fullName')) {
-    if (typeof body.fullName !== 'string') {
-      res.status(400).json({ error: 'fullName must be a string' })
+    const fn = parseOptionalDisplayName(body.fullName, 'fullName')
+    if (!fn.ok) {
+      res.status(400).json({ error: fn.message, field: fn.field, code: 'validation_error' })
       return
     }
-    const t = body.fullName.trim()
-    if (t.length > 200) {
-      res.status(400).json({ error: 'fullName is too long' })
-      return
-    }
-    fullName = t || null
+    fullName = fn.value
   }
   const notificationChannel = typeof body.notificationChannel === 'string' ? body.notificationChannel : undefined
+  if (notificationChannel !== undefined) {
+    const allowed = new Set(['email', 'in_app', 'both'])
+    if (!allowed.has(notificationChannel)) {
+      res.status(400).json({ error: 'notificationChannel must be email, in_app, or both' })
+      return
+    }
+  }
 
   const wantsEmail = Object.prototype.hasOwnProperty.call(body, 'email')
   const wantsPassword =
     Object.prototype.hasOwnProperty.call(body, 'newPassword') ||
     Object.prototype.hasOwnProperty.call(body, 'confirmNewPassword')
 
-  const newEmail = wantsEmail && typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
-  const confirmEmail =
-    wantsEmail && typeof body.confirmEmail === 'string' ? body.confirmEmail.trim().toLowerCase() : ''
+  const newEmailRaw = wantsEmail && typeof body.email === 'string' ? body.email : ''
+  const confirmEmailRaw = wantsEmail && typeof body.confirmEmail === 'string' ? body.confirmEmail : ''
   const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : ''
   const newPassword = typeof body.newPassword === 'string' ? body.newPassword : ''
   const confirmNewPassword = typeof body.confirmNewPassword === 'string' ? body.confirmNewPassword : ''
@@ -608,12 +642,28 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
   }
 
   if (wantsEmail) {
-    if (!newEmail || !confirmEmail || newEmail !== confirmEmail) {
-      res.status(400).json({ error: 'email and confirmEmail must match' })
+    const newEmailParsed = parseEmailString(newEmailRaw, 'email')
+    if (!newEmailParsed.ok) {
+      res.status(400).json({
+        error: newEmailParsed.message,
+        field: newEmailParsed.field,
+        code: 'validation_error',
+      })
       return
     }
-    if (!isValidEmailFormat(newEmail)) {
-      res.status(400).json({ error: 'Invalid email format' })
+    const confirmEmailParsed = parseEmailString(confirmEmailRaw, 'confirmEmail')
+    if (!confirmEmailParsed.ok) {
+      res.status(400).json({
+        error: confirmEmailParsed.message,
+        field: confirmEmailParsed.field,
+        code: 'validation_error',
+      })
+      return
+    }
+    const newEmail = newEmailParsed.value
+    const confirmEmail = confirmEmailParsed.value
+    if (newEmail !== confirmEmail) {
+      res.status(400).json({ error: 'email and confirmEmail must match' })
       return
     }
     if (newEmail === row.email.toLowerCase()) {
@@ -670,5 +720,71 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
   }
 
   await updateUserProfile(pool, uid, { fullName, notificationChannel })
+  res.json({ ok: true })
+})
+
+authRouter.post('/delete-account', requireAuth, async (req, res) => {
+  const pool = await getSqlPool()
+  const uid = sqlUserIdFromJwtUser(req.user)
+  if (!pool) {
+    res.status(503).json({ error: 'Database unavailable' })
+    return
+  }
+  if (!uid) {
+    res.status(400).json({
+      error:
+        'This session is not linked to a database profile. Sign out and use an account that is stored in the database to delete it.',
+    })
+    return
+  }
+
+  const row = await findUserById(pool, uid)
+  if (!row) {
+    res.status(404).json({ error: 'User not found' })
+    return
+  }
+
+  if (row.role !== 'customer') {
+    res.status(403).json({
+      error: 'Staff and operations accounts cannot be removed from the storefront. Use an administrator or your identity provider.',
+    })
+    return
+  }
+
+  const body = req.body ?? {}
+  const confirmEmail = typeof body.confirmEmail === 'string' ? body.confirmEmail.trim().toLowerCase() : ''
+  if (!confirmEmail || confirmEmail !== row.email.toLowerCase()) {
+    res.status(400).json({ error: 'Type your account email exactly to confirm deletion.' })
+    return
+  }
+
+  const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : ''
+  if (row.password_hash) {
+    if (!currentPassword) {
+      res.status(400).json({ error: 'currentPassword is required for store password accounts' })
+      return
+    }
+    if (!(await bcrypt.compare(currentPassword, row.password_hash))) {
+      res.status(401).json({ error: 'Current password is incorrect' })
+      return
+    }
+  }
+
+  try {
+    await revokeAllRefreshTokensForUser(pool, uid)
+    await deleteCustomerUserAccount(pool, uid)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg === 'USER_NOT_FOUND') {
+      res.status(404).json({ error: 'User not found' })
+      return
+    }
+    console.error('[auth/delete-account]', e)
+    res.status(500).json({ error: 'Could not delete account. Try again or contact support.' })
+    return
+  }
+
+  res.clearCookie(env.cookieName)
+  res.clearCookie(env.refreshCookieName)
   res.json({ ok: true })
 })

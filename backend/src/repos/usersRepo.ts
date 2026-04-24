@@ -49,6 +49,50 @@ export async function findUserById(pool: ConnectionPool, userId: string): Promis
   return r.recordset[0] ?? null
 }
 
+export type UserMerchantRow = {
+  payTodayMerchantId: number
+  name: string
+  slug: string | null
+  isPrimary: boolean
+}
+
+const listMerchantsForUserSql = `
+        SELECT
+          b.pay_today_merchant_id AS payTodayMerchantId,
+          b.name,
+          b.slug,
+          ub.is_primary AS isPrimary
+        FROM dbo.userbusinesses ub
+        INNER JOIN dbo.businesses b ON b.business_id = ub.business_id
+        WHERE ub.user_id = @uid
+        ORDER BY CASE WHEN ub.is_primary = 1 THEN 0 ELSE 1 END, b.name
+      `
+
+/** Linked PayToday merchants for a user (membership on dbo.userbusinesses → stable businesses.business_id; migration 030). */
+export async function listMerchantsForUser(pool: ConnectionPool, userId: string): Promise<UserMerchantRow[]> {
+  type Row = {
+    payTodayMerchantId: number
+    name: string
+    slug: string | null
+    isPrimary: number | boolean
+  }
+
+  const mapRows = (rows: Row[]) =>
+    rows.map((row) => ({
+      payTodayMerchantId: Number(row.payTodayMerchantId),
+      name: row.name,
+      slug: row.slug?.trim() ? row.slug.trim() : null,
+      isPrimary: Boolean(row.isPrimary),
+    }))
+
+  try {
+    const r = await pool.request().input('uid', userId).query<Row>(listMerchantsForUserSql)
+    return mapRows(r.recordset)
+  } catch {
+    return []
+  }
+}
+
 export async function createUser(
   pool: ConnectionPool,
   input: { email: string; passwordHash: string; fullName: string | null; role: UserRole },
@@ -136,6 +180,18 @@ export async function syncKeycloakEmailVerified(
 }
 
 const NOTIFY_CHANNELS = new Set(['email', 'in_app', 'both'])
+
+export type UserNotificationChannel = 'email' | 'in_app' | 'both'
+
+export async function getUserNotificationChannel(pool: ConnectionPool, userId: string): Promise<UserNotificationChannel> {
+  const r = await pool
+    .request()
+    .input('id', userId)
+    .query<{ ch: string | null }>(`SELECT notification_channel AS ch FROM dbo.users WHERE id = @id`)
+  const raw = r.recordset[0]?.ch?.trim().toLowerCase()
+  if (raw && NOTIFY_CHANNELS.has(raw)) return raw as UserNotificationChannel
+  return 'email'
+}
 
 export async function updateUserProfile(
   pool: ConnectionPool,
@@ -255,4 +311,31 @@ export async function markEmailVerified(pool: ConnectionPool, userId: string): P
         updated_at = SYSUTCDATETIME()
       WHERE id = @id
     `)
+}
+
+/**
+ * Remove storefront customer profile: clear nullable FKs to this user, then delete the row.
+ * Child tables with ON DELETE CASCADE (addresses, refresh token rows, wallet ledger, etc.) are cleaned by SQL Server.
+ */
+export async function deleteCustomerUserAccount(pool: ConnectionPool, userId: string): Promise<void> {
+  const tx = pool.transaction()
+  await tx.begin()
+  try {
+    const chk = await tx.request().input('id', userId).query<{ c: number }>(`SELECT COUNT_BIG(1) AS c FROM dbo.users WHERE id = @id`)
+    if (Number(chk.recordset[0]?.c ?? 0) === 0) {
+      throw new Error('USER_NOT_FOUND')
+    }
+    await tx.request().input('id', userId).query(`UPDATE dbo.orders SET user_id = NULL WHERE user_id = @id`)
+    await tx.request().input('id', userId).query(`UPDATE dbo.carts SET user_id = NULL WHERE user_id = @id`)
+    await tx.request().input('id', userId).query(`UPDATE dbo.notification_outbox SET user_id = NULL WHERE user_id = @id`)
+    const rc = await tx.request().query<{ oid: number | null }>(`SELECT OBJECT_ID(N'dbo.return_cases', N'U') AS oid`)
+    if (rc.recordset[0]?.oid) {
+      await tx.request().input('id', userId).query(`UPDATE dbo.return_cases SET user_id = NULL WHERE user_id = @id`)
+    }
+    await tx.request().input('id', userId).query(`DELETE FROM dbo.users WHERE id = @id`)
+    await tx.commit()
+  } catch (e) {
+    await tx.rollback()
+    throw e
+  }
 }

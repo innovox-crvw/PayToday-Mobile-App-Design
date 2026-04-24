@@ -23,6 +23,7 @@ import SearchIcon from '@mui/icons-material/Search'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { WalletSubheader } from '../wallet/WalletSubheader'
 import {
   CLASSIFIEDS_MOCK,
@@ -258,7 +259,12 @@ export function ClassifiedsHomePage() {
         aria-label="Post ad"
         component={RouterLink}
         to={`${base}/post`}
-        sx={{ position: 'fixed', bottom: 88, right: 24, zIndex: 10 }}
+        sx={{
+          position: 'fixed',
+          right: 24,
+          zIndex: 10,
+          bottom: `calc(16px + var(--pt-store-bottom-nav-height, 120px))`,
+        }}
       >
         <AddIcon />
       </Fab>
@@ -305,9 +311,9 @@ export function ClassifiedsHomePage() {
         <DialogTitle sx={{ fontWeight: 800 }}>Terms and conditions</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" paragraph>
-            By using PayToday Classifieds you agree to post accurate information, comply with local law, and not use
-            the service for fraud or prohibited goods. PayToday does not guarantee transactions between buyers and
-            sellers — you are responsible for verifying listings and safe meetups or payments.
+            By using {APP_DISPLAY_NAME} Classifieds you agree to post accurate information, comply with local law, and not use the
+            service for fraud or prohibited goods. {APP_DISPLAY_NAME} does not guarantee transactions between buyers and sellers —
+            you are responsible for verifying listings and safe meetups or payments.
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Final terms for your organisation should be provided by your legal team.

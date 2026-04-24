@@ -18,6 +18,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../api/client'
+import { servicesEssentialsHref } from '../../lib/servicesHubTabs'
 
 type Step = 'provider' | 'form' | 'confirm' | 'pin' | 'processing' | 'result'
 
@@ -31,7 +32,7 @@ export function InsuranceFlowPage() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  const backHref = pathPrefix ? `${pathPrefix}/services` : '/services'
+  const backHref = servicesEssentialsHref(pathPrefix)
   const notificationsHref = pathPrefix ? `${pathPrefix}/notifications` : '/notifications'
 
   const [step, setStep] = useState<Step>('provider')
