@@ -82,3 +82,7 @@ Runs `backend/migrations/*.sql` in order and records versions in `schema_migrati
 - Enforce strong `JWT_SECRET` and `PAYTODAY_WEBHOOK_SECRET`.
 - TLS termination at reverse proxy; set cookie `secure: true`.
 - Rate-limit `/api/auth/*` and webhooks at the edge.
+
+## AvoToday production host (`avotoday.today-ww.net`)
+
+PowerShell + SSH + PM2 rollout (Option C: unified Node serving `dist` + `/api`) is documented in **[`deploy/avotoday-rollout.md`](../deploy/avotoday-rollout.md)** with scripts [`deploy/avotoday-production.ps1`](../deploy/avotoday-production.ps1) and [`deploy/rollback-avotoday-production.ps1`](../deploy/rollback-avotoday-production.ps1), an Nginx example under [`deploy/nginx/`](../deploy/nginx/), and a **`shared/.env` template**: [`deploy/env.avotoday.production.template`](../deploy/env.avotoday.production.template).

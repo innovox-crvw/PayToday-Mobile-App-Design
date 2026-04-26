@@ -34,14 +34,20 @@
     "@mui/icons-material": "^6.4.12",
     "@mui/material": "^6.4.12",
     "bcrypt": "^6.0.0",
-    "msnodesqlv8": "^5.1.8",
     "multer": "^2.1.1",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^8.0.5",
+    "mssql": "^11.0.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.0",
-    "recharts": "^2.15.4"
+    "recharts": "^2.15.4",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -59,19 +65,12 @@
     "@types/supertest": "^7.2.0",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.5",
-    "dotenv": "^16.6.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
-    "express": "^5.1.0",
     "globals": "^17.4.0",
-    "helmet": "^8.1.0",
     "html-to-docx": "^1.8.0",
-    "jsonwebtoken": "^9.0.2",
     "marked": "^18.0.2",
-    "mssql": "^11.0.1",
     "supertest": "^7.2.2",
     "tsx": "^4.20.5",
     "typescript": "~6.0.2",
@@ -79,5 +78,8 @@
     "vite": "^8.0.4",
     "vitest": "^4.1.2",
     "wait-on": "^9.0.4"
+  },
+  "optionalDependencies": {
+    "msnodesqlv8": "^5.1.8"
   }
 }
