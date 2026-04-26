@@ -1,6 +1,6 @@
 /**
  * Merges all markdown files under docs/ into a single .docx (Mermaid blocks replaced with a short note).
- * Run: npm run docs:docx
+ * Run from the backend folder: npm run docs:docx
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -9,7 +9,7 @@ import HTMLtoDOCX from 'html-to-docx'
 import { marked } from 'marked'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.join(__dirname, '..')
+const repoRoot = path.join(__dirname, '..', '..')
 const docsDir = path.join(repoRoot, 'docs')
 const outPath = path.join(docsDir, 'PayToday-Store-Documentation.docx')
 

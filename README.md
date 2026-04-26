@@ -1,17 +1,39 @@
 # AvoToday
 
-Customer **store**, **wallet**, **payments** and **services** flows, **classifieds**, **onboarding**, and **merchant admin** — React + TypeScript SPA (Vite) with an Express API and Microsoft SQL Server.
+Customer **store**, **wallet**, **payments** and **services** flows, **classifieds**, **onboarding**, and **merchant admin** — split into two independently-managed npm projects in a single git repo:
 
-- **Full documentation:** [docs/PROJECT_HANDBOOK.md](docs/PROJECT_HANDBOOK.md) (features, architecture, security summary, document index)
-- **Deploy / ops:** [docs/DEPLOY.md](docs/DEPLOY.md)
+- `frontend/` — React 19 + TypeScript SPA built by Vite. Static `dist/` served by Nginx.
+- `backend/`  — Node 20 / Express 5 + TypeScript API on Microsoft SQL Server. Bound to `127.0.0.1:4000` in production; reachable only via Nginx.
+
+Public requests hit Nginx (`avotoday.today-ww.net`):
+
+- `/api/*` → reverse-proxied to the Node backend on `127.0.0.1:4000`.
+- everything else → SPA `index.html` from `/var/www/avotoday-frontend/current/dist/`.
+
+There is **no npm workspace**; each subfolder owns its own `package.json` / lockfile / build / deploy. See [docs/DEPLOY.md](docs/DEPLOY.md) and [deploy/avotoday-cutover.md](deploy/avotoday-cutover.md).
+
+- **Full documentation:** [docs/PROJECT_HANDBOOK.md](docs/PROJECT_HANDBOOK.md)
+- **Deploy / ops:** [docs/DEPLOY.md](docs/DEPLOY.md), [deploy/avotoday-rollout.md](deploy/avotoday-rollout.md)
 - **Keycloak (developers):** `/api/auth/keycloak/*` — [docs/KEYCLOAK_API.md](docs/KEYCLOAK_API.md); behaviour: [docs/KEYCLOAK_AUTH_MODEL.md](docs/KEYCLOAK_AUTH_MODEL.md). On a running API, **`GET /api/auth/keycloak/routes`** returns a JSON index.
 
-## Local demo (products + users)
+## Local demo (two terminals)
 
-1. **SQL Server** — Either `docker compose up -d` (see [.env.example](.env.example) for the matching `SQL_CONNECTION_STRING`) or use an existing instance.
-2. **`.env`** — Copy from `.env.example`; set `SQL_CONNECTION_STRING` and `JWT_SECRET`.
-3. **Database** — `npm run db:demo-setup` loads [backend/scripts/paytoday-full-setup.sql](backend/scripts/paytoday-full-setup.sql) (dev reset) then migrations.
-4. **Run** — `npm run dev`, then open the Vite URL printed in the terminal. Seeded local login: **`demo@paytoday.local`** / **`PayToday123!`** (see the script header for details).
+1. **SQL Server** — `cd backend && docker compose up -d` (the `docker-compose.yml` lives next to the backend) or use any existing MSSQL instance.
+2. **Backend** (`backend/.env` from [`backend/.env.example`](backend/.env.example), set `SQL_CONNECTION_STRING` + `JWT_SECRET`):
+   ```bash
+   cd backend
+   npm install
+   npm run db:demo-setup     # loads scripts/paytoday-full-setup.sql then migrations
+   npm run dev               # binds 0.0.0.0:4000 in dev
+   ```
+3. **Frontend** (`frontend/.env` from [`frontend/.env.example`](frontend/.env.example) — values usually fine as-is for local):
+   ```bash
+   cd frontend
+   npm install
+   npm run dev               # Vite, default :5173, proxies /api/* to 127.0.0.1:4000
+   ```
+
+Open the Vite URL printed in terminal #2. Seeded local login: **`demo@paytoday.local`** / **`PayToday123!`** (see [`backend/scripts/paytoday-full-setup.sql`](backend/scripts/paytoday-full-setup.sql) header).
 
 ## Docs folder
 

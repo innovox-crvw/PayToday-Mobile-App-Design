@@ -1,6 +1,6 @@
-# Local SQL Server for PayToday Store demo (see docs/DEPLOY.md).
-# Start: docker compose up -d
-# Connection string (sa password must match .env): see .env.example
+# Local SQL Server for PayToday Store backend (see docs/DEPLOY.md).
+# Start: cd backend && docker compose up -d
+# Connection string (sa password must match backend/.env): see backend/.env.example
 
 services:
   sqlserver:

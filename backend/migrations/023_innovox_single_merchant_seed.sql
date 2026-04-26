@@ -95,26 +95,31 @@ BEGIN
     );
   END;
 
+  /* Branches that reference legacy business_id are wrapped in EXEC for deferred compilation:
+     SQL Server compiles the whole batch up front; after migrations 022/030 those columns no
+     longer exist on dbo.businesses / dbo.user_businesses, so static SQL fails to bind. The
+     EXEC string is parsed only when the surrounding IF actually selects that branch. */
   IF OBJECT_ID(N'dbo.userbusinesses', N'U') IS NOT NULL
     AND COL_LENGTH(N'dbo.businesses', N'business_id') IS NOT NULL
   BEGIN
-    INSERT INTO dbo.userbusinesses (user_id, business_id, role, is_primary, joined_at, created_at)
-    SELECT
-      u.id,
-      b.business_id,
-      CASE
-        WHEN u.role IN (N'admin', N'ops', N'fulfillment') THEN N'owner'
-        WHEN LOWER(LTRIM(RTRIM(u.email))) = LOWER(LTRIM(RTRIM(N'brendus.devilliers@gmail.com'))) THEN N'owner'
-        ELSE N'member'
-      END,
-      0,
-      SYSUTCDATETIME(),
-      SYSUTCDATETIME()
-    FROM dbo.users u
-    CROSS JOIN (SELECT business_id FROM dbo.businesses WHERE pay_today_merchant_id = @inv) AS b
-    WHERE NOT EXISTS (
-      SELECT 1 FROM dbo.userbusinesses ub WHERE ub.user_id = u.id AND ub.business_id = b.business_id
-    );
+    EXEC sp_executesql N'
+INSERT INTO dbo.userbusinesses (user_id, business_id, role, is_primary, joined_at, created_at)
+SELECT
+  u.id,
+  b.business_id,
+  CASE
+    WHEN u.role IN (N''admin'', N''ops'', N''fulfillment'') THEN N''owner''
+    WHEN LOWER(LTRIM(RTRIM(u.email))) = LOWER(LTRIM(RTRIM(N''brendus.devilliers@gmail.com''))) THEN N''owner''
+    ELSE N''member''
+  END,
+  0,
+  SYSUTCDATETIME(),
+  SYSUTCDATETIME()
+FROM dbo.users u
+CROSS JOIN (SELECT business_id FROM dbo.businesses WHERE pay_today_merchant_id = @inv) AS b
+WHERE NOT EXISTS (
+  SELECT 1 FROM dbo.userbusinesses ub WHERE ub.user_id = u.id AND ub.business_id = b.business_id
+);', N'@inv INT', @inv = @inv;
   END
   ELSE IF OBJECT_ID(N'dbo.user_businesses', N'U') IS NOT NULL
   BEGIN
@@ -141,25 +146,26 @@ BEGIN
     ELSE IF COL_LENGTH(N'dbo.user_businesses', N'business_id') IS NOT NULL
       AND COL_LENGTH(N'dbo.businesses', N'business_id') IS NOT NULL
     BEGIN
-      INSERT INTO dbo.user_businesses (user_id, business_id, role, is_primary, joined_at, created_at)
-      SELECT
-        u.id,
-        b.business_id,
-        CASE
-          WHEN u.role IN (N'admin', N'ops', N'fulfillment') THEN N'owner'
-          WHEN LOWER(LTRIM(RTRIM(u.email))) = LOWER(LTRIM(RTRIM(N'brendus.devilliers@gmail.com'))) THEN N'owner'
-          ELSE N'member'
-        END,
-        0,
-        SYSUTCDATETIME(),
-        SYSUTCDATETIME()
-      FROM dbo.users u
-      CROSS JOIN (SELECT business_id FROM dbo.businesses WHERE pay_today_merchant_id = @inv) AS b
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM dbo.user_businesses ub
-        WHERE ub.user_id = u.id AND ub.business_id = b.business_id
-      );
+      EXEC sp_executesql N'
+INSERT INTO dbo.user_businesses (user_id, business_id, role, is_primary, joined_at, created_at)
+SELECT
+  u.id,
+  b.business_id,
+  CASE
+    WHEN u.role IN (N''admin'', N''ops'', N''fulfillment'') THEN N''owner''
+    WHEN LOWER(LTRIM(RTRIM(u.email))) = LOWER(LTRIM(RTRIM(N''brendus.devilliers@gmail.com''))) THEN N''owner''
+    ELSE N''member''
+  END,
+  0,
+  SYSUTCDATETIME(),
+  SYSUTCDATETIME()
+FROM dbo.users u
+CROSS JOIN (SELECT business_id FROM dbo.businesses WHERE pay_today_merchant_id = @inv) AS b
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM dbo.user_businesses ub
+  WHERE ub.user_id = u.id AND ub.business_id = b.business_id
+);', N'@inv INT', @inv = @inv;
     END;
   END;
 END;

@@ -3,22 +3,13 @@ import cors from 'cors'
 import helmet from 'helmet'
 import cookieParser from 'cookie-parser'
 import fs from 'node:fs'
-import path from 'node:path'
 import { env } from './config/env.js'
 import { apiRouter } from './routes/api/index.js'
 import { paytodayWebhookRouter } from './routes/webhooks/paytoday.js'
-import { gatewaySeparateApiLayer, spaHistoryFallback, spaStaticAssets } from './middleware/frontBackendSeparation.js'
-
-function resolveSpaDist(raw: string | undefined): string | undefined {
-  const s = raw?.trim()
-  if (!s) return undefined
-  return path.isAbsolute(s) ? s : path.resolve(process.cwd(), s)
-}
+import { gatewaySeparateApiLayer } from './middleware/frontBackendSeparation.js'
 
 export function createApp(): express.Express {
   const app = express()
-
-  const spaDist = resolveSpaDist(env.spaStaticRoot)
 
   if (env.trustProxy) {
     app.set('trust proxy', 1)
@@ -33,7 +24,11 @@ export function createApp(): express.Express {
   )
   app.use(cookieParser())
 
-  app.use(gatewaySeparateApiLayer({ spaDistAbsolute: spaDist }))
+  /* Defense-in-depth: even though the API binds to loopback and Nginx only proxies /api/*,
+   * any non-/api request that reaches Express returns a JSON 404 instead of leaking handler
+   * names or HTML error pages. The SPA is served by Nginx from frontend/dist; this process
+   * never serves static HTML/JS/CSS. */
+  app.use(gatewaySeparateApiLayer())
 
   app.use(
     '/api/webhooks/paytoday',
@@ -61,11 +56,6 @@ export function createApp(): express.Express {
   )
 
   app.use('/api', apiRouter)
-
-  if (spaDist && fs.existsSync(path.join(spaDist, 'index.html'))) {
-    app.use(spaStaticAssets(spaDist))
-    app.use(spaHistoryFallback(spaDist))
-  }
 
   return app
 }

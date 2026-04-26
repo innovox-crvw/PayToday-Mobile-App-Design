@@ -7,7 +7,7 @@ import {
   parseOptionalCompareAtPriceCents,
   parseProductSlug,
   parseSku,
-} from '../backend/src/lib/inputValidators.js'
+} from '../src/lib/inputValidators.js'
 
 describe('inputValidators', () => {
   it('parseEmailString normalizes and validates', () => {

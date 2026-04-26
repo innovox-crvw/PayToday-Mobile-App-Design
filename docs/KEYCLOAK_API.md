@@ -17,7 +17,7 @@ All paths are prefixed with your API origin (e.g. `http://localhost:4000`). Muta
 | `GET` | `/api/auth/keycloak/routes` | No | Machine-readable list of Keycloak-related routes (this doc's index). |
 | `GET` | `/api/auth/keycloak/status` | No | Which `/api/auth/login` methods the SPA may use right now. |
 
-For the **auth model** and PayToday alignment, see [KEYCLOAK_AUTH_MODEL.md](./KEYCLOAK_AUTH_MODEL.md). For **env vars**, see [`.env.example`](../.env.example).
+For the **auth model** and PayToday alignment, see [KEYCLOAK_AUTH_MODEL.md](./KEYCLOAK_AUTH_MODEL.md). For **env vars**, see [`backend/.env.example`](../backend/.env.example).
 
 ---
 

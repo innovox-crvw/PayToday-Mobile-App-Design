@@ -4,26 +4,25 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = __dirname
-const frontendRoot = path.join(repoRoot, 'frontend')
 
 /**
  * Dev: browser talks only to Vite (e.g. :5173); `/api/*` is proxied to the Express API (:4000).
- * Production option: build the SPA (`npm run build`), set `SPA_STATIC_ROOT=dist`, run `npm run start:api`
- * so the API process serves `dist` and keeps JSON under `/api` (see `frontBackendSeparation` middleware).
+ * Production: `npm run build` produces `dist/`. Nginx serves it directly and proxies `/api/*` to the
+ * Node backend on `127.0.0.1:4000` (see `deploy/nginx/avotoday-split.conf`). The backend never serves
+ * the SPA; `frontBackendSeparation` middleware returns JSON 404 for non-/api requests as defense in depth.
  */
 const apiProxy = {
   '/api': {
-    /** Align with `wait-on http://127.0.0.1:4000` in npm `dev` — avoids some localhost/IPv6 mismatch edge cases on Windows. */
+    /** Align with `wait-on http://127.0.0.1:4000` — avoids some localhost/IPv6 mismatch edge cases on Windows. */
     target: 'http://127.0.0.1:4000',
     changeOrigin: true,
   },
 } as const
 
 export default defineConfig({
-  root: frontendRoot,
-  /** Load `.env` / `.env.local` from repo root (same folder as this file) so `VITE_*` lives next to the API `.env`. */
-  envDir: repoRoot,
+  root: __dirname,
+  /** Load `.env` / `.env.local` from this folder so `VITE_*` lives next to the frontend package.json. */
+  envDir: __dirname,
   plugins: [react()],
   server: {
     /** Prefer 5173; if busy, Vite uses the next free port — use the exact URL Vite prints in the terminal. */
@@ -35,7 +34,7 @@ export default defineConfig({
     proxy: { ...apiProxy },
   },
   build: {
-    outDir: path.join(repoRoot, 'dist'),
+    outDir: 'dist',
     emptyOutDir: true,
   },
 })

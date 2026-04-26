@@ -5,8 +5,8 @@ import { startNotificationWorker } from './services/notificationWorker.js'
 
 const app = createApp()
 
-app.listen(env.port, async () => {
-  console.log(`PayToday Store API listening on http://localhost:${env.port}`)
+app.listen(env.port, env.bindHost, async () => {
+  console.log(`PayToday Store API listening on http://${env.bindHost}:${env.port}`)
   if (!env.sqlConnectionString?.trim()) {
     console.log('Database: off (in-memory catalogue only). Set SQL_CONNECTION_STRING in .env for MS SQL.')
     return

@@ -9,14 +9,30 @@ lerna-debug.log*
 
 node_modules
 .env
+.env.local
+.env.production
+.env.*.local
 # Local integration secrets for npm run db:seed-integration
 backend/scripts/integration-settings.seed.json
+# Build output (frontend Vite + backend tsc) — both folders own their own dist/
 dist
 dist-ssr
+backend/dist
+frontend/dist
+# Frontend build artifacts that aren't dist
+frontend/.vite
 *.local
 
-# Admin-uploaded product images (local disk; see PRODUCT_IMAGE_UPLOAD_DIR in .env)
+# Admin-uploaded product images (local disk; see PRODUCT_IMAGE_UPLOAD_DIR in backend/.env)
+backend/data/uploads/
 data/uploads/
+
+# Local deploy tarballs / generated PM2 ecosystem
+build.tgz
+ecosystem.config.cjs
+
+# Local PowerShell scratch / helper scripts (prefix `_`)
+deploy/_*.ps1
 
 # Editor directories and files
 .vscode/*

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCsvDocument, parseCsvRecords, stripHashCommentLines } from '../backend/src/lib/simpleCsv.js'
+import { parseCsvDocument, parseCsvRecords, stripHashCommentLines } from '../src/lib/simpleCsv.js'
 
 describe('parseCsvRecords', () => {
   it('parses quoted fields with commas', () => {

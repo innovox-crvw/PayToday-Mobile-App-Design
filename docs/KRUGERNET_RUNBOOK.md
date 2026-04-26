@@ -3,7 +3,7 @@
 ## Pre-deploy
 
 1. Apply migrations in order: `npm run db:migrate` against production SQL (see `backend/migrations/`).
-2. Set all variables from `docs/DEPLOY.md` and `.env.example`; confirm `JWT_SECRET` and `PAYTODAY_WEBHOOK_SECRET` are strong and unique.
+2. Set all variables from `docs/DEPLOY.md` and `backend/.env.example`; confirm `JWT_SECRET` and `PAYTODAY_WEBHOOK_SECRET` are strong and unique.
 3. Set `PUBLIC_STORE_URL` and `PUBLIC_API_URL` to customer-facing SPA and API origins (no trailing slashes).
 4. Register webhook URL `POST https://<api>/api/webhooks/paytoday` with PayToday; confirm HMAC header name matches production (`X-PayToday-Signature`).
 5. Configure PayToday Forms **return URL** to hit `GET https://<api>/api/payments/return` with the agreed query parameters (`orderId` / `reference`, success/failure flags).

@@ -1,6 +1,6 @@
 # PayToday end-to-end smoke checklist
 
-Use this after configuring `.env` (see [`.env.example`](../.env.example) and the onboarding table at the top of that file). Adapt hosts to your staging API and storefront.
+Use this after configuring `backend/.env` (see [`backend/.env.example`](../backend/.env.example) and the onboarding table at the top of that file). Adapt hosts to your staging API and storefront.
 
 ## Preconditions
 

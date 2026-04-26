@@ -1,9 +1,9 @@
 import jwt from 'jsonwebtoken'
 import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createApp } from '../backend/src/app.js'
-import { env } from '../backend/src/config/env.js'
-import { clearWebhookIdempotencyForTests } from '../backend/src/routes/webhooks/paytoday.js'
+import { createApp } from '../src/app.js'
+import { env } from '../src/config/env.js'
+import { clearWebhookIdempotencyForTests } from '../src/routes/webhooks/paytoday.js'
 
 describe('API validation (400 + field)', () => {
   const app = createApp()

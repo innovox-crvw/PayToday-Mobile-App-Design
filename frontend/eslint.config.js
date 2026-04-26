@@ -6,9 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'backend/dist']),
+  globalIgnores(['dist', 'node_modules']),
   {
-    files: ['frontend/src/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx}'],
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
@@ -18,17 +18,6 @@ export default defineConfig([
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
-    },
-  },
-  {
-    files: ['backend/src/**/*.ts'],
-    extends: [js.configs.recommended, tseslint.configs.recommended],
-    languageOptions: {
-      ecmaVersion: 2022,
-      globals: globals.node,
-    },
-    rules: {
-      'no-console': 'off',
     },
   },
 ])

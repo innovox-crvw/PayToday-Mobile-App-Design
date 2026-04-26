@@ -74,6 +74,17 @@ function sqlConnectionStringFromEnv(): string | undefined {
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? 4000),
+  /**
+   * Network interface the API listens on. Default is loopback in production (`127.0.0.1`) so the
+   * Node process is not reachable from outside the VM — Nginx is the only public entrypoint and
+   * proxies `/api/*` to it. Dev defaults to `0.0.0.0` so phones / other LAN devices can hit the API
+   * directly. Override with `BIND_HOST` when the deployment topology differs.
+   */
+  bindHost: (() => {
+    const raw = process.env.BIND_HOST?.trim()
+    if (raw) return raw
+    return process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0'
+  })(),
   /** MS SQL connection string; omit to use in-memory catalogue (dev only). */
   sqlConnectionString: applySqlTcpOverride(sqlConnectionStringFromEnv()),
   /**
@@ -194,12 +205,6 @@ export const env = {
     if (!Number.isFinite(n) || n < 1) return 90
     return Math.min(Math.floor(n), 3650)
   })(),
-  /**
-   * Optional path to the Vite production build (`dist` with `index.html`).
-   * Relative paths resolve from `process.cwd()` (run `npm run build` from repo root, then e.g. `SPA_STATIC_ROOT=dist`).
-   * When set, this API process also serves the SPA and static assets; `/api/*` stays on the backend.
-   */
-  spaStaticRoot: process.env.SPA_STATIC_ROOT?.trim() || undefined,
   /** Failed local password attempts before temporary lockout (login). */
   authLockoutMaxAttempts: Math.min(100, Math.max(3, Number(process.env.AUTH_LOCKOUT_MAX_ATTEMPTS ?? 5) || 5)),
   /** Minutes an account stays locked after too many failed logins. */

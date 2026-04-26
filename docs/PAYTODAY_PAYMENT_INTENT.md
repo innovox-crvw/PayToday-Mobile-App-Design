@@ -53,7 +53,7 @@ Expected success response: HTTP **201** (or **200**) with `success: true` and `p
 | `PUBLIC_STORE_URL` | Storefront origin for post-payment redirects |
 | `PAYTODAY_WEBHOOK_SECRET` | Verifies `POST /api/webhooks/paytoday` (authoritative when configured) |
 
-Copy from [`.env.example`](../.env.example). Do not commit real `.env`.
+Copy from [`backend/.env.example`](../backend/.env.example). Do not commit real `.env`.
 
 ## Database migration
 

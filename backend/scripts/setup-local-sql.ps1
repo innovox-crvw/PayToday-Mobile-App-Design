@@ -4,5 +4,5 @@
 
 $ErrorActionPreference = 'Stop'
 Write-Host 'setup-local-sql.ps1: bundled Docker SQL was removed from this repo.' -ForegroundColor Yellow
-Write-Host '  Configure MS SQL in .env (see .env.example), then run: npm run db:setup' -ForegroundColor Cyan
+Write-Host '  Configure MS SQL in backend/.env (see backend/.env.example), then run: npm run db:setup' -ForegroundColor Cyan
 exit 1

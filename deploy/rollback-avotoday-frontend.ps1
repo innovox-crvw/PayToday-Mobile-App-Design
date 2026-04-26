@@ -1,10 +1,11 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-  Roll back Option C deploy: symlink current -> releases/<ReleaseTimestamp>, restart PM2, health check.
+  Roll back the AvoToday frontend: symlink current -> releases/<ReleaseTimestamp>.
+  No PM2, no Nginx reload — Nginx already reads $APP_BASE/current/dist on every request.
 
 .PARAMETER ReleaseTimestamp
-  Directory name under releases/, e.g. 20260425103000 (from ls -lt on the server).
+  Directory name under releases/, e.g. 20260425103000 (from `ls -lt /var/www/avotoday-frontend/releases/`).
 #>
 param(
   [Parameter(Mandatory = $true)]
@@ -16,9 +17,9 @@ param(
   [string] $SshUser = "deployer",
   [int] $SshPort = 22,
   [string] $SshKeyPath = $(Join-Path $env:USERPROFILE ".ssh\id_ed25519"),
-  [string] $RemoteBase = "/var/www/avotoday-production",
-  [string] $AppName = "avotoday-production",
-  [int] $AppPort = 4000
+  [string] $RemoteBase = "/var/www/avotoday-frontend",
+  [string] $PublicUrl = "https://avotoday.today-ww.net/",
+  [switch] $SkipPublicHealthCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,33 +28,40 @@ if (-not (Test-Path -LiteralPath $SshKeyPath)) {
 }
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$publicHealthFlag = if ($SkipPublicHealthCheck) { "0" } else { "1" }
+
 $remoteScript = @'
 #!/bin/bash
 set -euo pipefail
 APP_BASE="__APP_BASE__"
-APP_NAME="__APP_NAME__"
-APP_PORT=__APP_PORT__
 TS="__TS__"
+PUBLIC_URL="__PUBLIC_URL__"
+PUBLIC_CHECK="__PUBLIC_CHECK__"
+
 REL="$APP_BASE/releases/$TS"
-if [ ! -d "$REL" ]; then
-  echo "[REMOTE] ERROR: release not found: $REL" >&2
+if [ ! -d "$REL/dist" ]; then
+  echo "[REMOTE] ERROR: release/dist not found: $REL/dist" >&2
   exit 1
 fi
 ln -sfn "$REL" "$APP_BASE/current"
-cd "$APP_BASE/current"
-pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
-pm2 start ecosystem.config.cjs
-pm2 save
-sleep 3
-curl -fsS "http://127.0.0.1:${APP_PORT}/api/health" >/dev/null
-echo "[REMOTE] Rollback OK -> $TS ($(date -Is))"
+
+if [ "$PUBLIC_CHECK" = "1" ]; then
+  sleep 1
+  if curl -fsSL --max-time 10 "$PUBLIC_URL" >/dev/null; then
+    echo "[REMOTE] Frontend rollback OK -> $TS ($(date -Is)) [public OK]"
+  else
+    echo "[REMOTE] Frontend rollback OK -> $TS ($(date -Is)) [public WARN]"
+  fi
+else
+  echo "[REMOTE] Frontend rollback OK -> $TS ($(date -Is))"
+fi
 '@
 
 $remoteScript = $remoteScript `
   -replace "__APP_BASE__", $RemoteBase `
-  -replace "__APP_NAME__", $AppName `
-  -replace "__APP_PORT__", "$AppPort" `
-  -replace "__TS__", $ReleaseTimestamp
+  -replace "__TS__", $ReleaseTimestamp `
+  -replace "__PUBLIC_URL__", $PublicUrl `
+  -replace "__PUBLIC_CHECK__", $publicHealthFlag
 
 $tempScript = [System.IO.Path]::GetTempFileName() + ".sh"
 [System.IO.File]::WriteAllText($tempScript, ($remoteScript -replace "`r`n", "`n"), $utf8NoBom)
@@ -71,14 +79,14 @@ $scpOpts = @(
   "-o", "ServerAliveInterval=15"
 )
 $sshTarget = "${SshUser}@${ServerHost}"
-$remoteSh = "/tmp/rollback-$AppName.sh"
+$remoteSh = "/tmp/rollback-avotoday-frontend.sh"
 
 & scp @scpOpts $tempScript "${sshTarget}:${remoteSh}"
 if ($LASTEXITCODE -ne 0) { Remove-Item $tempScript -Force; throw "scp rollback script failed" }
 Remove-Item $tempScript -Force
 
-Write-Host "[LOCAL] ssh rollback to $ReleaseTimestamp" -ForegroundColor Cyan
+Write-Host "[LOCAL] ssh frontend rollback to $ReleaseTimestamp" -ForegroundColor Cyan
 & ssh @sshOpts $sshTarget "chmod +x $remoteSh && $remoteSh"
-if ($LASTEXITCODE -ne 0) { throw "rollback failed with exit $LASTEXITCODE" }
+if ($LASTEXITCODE -ne 0) { throw "frontend rollback failed with exit $LASTEXITCODE" }
 
-Write-Host "Rollback completed." -ForegroundColor Green
+Write-Host "Frontend rollback completed." -ForegroundColor Green

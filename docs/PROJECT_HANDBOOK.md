@@ -335,11 +335,11 @@ Examples: `adminProductsRouter` uses `requireRole('admin', 'ops')`; `fulfillment
 
 - **Build, env vars, production serving:** [DEPLOY.md](DEPLOY.md).
 - **Host-specific ops:** [KRUGERNET_RUNBOOK.md](KRUGERNET_RUNBOOK.md) (if applicable).
-- **Reset / demo database:** [RESET_CATALOG_AND_USERS.md](RESET_CATALOG_AND_USERS.md), Docker notes in [`.env.example`](../.env.example).
+- **Reset / demo database:** [RESET_CATALOG_AND_USERS.md](RESET_CATALOG_AND_USERS.md), Docker notes in [`backend/.env.example`](../backend/.env.example).
 
 ### Environment variables (categories)
 
-| Category | Examples (see `.env.example` for full list) |
+| Category | Examples (see `backend/.env.example` for full list) |
 |----------|-----------------------------------------------|
 | Process | `PORT`, `NODE_ENV`, `CORS_ORIGINS` |
 | Database | `SQL_CONNECTION_STRING`, optional SQL auth fragments |

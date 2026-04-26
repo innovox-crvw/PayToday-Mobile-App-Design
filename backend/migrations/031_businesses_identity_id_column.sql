@@ -121,56 +121,65 @@ CREATE UNIQUE NONCLUSTERED INDEX UQ_businesses_m031_new_registration_number
   ON dbo.businesses_m031_new (registration_number)
   WHERE registration_number IS NOT NULL;
 
+/* Copy data from the OLD dbo.businesses into businesses_m031_new. The static SELECT
+   references o.id / o.business_id, which only exist when this migration is meant to run
+   (legacy schema). On post-022 / pre-028 schemas the early-RETURN guards above fire, but
+   SQL Server still compiles the whole batch up front, so we wrap the column-bound SQL in
+   EXEC sp_executesql to defer parsing until runtime. */
 IF @keepIntId = 1
 BEGIN
-  SET IDENTITY_INSERT dbo.businesses_m031_new ON;
+  EXEC sp_executesql N'
+SET IDENTITY_INSERT dbo.businesses_m031_new ON;
 
-  INSERT INTO dbo.businesses_m031_new (
-    id, pay_today_merchant_id, business_id, request_business_activation, kyc_completed, active, rejected, bulk_upload,
-    legacy_merchant_user_id, business_type, name, registered_business_name, address_line1, address_line2,
-    postal_address, zipcode, town, country, registration_number, tax_registration_number, business_owner,
-    owner_id_number, contact_number, business_email_address, description, invoice_contact, invoice_email,
-    bank_id, account_holder, bank_account_name, account_number, is_fuel_supported, cash_out, voucher_3w,
-    dynamic_field_text, email_notifications, notification_details, tandcs, bipa, namra, id_doc, bank_confirmation,
-    image_filename, website, category, subcategory, slug, created_at, updated_at
-  )
-  SELECT
-    o.id, o.pay_today_merchant_id, o.business_id, o.request_business_activation, o.kyc_completed, o.active, o.rejected, o.bulk_upload,
-    o.legacy_merchant_user_id, o.business_type, o.name, o.registered_business_name, o.address_line1, o.address_line2,
-    o.postal_address, o.zipcode, o.town, o.country, o.registration_number, o.tax_registration_number, o.business_owner,
-    o.owner_id_number, o.contact_number, o.business_email_address, o.description, o.invoice_contact, o.invoice_email,
-    o.bank_id, o.account_holder, o.bank_account_name, o.account_number, o.is_fuel_supported, o.cash_out, o.voucher_3w,
-    o.dynamic_field_text, o.email_notifications, o.notification_details, o.tandcs, o.bipa, o.namra, o.id_doc, o.bank_confirmation,
-    o.image_filename, o.website, o.category, o.subcategory, o.slug, o.created_at, o.updated_at
-  FROM dbo.businesses AS o
-  ORDER BY o.id;
+INSERT INTO dbo.businesses_m031_new (
+  id, pay_today_merchant_id, business_id, request_business_activation, kyc_completed, active, rejected, bulk_upload,
+  legacy_merchant_user_id, business_type, name, registered_business_name, address_line1, address_line2,
+  postal_address, zipcode, town, country, registration_number, tax_registration_number, business_owner,
+  owner_id_number, contact_number, business_email_address, description, invoice_contact, invoice_email,
+  bank_id, account_holder, bank_account_name, account_number, is_fuel_supported, cash_out, voucher_3w,
+  dynamic_field_text, email_notifications, notification_details, tandcs, bipa, namra, id_doc, bank_confirmation,
+  image_filename, website, category, subcategory, slug, created_at, updated_at
+)
+SELECT
+  o.id, o.pay_today_merchant_id, o.business_id, o.request_business_activation, o.kyc_completed, o.active, o.rejected, o.bulk_upload,
+  o.legacy_merchant_user_id, o.business_type, o.name, o.registered_business_name, o.address_line1, o.address_line2,
+  o.postal_address, o.zipcode, o.town, o.country, o.registration_number, o.tax_registration_number, o.business_owner,
+  o.owner_id_number, o.contact_number, o.business_email_address, o.description, o.invoice_contact, o.invoice_email,
+  o.bank_id, o.account_holder, o.bank_account_name, o.account_number, o.is_fuel_supported, o.cash_out, o.voucher_3w,
+  o.dynamic_field_text, o.email_notifications, o.notification_details, o.tandcs, o.bipa, o.namra, o.id_doc, o.bank_confirmation,
+  o.image_filename, o.website, o.category, o.subcategory, o.slug, o.created_at, o.updated_at
+FROM dbo.businesses AS o
+ORDER BY o.id;
 
-  SET IDENTITY_INSERT dbo.businesses_m031_new OFF;
+SET IDENTITY_INSERT dbo.businesses_m031_new OFF;
+';
 
   DECLARE @maxId INT = (SELECT ISNULL(MAX(id), 0) FROM dbo.businesses_m031_new);
   DBCC CHECKIDENT (N'dbo.businesses_m031_new', RESEED, @maxId);
 END;
 ELSE
 BEGIN
-  INSERT INTO dbo.businesses_m031_new (
-    pay_today_merchant_id, business_id, request_business_activation, kyc_completed, active, rejected, bulk_upload,
-    legacy_merchant_user_id, business_type, name, registered_business_name, address_line1, address_line2,
-    postal_address, zipcode, town, country, registration_number, tax_registration_number, business_owner,
-    owner_id_number, contact_number, business_email_address, description, invoice_contact, invoice_email,
-    bank_id, account_holder, bank_account_name, account_number, is_fuel_supported, cash_out, voucher_3w,
-    dynamic_field_text, email_notifications, notification_details, tandcs, bipa, namra, id_doc, bank_confirmation,
-    image_filename, website, category, subcategory, slug, created_at, updated_at
-  )
-  SELECT
-    o.pay_today_merchant_id, o.business_id, o.request_business_activation, o.kyc_completed, o.active, o.rejected, o.bulk_upload,
-    o.legacy_merchant_user_id, o.business_type, o.name, o.registered_business_name, o.address_line1, o.address_line2,
-    o.postal_address, o.zipcode, o.town, o.country, o.registration_number, o.tax_registration_number, o.business_owner,
-    o.owner_id_number, o.contact_number, o.business_email_address, o.description, o.invoice_contact, o.invoice_email,
-    o.bank_id, o.account_holder, o.bank_account_name, o.account_number, o.is_fuel_supported, o.cash_out, o.voucher_3w,
-    o.dynamic_field_text, o.email_notifications, o.notification_details, o.tandcs, o.bipa, o.namra, o.id_doc, o.bank_confirmation,
-    o.image_filename, o.website, o.category, o.subcategory, o.slug, o.created_at, o.updated_at
-  FROM dbo.businesses AS o
-  ORDER BY o.pay_today_merchant_id;
+  EXEC sp_executesql N'
+INSERT INTO dbo.businesses_m031_new (
+  pay_today_merchant_id, business_id, request_business_activation, kyc_completed, active, rejected, bulk_upload,
+  legacy_merchant_user_id, business_type, name, registered_business_name, address_line1, address_line2,
+  postal_address, zipcode, town, country, registration_number, tax_registration_number, business_owner,
+  owner_id_number, contact_number, business_email_address, description, invoice_contact, invoice_email,
+  bank_id, account_holder, bank_account_name, account_number, is_fuel_supported, cash_out, voucher_3w,
+  dynamic_field_text, email_notifications, notification_details, tandcs, bipa, namra, id_doc, bank_confirmation,
+  image_filename, website, category, subcategory, slug, created_at, updated_at
+)
+SELECT
+  o.pay_today_merchant_id, o.business_id, o.request_business_activation, o.kyc_completed, o.active, o.rejected, o.bulk_upload,
+  o.legacy_merchant_user_id, o.business_type, o.name, o.registered_business_name, o.address_line1, o.address_line2,
+  o.postal_address, o.zipcode, o.town, o.country, o.registration_number, o.tax_registration_number, o.business_owner,
+  o.owner_id_number, o.contact_number, o.business_email_address, o.description, o.invoice_contact, o.invoice_email,
+  o.bank_id, o.account_holder, o.bank_account_name, o.account_number, o.is_fuel_supported, o.cash_out, o.voucher_3w,
+  o.dynamic_field_text, o.email_notifications, o.notification_details, o.tandcs, o.bipa, o.namra, o.id_doc, o.bank_confirmation,
+  o.image_filename, o.website, o.category, o.subcategory, o.slug, o.created_at, o.updated_at
+FROM dbo.businesses AS o
+ORDER BY o.pay_today_merchant_id;
+';
 END;
 
 DROP TABLE dbo.businesses;
@@ -201,9 +210,13 @@ IF OBJECT_ID(N'dbo.user_businesses', N'U') IS NOT NULL
   AND COL_LENGTH(N'dbo.user_businesses', N'business_id') IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_user_businesses_business' AND parent_object_id = OBJECT_ID(N'dbo.user_businesses'))
 BEGIN
-  ALTER TABLE dbo.user_businesses
-    ADD CONSTRAINT FK_user_businesses_business FOREIGN KEY (business_id)
-    REFERENCES dbo.businesses (business_id) ON DELETE CASCADE;
+  /* Wrapped in EXEC: dbo.user_businesses.business_id is dropped on the post-022 path,
+     so static ALTER TABLE would fail to bind at compile time. */
+  EXEC sp_executesql N'
+ALTER TABLE dbo.user_businesses
+  ADD CONSTRAINT FK_user_businesses_business FOREIGN KEY (business_id)
+  REFERENCES dbo.businesses (business_id) ON DELETE CASCADE;
+';
 END;
 
 IF OBJECT_ID(N'dbo.userbusinesses', N'U') IS NOT NULL
