@@ -7,13 +7,23 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Paper,
+  Rating,
   Stack,
   TextField,
   Typography,
 } from '@mui/material'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
+import { formatHomeDeliveryWindow } from '../../lib/formatHomeDeliveryWindow'
 import { formatMoney } from '../../lib/money'
+import {
+  fetchOrderReviewFromApi,
+  getOrderReview,
+  getReadyForReviewOrderIds,
+  markOrderReadyForReview,
+  type StoredOrderReview,
+} from '../../lib/orderListCategory'
 import { formatOrderStatusLabel } from '../../lib/orderStatusDisplay'
 import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
 
@@ -31,6 +41,9 @@ type Detail = {
     delivery_method: string
     deposit_location_id: string | null
     deposit_location_name: string | null
+    containsAlcohol?: boolean
+    deliveryScheduledFor?: string | null
+    homeDeliveryWindow?: { start: string; end: string; label: string | null } | null
   }
   lines: { productName: string; sku: string; quantity: number; unitPriceCents: number }[]
   fulfillment: { stage: string; carrier_name: string | null; tracking_reference: string | null } | null
@@ -38,6 +51,7 @@ type Detail = {
     label: string | null
     line1: string
     line2: string | null
+    suburb: string | null
     city: string
     region: string | null
     postal_code: string | null
@@ -73,14 +87,13 @@ export function OrderDetailPage() {
   const [pickupGenErr, setPickupGenErr] = useState<string | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
 
-  /** Email used for guest API calls (query + POST). */
-  const [guestEmailDraft, setGuestEmailDraft] = useState(() => emailFromSearch(search))
-  const [guestEmailActive, setGuestEmailActive] = useState(() => emailFromSearch(search))
+  const guestEmailForApi = emailFromSearch(search).trim()
+  const [orderReadyForReviewLocal, setOrderReadyForReviewLocal] = useState(false)
+  const [apiReview, setApiReview] = useState<StoredOrderReview | null | undefined>(undefined)
 
   useEffect(() => {
-    setGuestEmailDraft(emailFromSearch(search))
-    setGuestEmailActive(emailFromSearch(search))
-  }, [orderId, search])
+    setOrderReadyForReviewLocal(false)
+  }, [orderId])
 
   useEffect(() => {
     if (!volatilePickup) return
@@ -90,13 +103,13 @@ export function OrderDetailPage() {
 
   const loadDetail = useCallback(async () => {
     if (!orderId) return
-    const path = guestEmailActive.trim()
-      ? `/api/orders/${orderId}?email=${encodeURIComponent(guestEmailActive.trim())}`
+    const path = guestEmailForApi
+      ? `/api/orders/${orderId}?email=${encodeURIComponent(guestEmailForApi)}`
       : `/api/orders/${orderId}`
     const res = await fetch(apiUrl(path), { credentials: 'include' })
     if (!res.ok) throw new Error(await res.text())
     setDetail((await res.json()) as Detail)
-  }, [orderId, guestEmailActive])
+  }, [orderId, guestEmailForApi])
 
   useEffect(() => {
     if (!orderId) return
@@ -110,10 +123,26 @@ export function OrderDetailPage() {
     })()
   }, [orderId, loadDetail])
 
+  useEffect(() => {
+    if (!orderId) return
+    let cancelled = false
+    setApiReview(undefined)
+    void fetchOrderReviewFromApi(orderId, { guestEmail: guestEmailForApi || undefined }).then(
+      (r) => {
+        if (!cancelled) setApiReview(r)
+      },
+      () => {
+        if (!cancelled) setApiReview(null)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [orderId, guestEmailForApi])
+
   function orderActionPath(suffix: string): string {
     const base = `/api/orders/${orderId}/${suffix}`
-    const em = guestEmailActive.trim()
-    return em ? `${base}?email=${encodeURIComponent(em)}` : base
+    return guestEmailForApi ? `${base}?email=${encodeURIComponent(guestEmailForApi)}` : base
   }
 
   async function generateVolatilePickupCode() {
@@ -160,8 +189,8 @@ export function OrderDetailPage() {
     setPickupMsg(null)
     try {
       await fetchCsrfToken()
-      const url = guestEmailActive.trim()
-        ? `/api/orders/${orderId}/pickup/verify?email=${encodeURIComponent(guestEmailActive.trim())}`
+      const url = guestEmailForApi
+        ? `/api/orders/${orderId}/pickup/verify?email=${encodeURIComponent(guestEmailForApi)}`
         : `/api/orders/${orderId}/pickup/verify`
       const res = await apiFetch(url, {
         method: 'POST',
@@ -260,6 +289,8 @@ export function OrderDetailPage() {
 
   const o = detail.order
   const st = o.status
+  const orderInReviewQueue = orderReadyForReviewLocal || getReadyForReviewOrderIds().has(o.orderId)
+  const existingReview = apiReview ?? getOrderReview(o.orderId)
   const terminal = ['shipped', 'delivered', 'cancelled', 'refunded'].includes(st)
   const canCancelUnpaid = (st === 'pending_payment' || st === 'draft') && !terminal
   const canRefundPaid = (st === 'paid' || st === 'processing') && !['shipped', 'delivered', 'cancelled', 'refunded'].includes(st)
@@ -281,19 +312,21 @@ export function OrderDetailPage() {
       <Typography color="text.secondary">
         {formatOrderStatusLabel(o.status)} · {o.delivery_method}
       </Typography>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-        <TextField
-          size="small"
-          label="Guest order email"
-          value={guestEmailDraft}
-          onChange={(e) => setGuestEmailDraft(e.target.value)}
-          fullWidth
-          helperText="Required for guest checkout. Click Apply after editing."
-        />
-        <Button variant="outlined" onClick={() => setGuestEmailActive(guestEmailDraft.trim())}>
-          Apply
-        </Button>
-      </Stack>
+      {o.containsAlcohol && o.deliveryScheduledFor ? (
+        <Alert severity="warning">
+          Alcohol fulfilment is scheduled for {new Date(o.deliveryScheduledFor).toLocaleString()}.
+        </Alert>
+      ) : null}
+      {o.delivery_method === 'home' && o.homeDeliveryWindow ? (
+        <Typography variant="body2" color="text.secondary">
+          Preferred delivery:{' '}
+          {formatHomeDeliveryWindow(
+            o.homeDeliveryWindow.start,
+            o.homeDeliveryWindow.end,
+            o.homeDeliveryWindow.label,
+          )}
+        </Typography>
+      ) : null}
       <Typography>
         Subtotal {formatMoney(o.subtotal_cents, o.currency)} · Shipping {formatMoney(o.shipping_cents, o.currency)} · Tax{' '}
         {formatMoney(o.tax_cents, o.currency)}
@@ -318,6 +351,7 @@ export function OrderDetailPage() {
             {detail.shippingAddress.label ? `${detail.shippingAddress.label}\n` : ''}
             {detail.shippingAddress.line1}
             {detail.shippingAddress.line2 ? `\n${detail.shippingAddress.line2}` : ''}
+            {detail.shippingAddress.suburb ? `\n${detail.shippingAddress.suburb}` : ''}
             {`\n${detail.shippingAddress.city}${detail.shippingAddress.region ? `, ${detail.shippingAddress.region}` : ''} ${detail.shippingAddress.postal_code ?? ''}`.trim()}
             {`\n${detail.shippingAddress.country}`}
           </Typography>
@@ -331,8 +365,69 @@ export function OrderDetailPage() {
         </Typography>
       )}
 
+      {st === 'delivered' && !orderInReviewQueue ? (
+        <Alert severity="info">
+          <Stack spacing={1}>
+            <Typography variant="body2">
+              When you&apos;ve confirmed receipt, mark complete — the order moves to <strong>To review</strong> on My orders
+              so you can leave feedback.
+            </Typography>
+            <Button
+              variant="contained"
+              size="small"
+              sx={{ alignSelf: 'flex-start' }}
+              onClick={() => {
+                markOrderReadyForReview(o.orderId)
+                setOrderReadyForReviewLocal(true)
+                setActionMsg({ severity: 'success', text: 'Moved to To review.' })
+              }}
+            >
+              Mark complete
+            </Button>
+          </Stack>
+        </Alert>
+      ) : null}
+
+      {st === 'delivered' && orderInReviewQueue && !existingReview ? (
+        <Stack spacing={1}>
+          <Typography variant="body2" color="text.secondary">
+            Ready to rate this order? Open the dedicated review screen.
+          </Typography>
+          <Button component={RouterLink} to={`${pathPrefix}/orders/${o.orderId}/review`} variant="contained">
+            Leave your review
+          </Button>
+        </Stack>
+      ) : null}
+
+      {st === 'delivered' && existingReview ? (
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'action.hover' }}>
+          <Stack spacing={1}>
+            <Typography variant="subtitle2" fontWeight={700}>
+              Your review
+            </Typography>
+            <Rating value={existingReview.rating} readOnly size="small" sx={{ '& .MuiRating-iconFilled': { color: 'primary.main' } }} />
+            {existingReview.comment.trim() ? (
+              <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+                {existingReview.comment.trim()}
+              </Typography>
+            ) : (
+              <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                No written feedback.
+              </Typography>
+            )}
+            <Typography variant="caption" color="text.secondary">
+              Submitted {new Date(existingReview.submittedAt).toLocaleString()}
+            </Typography>
+          </Stack>
+        </Paper>
+      ) : null}
+
       {(st === 'shipped' || st === 'delivered') && (
-        <Button component={RouterLink} to={`${pathPrefix}/orders/${orderId}/return${guestEmailActive.trim() ? `?email=${encodeURIComponent(guestEmailActive.trim())}` : ''}`} variant="outlined">
+        <Button
+          component={RouterLink}
+          to={`${pathPrefix}/orders/${orderId}/return${guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''}`}
+          variant="outlined"
+        >
           Request a return
         </Button>
       )}

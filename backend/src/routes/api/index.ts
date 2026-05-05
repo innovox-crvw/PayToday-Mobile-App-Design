@@ -16,6 +16,7 @@ import { ordersRouter } from './orders.js'
 import { paymentReturnRouter } from './paymentReturn.js'
 import { paymentsIntentRouter } from './paymentsIntent.js'
 import { adminOrdersRouter } from './adminOrders.js'
+import { adminOrderReviewsRouter } from './adminOrderReviews.js'
 import { adminDepositRouter } from './adminDeposit.js'
 import { adminInventoryRouter } from './adminInventory.js'
 import { adminOverviewRouter } from './adminOverview.js'
@@ -91,6 +92,7 @@ apiRouter.use('/orders', ordersRouter)
 apiRouter.use('/returns', returnsRouter)
 apiRouter.use('/admin/orders', adminOrdersRouter)
 apiRouter.use('/admin/returns', adminReturnsRouter)
+apiRouter.use('/admin/order-reviews', adminOrderReviewsRouter)
 apiRouter.use('/admin/inventory', adminInventoryRouter)
 apiRouter.use('/admin/overview', adminOverviewRouter)
 apiRouter.use('/admin/deposit', adminDepositRouter)

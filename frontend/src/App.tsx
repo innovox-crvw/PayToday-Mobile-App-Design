@@ -8,6 +8,7 @@ import { AdminHomePage } from './pages/admin/AdminHomePage'
 import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage'
 import { AdminReturnsPage } from './pages/admin/AdminReturnsPage'
+import { AdminOrderReviewsPage } from './pages/admin/AdminOrderReviewsPage'
 import { AdminProductsPage } from './pages/admin/AdminProductsPage'
 import { AdminCategoriesPage } from './pages/admin/AdminCategoriesPage'
 import { AdminLoginPage } from './pages/admin/AdminLoginPage'
@@ -22,6 +23,7 @@ import { ForgotPasswordPage } from './pages/store/ForgotPasswordPage'
 import { ResetPasswordPage } from './pages/store/ResetPasswordPage'
 import { OrdersListPage } from './pages/store/OrdersListPage'
 import { OrderDetailPage } from './pages/store/OrderDetailPage'
+import { OrderReviewPage } from './pages/store/OrderReviewPage'
 import { ReturnRequestPage } from './pages/store/ReturnRequestPage'
 import { TrackOrderPage } from './pages/store/TrackOrderPage'
 import { ProductPage } from './pages/store/ProductPage'
@@ -163,6 +165,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="orders" element={<OrdersListPage />} />
       <Route path="orders/track" element={<TrackOrderPage />} />
       <Route path="orders/:orderId/return" element={<ReturnRequestPage />} />
+      <Route path="orders/:orderId/review" element={<OrderReviewPage />} />
       <Route path="orders/:orderId" element={<OrderDetailPage />} />
       <Route path="account" element={<AccountPage />} />
       <Route path="wallet/scan/pay-code" element={<ScanPayCodePage />} />
@@ -231,6 +234,7 @@ export default function App() {
           <Route path="categories" element={<AdminCategoriesPage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
           <Route path="returns" element={<AdminReturnsPage />} />
+          <Route path="reviews" element={<AdminOrderReviewsPage />} />
           <Route path="inventory" element={<AdminInventoryPage />} />
           <Route path="fulfillment" element={<AdminFulfillmentPage />} />
           <Route path="deposit-boxes" element={<AdminDepositPage />} />

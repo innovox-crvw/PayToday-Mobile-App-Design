@@ -13,6 +13,7 @@ import {
   refundCustomerPaidOrderWithFee,
 } from '../../services/orderService.js'
 import { getReturnableLinesForOrder } from '../../services/returnService.js'
+import { getOrderReviewByOrderId, insertOrderReview } from '../../queries/orderReviews.js'
 
 export const ordersRouter = Router()
 
@@ -320,6 +321,113 @@ ordersRouter.get('/:orderId/returnable', optionalAuth, async (req, res) => {
     return
   }
   res.json(ret)
+})
+
+/** Review for an order (same access as order detail). */
+ordersRouter.get('/:orderId/review', optionalAuth, async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const orderId = String(req.params.orderId)
+  const emailQ = typeof req.query.email === 'string' ? req.query.email : ''
+  const detail = await loadOrderDetail(pool, orderId)
+  if (!detail.order) {
+    res.status(404).json({ error: 'Not found' })
+    return
+  }
+  const u = req.user
+  const allowedStaff = isStaff(u?.role)
+  const allowedOwner = Boolean(u && detail.order.user_id === u.sub)
+  const allowedGuest =
+    Boolean(!u && detail.order.guest_email && emailQ && detail.order.guest_email.toLowerCase() === emailQ.toLowerCase())
+  if (!allowedStaff && !allowedOwner && !allowedGuest) {
+    res.status(403).json({ error: 'Forbidden' })
+    return
+  }
+
+  const row = await getOrderReviewByOrderId(pool, orderId)
+  if (!row) {
+    res.json({ review: null })
+    return
+  }
+  res.json({
+    review: {
+      rating: row.rating,
+      comment: row.comment ?? '',
+      submittedAt: row.created_at.toISOString(),
+    },
+  })
+})
+
+/**
+ * Submit one review per delivered order (customer or guest with matching email).
+ * Body: `{ rating: number, comment?: string, email?: string }` (email for guests).
+ */
+ordersRouter.post('/:orderId/review', optionalAuth, async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    res.status(503).json({ error: 'Database not configured' })
+    return
+  }
+  const orderId = String(req.params.orderId)
+  const guestEmail = guestEmailFromReq(req)
+  const ratingRaw = req.body?.rating
+  const rating =
+    typeof ratingRaw === 'number' ? ratingRaw : typeof ratingRaw === 'string' ? Number(ratingRaw) : NaN
+  if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+    res.status(400).json({ error: 'rating must be between 1 and 5' })
+    return
+  }
+  const rounded = Math.round(rating)
+  let comment = typeof req.body?.comment === 'string' ? req.body.comment.trim() : ''
+  if (comment.length > 2000) comment = comment.slice(0, 2000)
+
+  const detail = await loadOrderDetail(pool, orderId)
+  if (!detail.order) {
+    res.status(404).json({ error: 'Not found' })
+    return
+  }
+  if (!canAccessOrderSelfService(req.user, detail.order, guestEmail)) {
+    res.status(403).json({ error: 'Forbidden' })
+    return
+  }
+  if (detail.order.status !== 'delivered') {
+    res.status(400).json({ error: 'Reviews are only allowed for delivered orders' })
+    return
+  }
+
+  const existing = await getOrderReviewByOrderId(pool, orderId)
+  if (existing) {
+    res.status(409).json({ error: 'A review already exists for this order' })
+    return
+  }
+
+  try {
+    await insertOrderReview(pool, {
+      orderId,
+      userId: req.user?.sub ?? null,
+      rating: rounded,
+      comment: comment.length ? comment : null,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : ''
+    if (msg.includes('UX_order_reviews') || msg.includes('duplicate') || msg.includes('UNIQUE')) {
+      res.status(409).json({ error: 'A review already exists for this order' })
+      return
+    }
+    throw e
+  }
+
+  res.json({
+    ok: true,
+    review: {
+      rating: rounded,
+      comment,
+      submittedAt: new Date().toISOString(),
+    },
+  })
 })
 
 /** Order detail: owner, guest (with ?email=), or staff. */

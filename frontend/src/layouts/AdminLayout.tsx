@@ -30,6 +30,7 @@ const LINKS = [
   { to: '/admin/categories', label: 'Categories' },
   { to: '/admin/orders', label: 'Orders' },
   { to: '/admin/returns', label: 'Returns' },
+  { to: '/admin/reviews', label: 'Reviews' },
   { to: '/admin/inventory', label: 'Inventory' },
   { to: '/admin/fulfillment', label: 'Fulfillment' },
   { to: '/admin/deposit-boxes', label: 'Deposit boxes' },
