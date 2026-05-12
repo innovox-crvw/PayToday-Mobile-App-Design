@@ -223,7 +223,7 @@ export function OrderDetailPage() {
       })
       const data = (await res.json()) as { error?: string; ok?: boolean }
       if (!res.ok) {
-        setActionMsg({ severity: 'warning', text: data.error ?? (await res.text()) })
+        setActionMsg({ severity: 'warning', text: data.error ?? 'Cancel failed' })
         return
       }
       setActionMsg({ severity: 'success', text: 'Order cancelled. Any reserved stock has been released.' })
@@ -254,7 +254,7 @@ export function OrderDetailPage() {
         walletNote?: string
       }
       if (!res.ok) {
-        setActionMsg({ severity: 'warning', text: data.error ?? (await res.text()) })
+        setActionMsg({ severity: 'warning', text: data.error ?? 'Refund failed' })
         return
       }
       const cur = detail?.order
