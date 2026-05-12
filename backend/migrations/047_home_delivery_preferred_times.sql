@@ -15,10 +15,14 @@ BEGIN
     /* Optional link to shipping_zones for rate lookup. */
     shipping_zone_id UNIQUEIDENTIFIER NULL,
     is_active BIT NOT NULL CONSTRAINT DF_hda_is_active DEFAULT (1),
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_hda_created_at DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT FK_hda_zone FOREIGN KEY (shipping_zone_id) REFERENCES dbo.shipping_zones (id)
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_hda_created_at DEFAULT (SYSUTCDATETIME())
+    /* FK_hda_zone added below only when dbo.shipping_zones exists. */
   );
   CREATE UNIQUE NONCLUSTERED INDEX UX_hda_code ON dbo.home_delivery_areas (code);
+  /* Add FK only if dbo.shipping_zones has already been created. */
+  IF OBJECT_ID(N'dbo.shipping_zones', N'U') IS NOT NULL
+    ALTER TABLE dbo.home_delivery_areas
+      ADD CONSTRAINT FK_hda_zone FOREIGN KEY (shipping_zone_id) REFERENCES dbo.shipping_zones (id);
 
   /* Seed three Windhoek areas matching the SSMS screenshot and shipping_zones seed above. */
   INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
