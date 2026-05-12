@@ -23,19 +23,26 @@ BEGIN
   IF OBJECT_ID(N'dbo.shipping_zones', N'U') IS NOT NULL
     ALTER TABLE dbo.home_delivery_areas
       ADD CONSTRAINT FK_hda_zone FOREIGN KEY (shipping_zone_id) REFERENCES dbo.shipping_zones (id);
-
-  /* Seed three Windhoek areas.
-     shipping_zone_id is left NULL here because dbo.shipping_zones may not exist yet.
-     A later migration can back-fill the FK once that table is in place. */
-  INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
-  VALUES
-    (CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
-     N'whk_south_central', N'Klein Windhoek · CBD · Academia', 10, NULL),
-    (CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
-     N'whk_katutura_khomasdal', N'Katutura · Khomasdal', 20, NULL),
-    (CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
-     N'whk_north_east', N'Olympia · Eros · Pioneers Park', 30, NULL);
 END;
+GO
+
+/* Seed three Windhoek areas — idempotent per row.
+   shipping_zone_id is left NULL; a later migration can back-fill once
+   dbo.shipping_zones exists. */
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_areas WHERE id = CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
+  VALUES (CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
+          N'whk_south_central', N'Klein Windhoek · CBD · Academia', 10, NULL);
+
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_areas WHERE id = CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
+  VALUES (CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
+          N'whk_katutura_khomasdal', N'Katutura · Khomasdal', 20, NULL);
+
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_areas WHERE id = CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
+  VALUES (CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
+          N'whk_north_east', N'Olympia · Eros · Pioneers Park', 30, NULL);
 GO
 
 IF OBJECT_ID(N'dbo.home_delivery_area_time_presets', N'U') IS NULL
@@ -55,30 +62,42 @@ BEGIN
     CONSTRAINT FK_hdatp_area FOREIGN KEY (area_id) REFERENCES dbo.home_delivery_areas (id) ON DELETE CASCADE
   );
   CREATE NONCLUSTERED INDEX IX_hdatp_area ON dbo.home_delivery_area_time_presets (area_id, sort_order);
+END;
+GO
 
-  /* Seed time presets matching the SSMS screenshot rows exactly. */
+/* Seed time presets — idempotent per row. */
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_area_time_presets WHERE id = CAST(N'B0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER))
   INSERT INTO dbo.home_delivery_area_time_presets
     (id, area_id, sort_order, label, start_time_local, end_time_local, days_of_week, iana_tz)
-  VALUES
-    /* whk_south_central — 09:00–12:00 and 17:00–20:00 weekdays */
-    (CAST(N'B0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
-     CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
-     1, N'Weekday mornings (09:00-12:00)',  N'09:00', N'12:00', N'1,2,3,4,5', N'Africa/Windhoek'),
-    (CAST(N'B0000001-0001-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
-     CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
-     2, N'Weekday evenings (17:00-20:00)',  N'17:00', N'20:00', N'1,2,3,4,5', N'Africa/Windhoek'),
+  VALUES (CAST(N'B0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
+          CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
+          1, N'Weekday mornings (09:00-12:00)', N'09:00', N'12:00', N'1,2,3,4,5', N'Africa/Windhoek');
 
-    /* whk_katutura_khomasdal — Mon–Sat afternoons + Tue & Thu afternoon window */
-    (CAST(N'B0000001-0002-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
-     CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
-     1, N'Mon-Sat afternoons (16:00-19:00)', N'16:00', N'19:00', N'1,2,3,4,5,6', N'Africa/Windhoek'),
-    (CAST(N'B0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
-     CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
-     2, N'Tue & Thu afternoons (14:00-18:00)', N'14:00', N'18:00', N'2,4', N'Africa/Windhoek'),
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_area_time_presets WHERE id = CAST(N'B0000001-0001-4000-8000-000000000002' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_area_time_presets
+    (id, area_id, sort_order, label, start_time_local, end_time_local, days_of_week, iana_tz)
+  VALUES (CAST(N'B0000001-0001-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
+          CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
+          2, N'Weekday evenings (17:00-20:00)', N'17:00', N'20:00', N'1,2,3,4,5', N'Africa/Windhoek');
 
-    /* whk_north_east — weekday mornings only */
-    (CAST(N'B0000001-0001-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
-     CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
-     1, N'Weekday mornings (09:00-12:00)',  N'09:00', N'12:00', N'1,2,3,4,5', N'Africa/Windhoek');
-END;
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_area_time_presets WHERE id = CAST(N'B0000001-0002-4000-8000-000000000001' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_area_time_presets
+    (id, area_id, sort_order, label, start_time_local, end_time_local, days_of_week, iana_tz)
+  VALUES (CAST(N'B0000001-0002-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
+          CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
+          1, N'Mon-Sat afternoons (16:00-19:00)', N'16:00', N'19:00', N'1,2,3,4,5,6', N'Africa/Windhoek');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_area_time_presets WHERE id = CAST(N'B0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_area_time_presets
+    (id, area_id, sort_order, label, start_time_local, end_time_local, days_of_week, iana_tz)
+  VALUES (CAST(N'B0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
+          CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
+          2, N'Tue & Thu afternoons (14:00-18:00)', N'14:00', N'18:00', N'2,4', N'Africa/Windhoek');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.home_delivery_area_time_presets WHERE id = CAST(N'B0000001-0001-4000-8000-000000000003' AS UNIQUEIDENTIFIER))
+  INSERT INTO dbo.home_delivery_area_time_presets
+    (id, area_id, sort_order, label, start_time_local, end_time_local, days_of_week, iana_tz)
+  VALUES (CAST(N'B0000001-0001-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
+          CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
+          1, N'Weekday mornings (09:00-12:00)', N'09:00', N'12:00', N'1,2,3,4,5', N'Africa/Windhoek');
 GO
