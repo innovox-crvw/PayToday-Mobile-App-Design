@@ -51,4 +51,6 @@ export interface ProductDto {
   variants: ProductVariantDto[]
   /** Present on admin catalogue responses. */
   isActive?: boolean
+  /** When true, product is age-restricted (liquor). */
+  containsAlcohol?: boolean
 }

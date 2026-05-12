@@ -12,11 +12,14 @@ export interface UserRow {
   /** Null for Keycloak-only accounts (migration 008). */
   password_hash: string | null
   full_name: string | null
+  /** Date-only in DB (migration 054); may be absent on legacy rows. */
+  date_of_birth?: Date | null
   role: UserRole
   notification_channel: string
   /** Keycloak OIDC subject; when set, this row is linked to IdP identity (PayToday user). */
   keycloak_sub?: string | null
   email_verified?: boolean
+  ui_locale?: string | null
   failed_login_count?: number
   locked_until?: Date | null
 }
@@ -26,7 +29,7 @@ export async function findUserByEmail(pool: ConnectionPool, email: string): Prom
     .request()
     .input('email', email.toLowerCase())
     .query<UserRow>(`
-      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, role, notification_channel, keycloak_sub,
+      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, date_of_birth, role, notification_channel, keycloak_sub,
         ISNULL(email_verified, 1) AS email_verified,
         ISNULL(failed_login_count, 0) AS failed_login_count,
         locked_until
@@ -40,7 +43,7 @@ export async function findUserById(pool: ConnectionPool, userId: string): Promis
     .request()
     .input('id', userId)
     .query<UserRow>(`
-      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, role, notification_channel, keycloak_sub,
+      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, date_of_birth, role, notification_channel, keycloak_sub,
         ISNULL(email_verified, 1) AS email_verified,
         ISNULL(failed_login_count, 0) AS failed_login_count,
         locked_until
@@ -116,7 +119,7 @@ export async function findUserByKeycloakSub(pool: ConnectionPool, keycloakSub: s
     .request()
     .input('sub', keycloakSub)
     .query<UserRow>(`
-      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, role, notification_channel, keycloak_sub,
+      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, date_of_birth, role, notification_channel, keycloak_sub,
         ISNULL(email_verified, 1) AS email_verified,
         ISNULL(failed_login_count, 0) AS failed_login_count,
         locked_until
@@ -130,7 +133,7 @@ export async function findUserByEmailLower(pool: ConnectionPool, email: string):
     .request()
     .input('email', email.toLowerCase())
     .query<UserRow>(`
-      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, role, notification_channel, keycloak_sub,
+      SELECT CAST(id AS NVARCHAR(36)) AS id, email, password_hash, full_name, date_of_birth, role, notification_channel, keycloak_sub,
         ISNULL(email_verified, 1) AS email_verified,
         ISNULL(failed_login_count, 0) AS failed_login_count,
         locked_until
@@ -193,10 +196,12 @@ export async function getUserNotificationChannel(pool: ConnectionPool, userId: s
   return 'email'
 }
 
+const ALLOWED_LOCALES = new Set(['en-NA', 'af-NA', 'en-ZA', 'en-US'])
+
 export async function updateUserProfile(
   pool: ConnectionPool,
   userId: string,
-  input: { fullName?: string | null; notificationChannel?: string },
+  input: { fullName?: string | null; notificationChannel?: string; dateOfBirth?: Date | null; uiLocale?: string | null },
 ): Promise<void> {
   const parts: string[] = []
   const req = pool.request().input('id', userId)
@@ -209,6 +214,15 @@ export async function updateUserProfile(
     const ch = NOTIFY_CHANNELS.has(input.notificationChannel) ? input.notificationChannel : 'email'
     parts.push('notification_channel = @notificationChannel')
     req.input('notificationChannel', ch)
+  }
+  if (input.dateOfBirth !== undefined) {
+    parts.push('date_of_birth = @dob')
+    req.input('dob', input.dateOfBirth)
+  }
+  if (input.uiLocale !== undefined) {
+    const locale = input.uiLocale === null ? null : (ALLOWED_LOCALES.has(input.uiLocale) ? input.uiLocale : 'en-NA')
+    parts.push('ui_locale = @uiLocale')
+    req.input('uiLocale', locale)
   }
   if (!parts.length) return
   parts.push('updated_at = SYSUTCDATETIME()')

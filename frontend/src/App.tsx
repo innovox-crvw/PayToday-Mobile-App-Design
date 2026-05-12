@@ -3,6 +3,9 @@ import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-do
 import { AdminLayout } from './layouts/AdminLayout'
 import { StoreLayout } from './layouts/StoreLayout'
 import { AdminDepositPage } from './pages/admin/AdminDepositPage'
+import { AdminDisputesPage } from './pages/admin/AdminDisputesPage'
+import { AdminDiscountsPage } from './pages/admin/AdminDiscountsPage'
+import { AdminLiquorHoursPage } from './pages/admin/AdminLiquorHoursPage'
 import { AdminFulfillmentPage } from './pages/admin/AdminFulfillmentPage'
 import { AdminHomePage } from './pages/admin/AdminHomePage'
 import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
@@ -23,6 +26,7 @@ import { ForgotPasswordPage } from './pages/store/ForgotPasswordPage'
 import { ResetPasswordPage } from './pages/store/ResetPasswordPage'
 import { OrdersListPage } from './pages/store/OrdersListPage'
 import { OrderDetailPage } from './pages/store/OrderDetailPage'
+import { OrderDisputePage } from './pages/store/OrderDisputePage'
 import { OrderReviewPage } from './pages/store/OrderReviewPage'
 import { ReturnRequestPage } from './pages/store/ReturnRequestPage'
 import { TrackOrderPage } from './pages/store/TrackOrderPage'
@@ -165,6 +169,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="orders" element={<OrdersListPage />} />
       <Route path="orders/track" element={<TrackOrderPage />} />
       <Route path="orders/:orderId/return" element={<ReturnRequestPage />} />
+      <Route path="orders/:orderId/dispute" element={<OrderDisputePage />} />
       <Route path="orders/:orderId/review" element={<OrderReviewPage />} />
       <Route path="orders/:orderId" element={<OrderDetailPage />} />
       <Route path="account" element={<AccountPage />} />
@@ -234,10 +239,13 @@ export default function App() {
           <Route path="categories" element={<AdminCategoriesPage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
           <Route path="returns" element={<AdminReturnsPage />} />
+          <Route path="disputes" element={<AdminDisputesPage />} />
           <Route path="reviews" element={<AdminOrderReviewsPage />} />
           <Route path="inventory" element={<AdminInventoryPage />} />
           <Route path="fulfillment" element={<AdminFulfillmentPage />} />
           <Route path="deposit-boxes" element={<AdminDepositPage />} />
+          <Route path="discounts" element={<AdminDiscountsPage />} />
+          <Route path="liquor-hours" element={<AdminLiquorHoursPage />} />
         </Route>
       </Route>
 

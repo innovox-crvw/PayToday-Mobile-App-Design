@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom'
-import { Alert, Card, CardActionArea, Stack, Tab, Tabs, Typography } from '@mui/material'
+import { Alert, Card, CardActionArea, Skeleton, Stack, Tab, Tabs, Typography } from '@mui/material'
 import { apiFetch } from '../../api/client'
 import {
   ORDER_LIST_TABS,
@@ -25,6 +25,7 @@ export function OrdersListPage() {
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const [items, setItems] = useState<Row[]>([])
   const [err, setErr] = useState<string | null>(null)
+  const [listLoading, setListLoading] = useState(true)
   const [reviewTick, setReviewTick] = useState(0)
 
   const readyForReviewIds = useMemo(() => {
@@ -52,6 +53,7 @@ export function OrdersListPage() {
 
   useEffect(() => {
     void (async () => {
+      setListLoading(true)
       try {
         const res = await apiFetch('/api/orders/mine')
         if (res.status === 401) {
@@ -63,6 +65,8 @@ export function OrdersListPage() {
         setItems(data.items ?? [])
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Failed to load')
+      } finally {
+        setListLoading(false)
       }
     })()
   }, [])
@@ -96,13 +100,27 @@ export function OrdersListPage() {
         My orders
       </Typography>
       {err && <Alert severity="warning">{err}</Alert>}
-      {!err && items.length > 0 && (
+      {listLoading && !err && (
+        <Stack spacing={1} aria-busy="true" aria-label="Loading orders">
+          {[0, 1, 2, 3].map((k) => (
+            <Card key={k} variant="outlined">
+              <CardActionArea disabled sx={{ p: 2 }}>
+                <Skeleton width="40%" />
+                <Skeleton width="60%" sx={{ mt: 1 }} />
+                <Skeleton width="80%" sx={{ mt: 1 }} />
+              </CardActionArea>
+            </Card>
+          ))}
+        </Stack>
+      )}
+      {!listLoading && !err && items.length > 0 && (
         <Tabs
           value={activeCategory}
           onChange={(_, v: OrderListCategory) => setCategory(v)}
           variant="scrollable"
           scrollButtons="auto"
           allowScrollButtonsMobile
+          aria-label="Order status filter"
           sx={{
             minHeight: 44,
             borderBottom: 1,
@@ -119,11 +137,12 @@ export function OrdersListPage() {
           ))}
         </Tabs>
       )}
-      {!err && items.length === 0 && <Typography color="text.secondary">No orders yet.</Typography>}
-      {!err && items.length > 0 && filtered.length === 0 && (
+      {!listLoading && !err && items.length === 0 && <Typography color="text.secondary">No orders yet.</Typography>}
+      {!listLoading && !err && items.length > 0 && filtered.length === 0 && (
         <Typography color="text.secondary">No orders in this category.</Typography>
       )}
-      {filtered.map((o) => (
+      {!listLoading &&
+        filtered.map((o) => (
         <Card key={o.orderId} variant="outlined">
           <CardActionArea
             component={RouterLink}
@@ -150,7 +169,7 @@ export function OrdersListPage() {
             ) : null}
           </CardActionArea>
         </Card>
-      ))}
+        ))}
     </Stack>
   )
 }

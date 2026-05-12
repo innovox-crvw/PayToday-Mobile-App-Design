@@ -24,6 +24,13 @@ Single-store deployment. Values below are **defaults** until the client signs of
 ## Deposit boxes
 
 - Customer selects a **location** at checkout; staff assigns a **box** at fulfillment. If no capacity, staff reassigns or contacts the customer (operational process).
+- **Store hours vs deposit points:** Pickup locations (`deposit_locations`) do **not** automatically inherit `merchant_operating_hours`. If a deposit point has its own opening rules, model them on the location or in ops documentation; otherwise customers see the store’s general hours from the merchant hours API only on the main storefront.
+
+## Liquor and age (self-reported DOB)
+
+- **Catalogue:** Products may be flagged `contains_alcohol`. When `LIQUOR_GATING_ENABLED` is true, the API hides alcohol from anonymous sessions and from signed-in customers who are not 18+ by date of birth on their profile.
+- **Checkout:** Alcohol lines require a signed-in user with `date_of_birth` proving age ≥ 18, and (when configured) must fall inside the merchant’s **liquor** sale window in `merchant_operating_hours`.
+- **Compliance:** Self-reported date of birth is **not** legal ID verification. The system is suitable for UX and basic policy gating only; add KYC or third-party age checks if regulations require them.
 
 ## Pending payment expiry
 

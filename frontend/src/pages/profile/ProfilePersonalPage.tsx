@@ -26,6 +26,7 @@ export function ProfilePersonalPage() {
 
   const { user, loading } = useAuthMe()
   const [fullName, setFullName] = useState('')
+  const [dateOfBirth, setDateOfBirth] = useState('')
   const [newEmail, setNewEmail] = useState('')
   const [confirmEmail, setConfirmEmail] = useState('')
   const [emailPassword, setEmailPassword] = useState('')
@@ -33,6 +34,7 @@ export function ProfilePersonalPage() {
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [saving, setSaving] = useState(false)
+  const [savingDob, setSavingDob] = useState(false)
   const [savingEmail, setSavingEmail] = useState(false)
   const [savingPw, setSavingPw] = useState(false)
   const [resending, setResending] = useState(false)
@@ -41,6 +43,8 @@ export function ProfilePersonalPage() {
   useEffect(() => {
     if (user?.fullName != null) setFullName(user.fullName || '')
     else if (!user) setFullName('')
+    if (user?.dateOfBirth) setDateOfBirth(user.dateOfBirth)
+    else if (!user) setDateOfBirth('')
   }, [user])
 
   async function saveName() {
@@ -65,6 +69,31 @@ export function ProfilePersonalPage() {
       setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function saveDob() {
+    if (!user) return
+    setMsg(null)
+    setSavingDob(true)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dateOfBirth: dateOfBirth.trim() || null }),
+      })
+      const data = (await res.json()) as { ok?: boolean; error?: string }
+      if (!res.ok) {
+        setMsg({ text: data.error ?? 'Could not save', severity: 'error' })
+        return
+      }
+      setMsg({ text: 'Date of birth saved. Used for age-restricted purchases when enabled on this store.', severity: 'success' })
+      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+    } catch (e) {
+      setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
+    } finally {
+      setSavingDob(false)
     }
   }
 
@@ -237,6 +266,24 @@ export function ProfilePersonalPage() {
       <TextField label="Display name" value={fullName} onChange={(e) => setFullName(e.target.value)} fullWidth autoComplete="name" />
       <Button variant="contained" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={saving} onClick={() => void saveName()}>
         {saving ? 'Saving…' : 'Save name'}
+      </Button>
+
+      <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 1 }}>
+        Date of birth
+      </Typography>
+      <Typography variant="caption" color="text.secondary" display="block">
+        Required for age-restricted products when the store enables liquor gating. Format YYYY-MM-DD. This is not ID verification.
+      </Typography>
+      <TextField
+        label="Date of birth (YYYY-MM-DD)"
+        value={dateOfBirth}
+        onChange={(e) => setDateOfBirth(e.target.value)}
+        fullWidth
+        placeholder="1990-05-15"
+        helperText={user.isAdult === false ? 'Recorded age is under 18 — alcohol catalogue and cart will stay blocked.' : undefined}
+      />
+      <Button variant="outlined" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={savingDob} onClick={() => void saveDob()}>
+        {savingDob ? 'Saving…' : 'Save date of birth'}
       </Button>
 
       <Divider sx={{ my: 1 }} />

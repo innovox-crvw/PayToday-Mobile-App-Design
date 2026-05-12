@@ -10,8 +10,25 @@ import { listHubPaymentCategoryItems } from '../../repos/hubPaymentCategoryItems
 import { listHubNavigationTiles } from '../../repos/hubNavigationTilesRepo.js'
 import { listActivePromotions, type StorePromotionDto } from '../../repos/promotionsRepo.js'
 import { listPopularStoresByOrders } from '../../repos/storefrontPopularRepo.js'
+import { listSuperDealProducts } from '../../repos/productsRepo.js'
+import { sessionIsAdultForLiquor } from '../../services/liquorAgeService.js'
+import { storefrontMerchantHoursRouter } from './adminMerchantHours.js'
+import { listHomeDeliveryAreas } from '../../repos/homeDeliveryRepo.js'
 
 export const storefrontPublicRouter = Router()
+
+storefrontPublicRouter.use('/storefront/merchant-hours', storefrontMerchantHoursRouter)
+
+storefrontPublicRouter.get('/storefront/home-delivery', async (_req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) { res.status(503).json({ error: 'Database not configured' }); return }
+  try {
+    const areas = await listHomeDeliveryAreas(pool)
+    res.json({ areas })
+  } catch {
+    res.json({ areas: [] })
+  }
+})
 
 const HERO_IMG = {
   welcome:
@@ -61,6 +78,8 @@ storefrontPublicRouter.get('/storefront-config', async (_req, res) => {
     vatRateBps: env.vatRateBps,
     scanApiConfigured: Boolean(pt.scanApiBaseUrl),
     checkoutRequireSignIn: env.checkoutRequireSignIn,
+    liquorGatingEnabled: env.liquorGatingEnabled,
+    yangoEnabled: env.yangoEnabled,
   })
 })
 
@@ -194,6 +213,29 @@ storefrontPublicRouter.get('/storefront/popular-stores', async (req, res) => {
       items: [],
       detail: process.env.NODE_ENV === 'development' ? msg : undefined,
     })
+  }
+})
+
+/** Home Super deals rail — discounted catalogue items (compare-at above sale), best savings first. */
+storefrontPublicRouter.get('/storefront/super-deals', async (req, res) => {
+  const pool = await getSqlPool({ eager: true })
+  if (!pool) {
+    res.json({ items: [] })
+    return
+  }
+  try {
+    let items = await listSuperDealProducts(pool)
+    if (env.liquorGatingEnabled) {
+      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
+      if (!adult) {
+        items = items.filter((p) => !p.containsAlcohol)
+      }
+    }
+    res.json({ items })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[storefront/super-deals] failed:', msg)
+    res.json({ items: [], detail: process.env.NODE_ENV === 'development' ? msg : undefined })
   }
 })
 

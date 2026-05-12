@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link as RouterLink, useLocation } from 'react-router-dom'
-import { Alert, Box, Button, Card, CardContent, IconButton, Stack, Typography } from '@mui/material'
+import { Alert, Box, Button, Card, CardContent, IconButton, Skeleton, Stack, Typography } from '@mui/material'
 import { PageHeader } from '../../components/page/PageHeader'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
@@ -31,9 +31,12 @@ export function CartPage() {
   const [items, setItems] = useState<CartLine[]>([])
   const [totalsPreview, setTotalsPreview] = useState<CartTotalsPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [clearBusy, setClearBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     setError(null)
+    setLoading(true)
     try {
       const res = await fetch(apiUrl('/api/cart?preview=1'), { credentials: 'include' })
       const data = await readResponseJson<{ items: CartLine[]; source?: string; totalsPreview?: CartTotalsPreview }>(res)
@@ -45,6 +48,8 @@ export function CartPage() {
       setTotalsPreview(data.totalsPreview ?? null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load cart')
+    } finally {
+      setLoading(false)
     }
   }, [])
 
@@ -59,6 +64,7 @@ export function CartPage() {
   }, [refresh])
 
   async function clearEntireCart() {
+    setClearBusy(true)
     try {
       await fetchCsrfToken()
       const res = await apiFetch('/api/cart', { method: 'DELETE' })
@@ -67,6 +73,8 @@ export function CartPage() {
       window.dispatchEvent(new Event('pt-cart-updated'))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not clear cart')
+    } finally {
+      setClearBusy(false)
     }
   }
 
@@ -107,7 +115,18 @@ export function CartPage() {
           Your order qualifies for free home delivery.
         </Alert>
       ) : null}
-      {items.length === 0 && !error && (
+      {loading && (
+        <Stack spacing={1.5} aria-busy="true" aria-label="Loading cart">
+          {[0, 1, 2].map((k) => (
+            <Card key={k} variant="outlined" sx={{ borderColor: 'divider' }}>
+              <CardContent sx={{ p: 2 }}>
+                <Skeleton variant="rectangular" height={72} sx={{ borderRadius: 1 }} />
+              </CardContent>
+            </Card>
+          ))}
+        </Stack>
+      )}
+      {!loading && items.length === 0 && !error && (
         <Card variant="outlined" sx={{ borderColor: 'divider' }}>
           <CardContent sx={{ py: 4, textAlign: 'center' }}>
             <Typography color="text.secondary">Your cart is empty.</Typography>
@@ -118,7 +137,8 @@ export function CartPage() {
         </Card>
       )}
       <Stack spacing={1.5}>
-        {items.map((i) => (
+        {!loading &&
+          items.map((i) => (
           <Card key={i.lineId} variant="outlined" sx={{ borderColor: 'divider', overflow: 'hidden' }}>
             <CardContent sx={{ p: 0, '&:last-child': { pb: 0 } }}>
               <Stack direction="row" alignItems="stretch">
@@ -149,16 +169,21 @@ export function CartPage() {
                       {i.sku}
                     </Typography>
                   </Stack>
-                  <IconButton edge="end" aria-label="Remove" onClick={() => void removeLine(i.variantId)} color="default">
+                  <IconButton
+                    edge="end"
+                    aria-label={`Remove ${i.name} from cart`}
+                    onClick={() => void removeLine(i.variantId)}
+                    color="default"
+                  >
                     <DeleteOutlineIcon />
                   </IconButton>
                 </Stack>
               </Stack>
             </CardContent>
           </Card>
-        ))}
+          ))}
       </Stack>
-      {items.length > 0 && (
+      {!loading && items.length > 0 && (
         <Card variant="outlined" sx={{ borderColor: 'divider', bgcolor: 'action.hover' }}>
           <CardContent sx={{ py: 2.5 }}>
             <Stack spacing={2}>
@@ -220,9 +245,10 @@ export function CartPage() {
                   variant="outlined"
                   color="inherit"
                   fullWidth
+                  disabled={clearBusy}
                   onClick={() => void clearEntireCart()}
                 >
-                  Clear cart
+                  {clearBusy ? 'Clearing…' : 'Clear cart'}
                 </Button>
                 <Button component={RouterLink} to={`${pathPrefix}/checkout`} variant="contained" size="large" fullWidth>
                   Checkout

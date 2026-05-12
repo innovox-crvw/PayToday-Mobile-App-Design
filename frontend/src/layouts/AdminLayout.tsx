@@ -29,16 +29,19 @@ const LINKS = [
   { to: '/admin/products', label: 'Products & catalogue' },
   { to: '/admin/categories', label: 'Categories' },
   { to: '/admin/orders', label: 'Orders' },
-  { to: '/admin/returns', label: 'Returns' },
+  { to: '/admin/disputes', label: 'Disputes' },
   { to: '/admin/reviews', label: 'Reviews' },
   { to: '/admin/inventory', label: 'Inventory' },
   { to: '/admin/fulfillment', label: 'Fulfillment' },
   { to: '/admin/deposit-boxes', label: 'Deposit boxes' },
+  { to: '/admin/discounts', label: 'Discount codes' },
+  { to: '/admin/liquor-hours', label: 'Liquor hours' },
 ] as const
 
 export function AdminLayout() {
   const theme = useTheme()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [signOutBusy, setSignOutBusy] = useState(false)
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
@@ -50,11 +53,14 @@ export function AdminLayout() {
   }
 
   async function signOut() {
+    setSignOutBusy(true)
     try {
       await fetchCsrfToken()
       await apiFetch('/api/auth/logout', { method: 'POST' })
     } catch {
       /* ignore */
+    } finally {
+      setSignOutBusy(false)
     }
     window.dispatchEvent(new Event('pt-cart-updated'))
     window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
@@ -96,11 +102,11 @@ export function AdminLayout() {
           </ListItemButton>
         ))}
         <Divider sx={{ my: 1.5 }} />
-        <ListItemButton onClick={() => void signOut()} sx={{ borderRadius: 1.5, py: 1.15 }}>
+        <ListItemButton onClick={() => void signOut()} disabled={signOutBusy} sx={{ borderRadius: 1.5, py: 1.15 }}>
           <ListItemIcon sx={{ minWidth: 40 }}>
             <LogoutOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Sign out" primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }} />
+          <ListItemText primary={signOutBusy ? 'Signing out…' : 'Sign out'} primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }} />
         </ListItemButton>
         <ListItemButton component={RouterLink} to="/" sx={{ borderRadius: 1.5, py: 1.15 }}>
           <ListItemText primary="← Back to storefront" primaryTypographyProps={{ variant: 'body2', color: 'text.secondary' }} />
@@ -110,8 +116,35 @@ export function AdminLayout() {
   )
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100dvh' }}>
+    <Box sx={{ display: 'flex', minHeight: '100dvh', position: 'relative' }}>
       <CssBaseline />
+      <Box
+        component="a"
+        href="#main-content"
+        sx={{
+          position: 'absolute',
+          left: -9999,
+          top: 0,
+          zIndex: 9999,
+          px: 2,
+          py: 1,
+          bgcolor: 'primary.main',
+          color: 'primary.contrastText',
+          textDecoration: 'none',
+          borderRadius: 1,
+          fontWeight: 700,
+          fontSize: '0.875rem',
+          '&:focus': {
+            left: 8,
+            top: 8,
+            outline: '2px solid',
+            outlineColor: 'primary.light',
+          },
+        }}
+        className="skip-link"
+      >
+        Skip to content
+      </Box>
       <AppBar
         position="fixed"
         sx={{
@@ -145,6 +178,7 @@ export function AdminLayout() {
           open={mobileOpen}
           onClose={() => setMobileOpen(false)}
           ModalProps={{ keepMounted: true }}
+          aria-label="Admin navigation"
           sx={{
             display: { xs: 'block', md: 'none' },
             '& .MuiDrawer-paper': drawerPaperSx,
@@ -154,6 +188,7 @@ export function AdminLayout() {
         </Drawer>
         <Drawer
           variant="permanent"
+          aria-label="Admin navigation"
           sx={{
             display: { xs: 'none', md: 'block' },
             '& .MuiDrawer-paper': drawerPaperSx,
@@ -164,7 +199,9 @@ export function AdminLayout() {
         </Drawer>
       </Box>
       <Box
+        id="main-content"
         component="main"
+        tabIndex={-1}
         sx={{
           flexGrow: 1,
           p: { xs: 2, sm: 3 },

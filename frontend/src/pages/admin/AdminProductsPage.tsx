@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InventoryPolicy } from '../../types/catalogue'
 import {
   Alert,
@@ -98,7 +98,7 @@ export function AdminProductsPage() {
   const [grossWeightCreate, setGrossWeightCreate] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [editProduct, setEditProduct] = useState<
-    Record<string, { name: string; slug: string; description: string; isActive: boolean; categoryId: string }>
+    Record<string, { name: string; slug: string; description: string; isActive: boolean; categoryId: string; containsAlcohol: boolean }>
   >({})
   const [editVariant, setEditVariant] = useState<
     Record<
@@ -133,13 +133,16 @@ export function AdminProductsPage() {
   const [bulkCsvOk, setBulkCsvOk] = useState<string | null>(null)
   const [bulkCsvParseErrors, setBulkCsvParseErrors] = useState<CsvParseErr[]>([])
   const [bulkCsvRowErrors, setBulkCsvRowErrors] = useState<CsvRowErr[]>([])
+  const bulkZipFileRef = useRef<HTMLInputElement | null>(null)
+  const [bulkZipBusy, setBulkZipBusy] = useState(false)
+  const [bulkZipOk, setBulkZipOk] = useState<string | null>(null)
 
   const createDiscountPreview = useMemo(
     () => adminDiscountPreview(priceCents, compareAtCreate, 'NAD'),
     [priceCents, compareAtCreate],
   )
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null)
     try {
       const [res, catRes] = await Promise.all([
@@ -163,6 +166,7 @@ export function AdminProductsPage() {
           description: p.description,
           isActive: p.isActive !== false,
           categoryId: p.categoryId || '',
+          containsAlcohol: p.containsAlcohol === true,
         }
         for (const v of p.variants) {
           nextEv[v.id] = {
@@ -189,16 +193,22 @@ export function AdminProductsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     }
-  }
-
-  useEffect(() => {
-    void load()
   }, [])
 
   useEffect(() => {
-    if (editingProductId && !items.some((x) => x.id === editingProductId)) {
-      setEditingProductId(null)
-    }
+    const t = window.setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (editingProductId && !items.some((x) => x.id === editingProductId)) {
+        setEditingProductId(null)
+      }
+    }, 0)
+    return () => clearTimeout(t)
   }, [items, editingProductId])
 
   const filteredCatalogue = useMemo(() => {
@@ -218,10 +228,13 @@ export function AdminProductsPage() {
   }, [filteredCatalogue, tablePage, rowsPerPage])
 
   useEffect(() => {
-    setTablePage((p) => {
-      const maxPage = Math.max(0, Math.ceil(filteredCatalogue.length / rowsPerPage) - 1)
-      return Math.min(p, maxPage)
-    })
+    const t = window.setTimeout(() => {
+      setTablePage((p) => {
+        const maxPage = Math.max(0, Math.ceil(filteredCatalogue.length / rowsPerPage) - 1)
+        return Math.min(p, maxPage)
+      })
+    }, 0)
+    return () => clearTimeout(t)
   }, [filteredCatalogue.length, rowsPerPage])
 
   const editingProduct = editingProductId ? (items.find((x) => x.id === editingProductId) ?? null) : null
@@ -252,32 +265,32 @@ export function AdminProductsPage() {
   async function createProduct() {
     setError(null)
     const slugR = parseProductSlug(slug, 'slug')
-    if (!slugR.ok) {
+    if (slugR.ok === false) {
       setError(slugR.message)
       return
     }
     const nameR = parseProductName(name, 'name')
-    if (!nameR.ok) {
+    if (nameR.ok === false) {
       setError(nameR.message)
       return
     }
     const skuR = parseSku(sku, 'sku')
-    if (!skuR.ok) {
+    if (skuR.ok === false) {
       setError(skuR.message)
       return
     }
     const imgR = parseOptionalCatalogImageUrl(imageUrl.trim() || null, 'imageUrl')
-    if (!imgR.ok) {
+    if (imgR.ok === false) {
       setError(imgR.message)
       return
     }
     const priceR = parseNonNegativeIntCents(priceCents, 'priceCents')
-    if (!priceR.ok) {
+    if (priceR.ok === false) {
       setError(priceR.message)
       return
     }
     const stockR = parseNonNegativeInt(initialStock, 'initialStock')
-    if (!stockR.ok) {
+    if (stockR.ok === false) {
       setError(stockR.message)
       return
     }
@@ -439,6 +452,52 @@ export function AdminProductsPage() {
     }
   }
 
+  async function submitBulkZipImport(dryRun: boolean) {
+    setError(null)
+    setBulkZipOk(null)
+    const file = bulkZipFileRef.current?.files?.[0]
+    if (!file) {
+      setError('Choose a ZIP of images named by SKU (e.g. SKU-001.jpg).')
+      return
+    }
+    setBulkZipBusy(true)
+    try {
+      await fetchCsrfToken()
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await apiFetch(`/api/admin/products/import-images-zip${dryRun ? '?dryRun=1' : ''}`, {
+        method: 'POST',
+        body: fd,
+      })
+      if (!res.ok) {
+        setError((await res.text()).trim().slice(0, 400) || `ZIP import failed (${res.status})`)
+        return
+      }
+      const data = (await res.json()) as {
+        dryRun?: boolean
+        skus?: { sku: string; placeholderUrl: string }[]
+        warnings?: string[]
+        linked?: number
+        missingSkus?: string[]
+        skippedScope?: string[]
+      }
+      if (data.dryRun) {
+        const n = data.skus?.length ?? 0
+        const w = (data.warnings ?? []).slice(0, 8).join(' · ')
+        setBulkZipOk(`Dry run: ${n} SKU image(s) found in ZIP.${w ? ` Warnings: ${w}` : ''}`)
+        return
+      }
+      setBulkZipOk(
+        `Linked ${data.linked ?? 0} image(s). Missing SKUs: ${(data.missingSkus ?? []).length}. Skipped (scope): ${(data.skippedScope ?? []).length}.`,
+      )
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'ZIP import failed')
+    } finally {
+      setBulkZipBusy(false)
+    }
+  }
+
   async function saveProduct(productId: string) {
     setError(null)
     const e = editProduct[productId]
@@ -453,6 +512,7 @@ export function AdminProductsPage() {
           slug: e.slug,
           description: e.description,
           isActive: e.isActive,
+          containsAlcohol: e.containsAlcohol,
           categoryId: e.categoryId.trim() ? e.categoryId.trim() : null,
         }),
       })
@@ -577,6 +637,7 @@ export function AdminProductsPage() {
         description: p.description,
         isActive: p.isActive !== false,
         categoryId: p.categoryId || '',
+        containsAlcohol: p.containsAlcohol === true,
       } as const)
     const v0 = p.variants[0]
     return (
@@ -665,6 +726,20 @@ export function AdminProductsPage() {
                 />
               }
               label="Visible in storefront"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={ep?.containsAlcohol ?? false}
+                  onChange={(ev) =>
+                    setEditProduct((m) => ({
+                      ...m,
+                      [p.id]: { ...(m[p.id] ?? draft), containsAlcohol: ev.target.checked },
+                    }))
+                  }
+                />
+              }
+              label="Age-restricted (alcohol)"
             />
             <Button size="small" variant="outlined" onClick={() => void saveProduct(p.id)} sx={{ alignSelf: 'flex-start' }}>
               Save product details
@@ -1131,6 +1206,33 @@ export function AdminProductsPage() {
                   </Typography>
                 ))}
               </Stack>
+            </Alert>
+          ) : null}
+        </Paper>
+
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+            Bulk images (ZIP)
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }} maxWidth={920}>
+            ZIP entries must be named <Box component="span" sx={{ fontFamily: 'monospace' }}>SKU.ext</Box> (image extension). Each file is
+            stored under uploads and linked as a gallery image on the variant with that SKU. Use Dry run first to validate filenames.
+          </Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }} flexWrap="wrap" useFlexGap>
+            <input ref={bulkZipFileRef} type="file" accept=".zip,application/zip" hidden onChange={() => setBulkZipOk(null)} />
+            <Button variant="outlined" onClick={() => bulkZipFileRef.current?.click()}>
+              Choose ZIP…
+            </Button>
+            <Button variant="outlined" disabled={bulkZipBusy} onClick={() => void submitBulkZipImport(true)}>
+              Dry run
+            </Button>
+            <Button variant="contained" disabled={bulkZipBusy} onClick={() => void submitBulkZipImport(false)}>
+              {bulkZipBusy ? 'Working…' : 'Import images'}
+            </Button>
+          </Stack>
+          {bulkZipOk ? (
+            <Alert severity="success" sx={{ mt: 1.5 }}>
+              {bulkZipOk}
             </Alert>
           ) : null}
         </Paper>

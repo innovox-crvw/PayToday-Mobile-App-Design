@@ -68,6 +68,9 @@ const STATIC_POPULAR_BRANDS: Brand[] = [
 /** Fixed window for `/api/storefront/popular-stores` (UI no longer exposes range controls). */
 const POPULAR_STORES_RANK_WINDOW_DAYS = 30
 
+/** Matches backend super-deals cap when falling back to `/api/products`. */
+const SUPER_DEALS_FALLBACK_CAP = 72
+
 function hubLogoHue(name: string): string {
   let h = 0
   for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0
@@ -89,11 +92,8 @@ function hasDeal(p: ProductDto): boolean {
 }
 
 function selectHomeDealProducts(items: ProductDto[], cap: number): ProductDto[] {
-  const deals = items.filter(hasDeal)
-  const sorted = [...deals].sort((a, b) => dealScore(b) - dealScore(a))
-  if (sorted.length >= cap) return sorted.slice(0, cap)
-  const filler = items.filter((p) => !hasDeal(p))
-  return [...sorted, ...filler].slice(0, cap)
+  const sorted = [...items.filter(hasDeal)].sort((a, b) => dealScore(b) - dealScore(a))
+  return sorted.slice(0, cap)
 }
 
 function railPriceLabel(p: ProductDto): string {
@@ -272,6 +272,7 @@ export function StoreHomePage() {
   const [popularLoading, setPopularLoading] = useState(true)
   const [dealProducts, setDealProducts] = useState<ProductDto[]>([])
   const [dealsLoading, setDealsLoading] = useState(true)
+  const [dealsReady, setDealsReady] = useState(false)
   const [airtimeItems, setAirtimeItems] = useState<HubPaymentCategoryItemDto[]>([])
   const [voucherItems, setVoucherItems] = useState<HubPaymentCategoryItemDto[]>([])
   const [hubAirtimeLoading, setHubAirtimeLoading] = useState(true)
@@ -311,14 +312,21 @@ export function StoreHomePage() {
   }, [promotions, pathPrefix, shop])
 
   useEffect(() => {
-    setHeroIndex(0)
+    const t = window.setTimeout(() => {
+      setHeroIndex(0)
+    }, 0)
+    return () => clearTimeout(t)
   }, [heroSlides.length])
 
   const onShopRoute = /\/shop\/?$/.test(pathname) || pathname.endsWith('/shop')
   useEffect(() => {
     if (!onShopRoute) return
     const sp = new URLSearchParams(locationSearch)
-    setSearch(sp.get('q') ?? '')
+    const q = sp.get('q') ?? ''
+    const t = window.setTimeout(() => {
+      setSearch(q)
+    }, 0)
+    return () => clearTimeout(t)
   }, [onShopRoute, locationSearch])
 
   const nHero = heroSlides.length
@@ -435,18 +443,31 @@ export function StoreHomePage() {
     ;(async () => {
       setDealsLoading(true)
       try {
-        const res = await fetch(apiUrl('/api/products?sort=price_asc&includeImages=1'))
-        if (!res.ok) {
-          if (!cancelled) setDealProducts([])
-          return
+        async function loadFallback(): Promise<ProductDto[]> {
+          const r2 = await fetch(apiUrl('/api/products?sort=price_asc&includeImages=1'), { credentials: 'include' })
+          if (!r2.ok) return []
+          const d2 = (await r2.json()) as ProductListResponse
+          return selectHomeDealProducts(d2.items ?? [], SUPER_DEALS_FALLBACK_CAP)
         }
-        const data = (await res.json()) as ProductListResponse
+
+        const res = await fetch(apiUrl('/api/storefront/super-deals'), { credentials: 'include' })
+        let items: ProductDto[] = []
+        if (res.ok) {
+          const data = (await res.json()) as { items?: ProductDto[] }
+          items = Array.isArray(data.items) ? data.items : []
+        }
         if (cancelled) return
-        setDealProducts(selectHomeDealProducts(data.items ?? [], 12))
+        if (items.length === 0) {
+          items = await loadFallback()
+        }
+        if (!cancelled) setDealProducts(items)
       } catch {
         if (!cancelled) setDealProducts([])
       } finally {
-        if (!cancelled) setDealsLoading(false)
+        if (!cancelled) {
+          setDealsLoading(false)
+          setDealsReady(true)
+        }
       }
     })()
     return () => {
@@ -998,14 +1019,14 @@ export function StoreHomePage() {
           </Box>
         </SurfaceSection>
 
-        {dealsLoading || dealProducts.length > 0 ? (
+        {dealsLoading || dealsReady ? (
           <SurfaceSection title="Super deals" titleSx={sectionTitleSx} action={viewMoreAction(dealsViewMoreTo)}>
             <Box sx={homeSectionOnCanvasSx}>
               {dealsLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
                   <CircularProgress size={28} aria-label="Loading deals" />
                 </Box>
-              ) : (
+              ) : dealProducts.length > 0 ? (
                 <Box
                   role="region"
                   aria-label="Deal products — swipe to scroll"
@@ -1020,6 +1041,13 @@ export function StoreHomePage() {
                     />
                   ))}
                 </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ px: 0.5, py: 0.5 }}>
+                  No sale items with compare-at pricing to show yet.{' '}
+                  <Box component={RouterLink} to={shop} sx={{ fontWeight: 700, color: 'primary.main' }}>
+                    Browse the shop
+                  </Box>
+                </Typography>
               )}
             </Box>
           </SurfaceSection>

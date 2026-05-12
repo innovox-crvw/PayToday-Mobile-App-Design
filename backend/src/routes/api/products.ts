@@ -2,6 +2,7 @@ import { Router, type Response } from 'express'
 import { env } from '../../config/env.js'
 import { getLastSqlConnectError, getSqlPool } from '../../db/pool.js'
 import { listProducts, getProductBySlug, type ListProductsOptions } from '../../repos/productsRepo.js'
+import { sessionIsAdultForLiquor } from '../../services/liquorAgeService.js'
 
 export const productsRouter = Router()
 
@@ -43,14 +44,25 @@ productsRouter.get('/', async (req, res) => {
     return noDatabaseResponse(res, false)
   }
   try {
-    const items = await listProducts(pool, listOpts)
+    let items = await listProducts(pool, listOpts)
+    if (env.liquorGatingEnabled) {
+      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
+      if (!adult) {
+        items = items.filter((p) => !p.containsAlcohol)
+      }
+    }
     res.json({ source: 'database', items })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[products] listProducts failed:', msg)
+    const hint =
+      /contains_alcohol/i.test(msg) || /merchant_operating_hours/i.test(msg)
+        ? 'Run pending SQL migrations: from the backend folder, `npm run db:migrate` (uses SQL_CONNECTION_STRING). Or execute the matching files under backend/migrations/ in SSMS (e.g. 053 for products.contains_alcohol).'
+        : undefined
     res.status(503).json({
       error: 'Could not load products from the database. Check tables, permissions, and connection string.',
       detail: process.env.NODE_ENV === 'development' ? msg : undefined,
+      ...(hint ? { hint } : {}),
       source: 'database',
       items: [],
     })
@@ -68,13 +80,25 @@ productsRouter.get('/:slug', async (req, res) => {
       res.status(404).json({ error: 'Not found' })
       return
     }
+    if (env.liquorGatingEnabled && p.containsAlcohol) {
+      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
+      if (!adult) {
+        res.status(403).json({ error: 'Age-restricted product', code: 'liquor_restricted' })
+        return
+      }
+    }
     res.json(p)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[products] getProductBySlug failed:', msg)
+    const hint =
+      /contains_alcohol/i.test(msg) || /merchant_operating_hours/i.test(msg)
+        ? 'Run pending SQL migrations: from the backend folder, `npm run db:migrate`, or apply backend/migrations/053_merchant_hours_and_alcohol_flag.sql in SSMS.'
+        : undefined
     res.status(503).json({
       error: 'Could not load product from the database.',
       detail: process.env.NODE_ENV === 'development' ? msg : undefined,
+      ...(hint ? { hint } : {}),
     })
   }
 })

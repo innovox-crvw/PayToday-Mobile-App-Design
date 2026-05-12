@@ -34,6 +34,15 @@ export interface StorefrontConfig {
   scanApiConfigured: boolean
   /** When true, the API rejects guest checkout (`CHECKOUT_REQUIRE_SIGN_IN`). */
   checkoutRequireSignIn?: boolean
+  liquorGatingEnabled?: boolean
+  yangoEnabled?: boolean
+}
+
+/** Populated on `GET /api/cart?preview=1` when the database cart is used. */
+export interface LiquorCheckoutPreview {
+  hasAlcohol: boolean
+  outsideLiquorSellingWindow: boolean
+  requiresDeliveryTime: boolean
 }
 
 export interface CartTotalsPreview {

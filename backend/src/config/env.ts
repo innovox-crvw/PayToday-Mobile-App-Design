@@ -129,6 +129,13 @@ export const env = {
   paytodayForgotPasswordUrl: (process.env.PAYTODAY_FORGOT_PASSWORD_URL ?? '').trim(),
   /** When true, `POST /api/checkout` requires `req.user` (no guest checkout). */
   checkoutRequireSignIn: parseEnvBool(process.env.CHECKOUT_REQUIRE_SIGN_IN, false),
+  /** When false, skip liquor age checks and alcohol hiding on catalogue APIs (dev / migration). */
+  liquorGatingEnabled: parseEnvBool(process.env.LIQUOR_GATING_ENABLED, true),
+  /** When true and Yango env is set, attempt courier dispatch after payment for home delivery. */
+  yangoEnabled: parseEnvBool(process.env.YANGO_ENABLED, false),
+  yangoApiBaseUrl: (process.env.YANGO_API_BASE_URL ?? '').trim().replace(/\/$/u, ''),
+  yangoApiKey: (process.env.YANGO_API_KEY ?? '').trim(),
+  yangoWebhookSecret: (process.env.YANGO_WEBHOOK_SECRET ?? '').trim(),
   /** Public browser origin for SPA after payment (no trailing slash). */
   publicStoreUrl: (process.env.PUBLIC_STORE_URL ?? 'http://localhost:5173').replace(/\/$/u, ''),
   /** API origin for PayToday returnUrl (browser hits API first, then redirect to SPA). */

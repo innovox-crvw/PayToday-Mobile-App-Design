@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Response } from 'express'
 import multer, { MulterError } from 'multer'
@@ -26,6 +28,11 @@ import {
   updateVariantAdmin,
 } from '../../repos/productsRepo.js'
 import { applyProductBulkCsvImport } from '../../services/productBulkCsvImport.js'
+import {
+  buildSkuImageUrlMapFromZipFile,
+  listZipSkuImageKeys,
+  BULK_IMPORT_IMAGES_ZIP_MAX_BYTES,
+} from '../../services/bulkImportZipSkuImages.js'
 import {
   parseCatalogImageUrl,
   parseCurrencyCode,
@@ -125,6 +132,14 @@ const productImageMulter = multer({
     }
     cb(null, true)
   },
+})
+
+const zipImportMulter = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+    filename: (_req, _file, cb) => cb(null, `sku-zip-${randomUUID()}.zip`),
+  }),
+  limits: { fileSize: BULK_IMPORT_IMAGES_ZIP_MAX_BYTES },
 })
 
 /** Multipart image upload → public URL under `/api/uploads/products/`. */
@@ -370,6 +385,80 @@ adminProductsRouter.post('/import-csv', async (req, res) => {
   }
 })
 
+adminProductsRouter.post('/import-images-zip', (req, res) => {
+  zipImportMulter.single('file')(req, res, async (err: unknown) => {
+    if (err instanceof MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      res.status(400).json({ error: `ZIP too large (max ${BULK_IMPORT_IMAGES_ZIP_MAX_BYTES} bytes).` })
+      return
+    }
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Upload failed' })
+      return
+    }
+    const pool = await getSqlPool()
+    if (!pool) {
+      res.status(503).json({ error: 'Database not configured' })
+      return
+    }
+    const f = req.file
+    if (!f?.path) {
+      res.status(400).json({ error: 'Missing file field "file"' })
+      return
+    }
+    const zipPath = f.path
+    const dry =
+      String(req.query.dryRun ?? '').trim() === '1' || String(req.query.dryRun ?? '').toLowerCase() === 'true'
+    const { scope } = await resolveAdminMerchantScopeFromRequest(pool, req)
+    try {
+      if (dry) {
+        const { skuToPlaceholderUrl, warnings } = await listZipSkuImageKeys(zipPath)
+        res.json({
+          dryRun: true,
+          skus: [...skuToPlaceholderUrl.entries()].map(([sku, placeholderUrl]) => ({ sku, placeholderUrl })),
+          warnings,
+        })
+        return
+      }
+      const { skuToPublicUrl, warnings } = await buildSkuImageUrlMapFromZipFile(zipPath, env.productImageUploadDir)
+      let linked = 0
+      const missingSkus: string[] = []
+      const skippedScope: string[] = []
+      for (const [skuNorm, url] of skuToPublicUrl) {
+        const r = await pool.request().input('sku', skuNorm).query<{ productId: string; variantId: string }>(`
+          SELECT CAST(p.id AS NVARCHAR(36)) AS productId, CAST(v.id AS NVARCHAR(36)) AS variantId
+          FROM dbo.product_variants v
+          INNER JOIN dbo.products p ON p.id = v.product_id
+          WHERE LOWER(LTRIM(RTRIM(v.sku))) = @sku
+        `)
+        const row = r.recordset[0]
+        if (!row) {
+          missingSkus.push(skuNorm)
+          continue
+        }
+        if (scope?.length) {
+          const lu = await lookupProductPayTodayMerchantId(pool, row.productId)
+          if (
+            lu.ok &&
+            lu.exists &&
+            lu.payTodayMerchantId != null &&
+            !isPayTodayMerchantIdAllowedForScope(scope, lu.payTodayMerchantId)
+          ) {
+            skippedScope.push(skuNorm)
+            continue
+          }
+        }
+        await insertProductImage(pool, row.productId, url, 0, row.variantId)
+        linked += 1
+      }
+      res.status(201).json({ ok: true, linked, missingSkus, skippedScope, warnings })
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'ZIP import failed' })
+    } finally {
+      await fsp.unlink(zipPath).catch(() => {})
+    }
+  })
+})
+
 adminProductsRouter.patch('/:productId', async (req, res) => {
   const pool = await getSqlPool()
   if (!pool) {
@@ -422,6 +511,9 @@ adminProductsRouter.patch('/:productId', async (req, res) => {
   }
   if (Object.prototype.hasOwnProperty.call(body, 'categoryId')) {
     patch.categoryId = typeof body.categoryId === 'string' && body.categoryId.trim() ? body.categoryId.trim() : null
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'containsAlcohol')) {
+    patch.containsAlcohol = Boolean(body.containsAlcohol)
   }
   try {
     await updateProductAdmin(pool, productId, patch)

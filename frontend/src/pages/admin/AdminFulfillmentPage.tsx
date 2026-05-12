@@ -11,6 +11,9 @@ interface OrderRow {
   currency: string
   stage: string
   delivery_method: string
+  yango_delivery_id: string | null
+  yango_status: string | null
+  yango_tracking_url: string | null
 }
 
 export function AdminFulfillmentPage() {
@@ -67,6 +70,15 @@ export function AdminFulfillmentPage() {
             <Typography variant="body2" sx={{ minWidth: 260 }}>
               {o.orderId.slice(0, 8)}… · {formatOrderStatusLabel(o.status)} · {o.stage} · {(o.total_cents / 100).toFixed(2)}{' '}
               {o.currency} · {o.delivery_method}
+              {o.yango_delivery_id ? ` · Yango ${o.yango_delivery_id}` : ''}
+              {o.yango_tracking_url ? (
+                <>
+                  {' '}
+                  <a href={o.yango_tracking_url} target="_blank" rel="noreferrer">
+                    Track
+                  </a>
+                </>
+              ) : null}
             </Typography>
             <Button size="small" onClick={() => void setStage(o.orderId, 'picking')}>
               Picking

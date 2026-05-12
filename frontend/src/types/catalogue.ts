@@ -43,6 +43,7 @@ export interface ProductDto {
   images?: ProductImageDto[]
   variants: ProductVariantDto[]
   isActive?: boolean
+  containsAlcohol?: boolean
 }
 
 export interface ProductListResponse {
