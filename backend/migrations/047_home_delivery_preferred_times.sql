@@ -24,33 +24,17 @@ BEGIN
     ALTER TABLE dbo.home_delivery_areas
       ADD CONSTRAINT FK_hda_zone FOREIGN KEY (shipping_zone_id) REFERENCES dbo.shipping_zones (id);
 
-  /* Seed three Windhoek areas matching the SSMS screenshot and shipping_zones seed above. */
+  /* Seed three Windhoek areas.
+     shipping_zone_id is left NULL here because dbo.shipping_zones may not exist yet.
+     A later migration can back-fill the FK once that table is in place. */
   INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
-  SELECT
-    CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
-    N'whk_south_central',
-    N'Klein Windhoek · CBD · Academia',
-    10,
-    z.id
-  FROM dbo.shipping_zones z WHERE z.code = N'whk_south_central';
-
-  INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
-  SELECT
-    CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
-    N'whk_katutura_khomasdal',
-    N'Katutura · Khomasdal',
-    20,
-    z.id
-  FROM dbo.shipping_zones z WHERE z.code = N'whk_katutura_khomasdal';
-
-  INSERT INTO dbo.home_delivery_areas (id, code, display_name, sort_order, shipping_zone_id)
-  SELECT
-    CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
-    N'whk_north_east',
-    N'Olympia · Eros · Pioneers Park',
-    30,
-    z.id
-  FROM dbo.shipping_zones z WHERE z.code = N'whk_north_east';
+  VALUES
+    (CAST(N'A0000001-0001-4000-8000-000000000001' AS UNIQUEIDENTIFIER),
+     N'whk_south_central', N'Klein Windhoek · CBD · Academia', 10, NULL),
+    (CAST(N'A0000001-0002-4000-8000-000000000002' AS UNIQUEIDENTIFIER),
+     N'whk_katutura_khomasdal', N'Katutura · Khomasdal', 20, NULL),
+    (CAST(N'A0000001-0003-4000-8000-000000000003' AS UNIQUEIDENTIFIER),
+     N'whk_north_east', N'Olympia · Eros · Pioneers Park', 30, NULL);
 END;
 GO
 
