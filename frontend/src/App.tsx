@@ -78,16 +78,15 @@ import { OnboardingPermissionsPage } from './pages/onboarding/OnboardingPermissi
 import { OnboardingAddCardFlowPage } from './pages/onboarding/OnboardingAddCardFlowPage'
 import { OnboardingAddBankFlowPage } from './pages/onboarding/OnboardingAddBankFlowPage'
 
-function shopBillPayHref(pathPrefix: string) {
-  const base = pathPrefix ? `${pathPrefix}/shop` : '/shop'
-  return `${base}#shop-bill-pay`
+function storeShopHref(pathPrefix: string) {
+  return pathPrefix ? `${pathPrefix}/shop` : '/shop'
 }
 
-/** `/payments` hub removed — land on Store with bill-pay section. */
+/** `/payments` hub removed — land on Store shop. */
 function PaymentsRootRedirect() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  return <Navigate to={shopBillPayHref(pathPrefix)} replace />
+  return <Navigate to={storeShopHref(pathPrefix)} replace />
 }
 
 /** Old URLs `/payments/category/:slug` → `/payments/:slug` */
@@ -96,7 +95,7 @@ function LegacyPaymentsCategoryRedirect() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const slug = categoryId?.trim() ?? ''
-  if (!slug) return <Navigate to={shopBillPayHref(pathPrefix)} replace />
+  if (!slug) return <Navigate to={storeShopHref(pathPrefix)} replace />
   return <Navigate to={`${pathPrefix}/payments/${slug}`} replace />
 }
 

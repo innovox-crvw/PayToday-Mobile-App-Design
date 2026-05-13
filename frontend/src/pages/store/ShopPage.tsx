@@ -1,17 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useLocation, useSearchParams } from 'react-router-dom'
-import { Alert, Box, Card, CardActionArea, Divider, Stack, Typography } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardActionArea,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Stack,
+  Typography,
+} from '@mui/material'
 import { ProductImage } from '../../components/store/ProductImage'
 import { resolvePromotionDisplayUrl } from '../../lib/promotionImageUrl'
 import Grid from '@mui/material/Grid2'
 import type { ProductDto, ProductListResponse } from '../../types/catalogue'
-import type { StoreCategoryDto, StorePromotionDto } from '../../types/storefront'
+import type { StoreCategoryDto, StorePromotionDto, StorefrontConfig } from '../../types/storefront'
 import { apiUrl, readApiError } from '../../lib/apiOrigin'
+import {
+  liquorBlockedGuestMessage,
+  liquorBlockedMinorMessage,
+  liquorBlockedShortTitle,
+} from '../../lib/liquorRestrictionMessages'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { friendlyFetchError } from '../../lib/fetchErrors'
 import { formatMoney } from '../../lib/money'
 import { storefrontVariantPriceRange } from '../../lib/productStock'
-import { ShopUtilityHubRow } from '../../components/store/ShopUtilityHubRow'
 import { ShopPageSection } from '../../components/store/ShopPageSection'
 import { ShopCatalogStickyBar } from '../../components/store/ShopCatalogStickyBar'
 import { ShopProductCard } from '../../components/store/ShopProductCard'
@@ -29,6 +45,31 @@ function categoryDepth(c: StoreCategoryDto, all: StoreCategoryDto[]): number {
     cur = byId.get(cur)?.parentId ?? undefined
   }
   return d
+}
+
+/** True when the URL category slug matches a configured root or sits under it in `categories`. */
+function categorySlugTouchesMinorRestrictionRoots(
+  categorySlug: string,
+  categories: StoreCategoryDto[],
+  rootsLower: string[],
+): boolean {
+  if (!categorySlug.trim() || rootsLower.length === 0) return false
+  const slugLower = categorySlug.trim().toLowerCase()
+  const rootSet = new Set(rootsLower)
+  if (rootSet.has(slugLower)) return true
+  const cat = categories.find((c) => c.slug.trim().toLowerCase() === slugLower)
+  if (!cat) return false
+  const byId = new Map(categories.map((c) => [c.id, c]))
+  let cur: StoreCategoryDto | undefined = cat
+  let d = 0
+  while (cur && d < 64) {
+    if (rootSet.has(cur.slug.trim().toLowerCase())) return true
+    const pid = cur.parentId?.trim()
+    if (!pid) break
+    cur = byId.get(pid)
+    d += 1
+  }
+  return false
 }
 
 function resolvePromoHref(linkPath: string | null, pathPrefix: string, shop: string): string {
@@ -59,14 +100,54 @@ export function ShopPage() {
   const [error, setError] = useState<string | null>(null)
   const [sqlWarning, setSqlWarning] = useState<string | null>(null)
   const [catalogTick, setCatalogTick] = useState(0)
+  const [storefront, setStorefront] = useState<StorefrontConfig | null>(null)
+  const [sessionSub, setSessionSub] = useState<string | undefined>(undefined)
+  const [sessionIsAdult, setSessionIsAdult] = useState<boolean | undefined>(undefined)
+  const [ageRestrictedCategoryHidden, setAgeRestrictedCategoryHidden] = useState(false)
+  /** Shown when navigating into a liquor/wine (etc.) category as a non-adult; re-opens when `category` changes. */
+  const [minorRestrictedCategoryDialogOpen, setMinorRestrictedCategoryDialogOpen] = useState(false)
   const productsFetchSeq = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
+        const [cfgRes, meRes] = await Promise.all([
+          fetch(apiUrl('/api/storefront-config'), { credentials: 'include' }),
+          fetch(apiUrl('/api/auth/me'), { credentials: 'include' }),
+        ])
+        if (cancelled) return
+        if (cfgRes.ok) {
+          const cfg = (await cfgRes.json()) as StorefrontConfig
+          setStorefront(cfg)
+        }
+        if (meRes.ok) {
+          const me = (await meRes.json()) as { user?: { sub?: string; isAdult?: boolean } }
+          setSessionSub(me.user?.sub)
+          setSessionIsAdult(me.user?.isAdult)
+        } else {
+          setSessionSub(undefined)
+          setSessionIsAdult(undefined)
+        }
+      } catch {
+        if (!cancelled) {
+          setStorefront(null)
+          setSessionSub(undefined)
+          setSessionIsAdult(undefined)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
         const [cRes, pRes] = await Promise.all([
-          fetch(apiUrl('/api/categories')),
+          fetch(apiUrl('/api/categories?onlyWithProducts=1'), { credentials: 'include' }),
           fetch(apiUrl('/api/promotions')),
         ])
         if (cancelled) return
@@ -96,12 +177,13 @@ export function ShopPage() {
         if (q.trim()) params.set('q', q.trim())
         if (categorySlug.trim()) params.set('category', categorySlug.trim())
         if (sort && sort !== 'name') params.set('sort', sort)
-        const res = await fetch(apiUrl(`/api/products?${params.toString()}`))
+        const res = await fetch(apiUrl(`/api/products?${params.toString()}`), { credentials: 'include' })
         if (seq !== productsFetchSeq.current) return
         if (!res.ok) throw new Error(await readApiError(res))
         const data = (await res.json()) as ProductListResponse
         if (seq !== productsFetchSeq.current) return
         setItems(data.items ?? [])
+        setAgeRestrictedCategoryHidden(Boolean(data.ageRestrictedCategoryHidden))
         if (data.catalogFallbackReason === 'sql_unreachable') {
           const parts = [
             'SQL is configured but the API cannot connect — showing cached catalogue data only. Open http://localhost:4000/api/health for details.',
@@ -116,6 +198,7 @@ export function ShopPage() {
         if (seq !== productsFetchSeq.current) return
         if (e instanceof Error && e.name === 'AbortError') return
         setSqlWarning(null)
+        setAgeRestrictedCategoryHidden(false)
         setError(friendlyFetchError(e))
       }
     })()
@@ -173,6 +256,50 @@ export function ShopPage() {
 
   const activeStoreMeta = useMemo(() => (storeSlug ? getDemoStoreBySlug(storeSlug) : null), [storeSlug])
 
+  const minorRestrictionRootsLower = useMemo(
+    () =>
+      (storefront?.minorRestrictedCategorySlugs ?? [])
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    [storefront?.minorRestrictedCategorySlugs],
+  )
+
+  const categoryTouchesMinorRestriction = useMemo(
+    () =>
+      categorySlugTouchesMinorRestrictionRoots(categorySlug, sortedCategories, minorRestrictionRootsLower),
+    [categorySlug, sortedCategories, minorRestrictionRootsLower],
+  )
+
+  const showMinorRestrictedCategoryDialog = Boolean(
+    storefront?.liquorGatingEnabled && sessionIsAdult !== true && categoryTouchesMinorRestriction,
+  )
+
+  useEffect(() => {
+    if (!showMinorRestrictedCategoryDialog) {
+      setMinorRestrictedCategoryDialogOpen(false)
+      return
+    }
+    // Open on each navigation into a restricted category (slug change), not once per browser session.
+    setMinorRestrictedCategoryDialogOpen(true)
+  }, [categorySlug, showMinorRestrictedCategoryDialog])
+
+  const showLiquorCategoryWarning = useMemo(() => {
+    if (!storefront?.liquorGatingEnabled) return false
+    if (!categorySlug.trim()) return false
+    return ageRestrictedCategoryHidden
+  }, [storefront?.liquorGatingEnabled, categorySlug, ageRestrictedCategoryHidden])
+
+  const liquorShopMessage = useMemo(() => {
+    if (sessionSub && sessionIsAdult === false) return liquorBlockedMinorMessage()
+    return liquorBlockedGuestMessage()
+  }, [sessionSub, sessionIsAdult])
+
+  const minorRestrictedCategoryDialogBody = useMemo(() => {
+    const base =
+      sessionSub && sessionIsAdult === false ? liquorBlockedMinorMessage() : liquorBlockedGuestMessage()
+    return `${base} Liquor and wine categories follow the same rules as other alcoholic products.`
+  }, [sessionSub, sessionIsAdult])
+
   if (error) {
     return (
       <Typography color="error" role="alert">
@@ -202,25 +329,9 @@ export function ShopPage() {
             Shop
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Scroll shortcuts for bills, then filter and browse products — tuned for quick discovery.
+            Filter by category or store, search the catalogue, and browse products — tuned for quick discovery.
           </Typography>
         </Stack>
-
-        <ShopPageSection
-          anchorId="shop-bill-pay"
-          accent="primary"
-          title="Instant pay"
-          subtitle="Tap an icon to open that bill-pay category."
-          paperSx={{
-            ...sectionPaperSx,
-            borderLeft: `3px solid ${SHOP_V2.accent}`,
-            bgcolor: 'background.paper',
-          }}
-        >
-          <ShopUtilityHubRow />
-        </ShopPageSection>
-
-        <Divider sx={{ borderColor: 'divider' }} />
 
         <ShopPageSection
           anchorId="shop-products"
@@ -320,6 +431,63 @@ export function ShopPage() {
               onCategory={setCategory}
               categoryChips={categoryChips}
             />
+
+            {showLiquorCategoryWarning ? (
+              <Alert severity="warning" role="alert" sx={{ borderRadius: SHOP_V2.radius }}>
+                <Typography variant="subtitle2" fontWeight={800} gutterBottom>
+                  {liquorBlockedShortTitle()}
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 1.5, lineHeight: 1.45 }}>
+                  {liquorShopMessage}
+                </Typography>
+                <Button
+                  component={RouterLink}
+                  to={pathPrefix ? `${pathPrefix}/profile` : '/profile'}
+                  variant="contained"
+                  size="small"
+                  sx={{ fontWeight: 800 }}
+                >
+                  My account
+                </Button>
+              </Alert>
+            ) : null}
+
+            <Dialog
+              open={minorRestrictedCategoryDialogOpen && showMinorRestrictedCategoryDialog}
+              onClose={() => setMinorRestrictedCategoryDialogOpen(false)}
+              fullWidth
+              maxWidth="sm"
+              aria-labelledby="minor-restricted-category-dialog-title"
+            >
+              <DialogTitle id="minor-restricted-category-dialog-title" sx={{ fontWeight: 800 }}>
+                Liquor and wine — age restricted
+              </DialogTitle>
+              <DialogContent>
+                <Typography variant="body2" sx={{ lineHeight: 1.5 }}>
+                  {minorRestrictedCategoryDialogBody}
+                </Typography>
+              </DialogContent>
+              <DialogActions sx={{ px: 3, pb: 2, gap: 1, flexWrap: 'wrap' }}>
+                <Button
+                  component={RouterLink}
+                  to={pathPrefix ? `${pathPrefix}/profile` : '/profile'}
+                  variant="outlined"
+                  size="small"
+                  sx={{ fontWeight: 700 }}
+                  onClick={() => setMinorRestrictedCategoryDialogOpen(false)}
+                >
+                  My account
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  sx={{ fontWeight: 800 }}
+                  onClick={() => setMinorRestrictedCategoryDialogOpen(false)}
+                >
+                  OK
+                </Button>
+              </DialogActions>
+            </Dialog>
 
             {displayItems.length === 0 && items.length > 0 && storeSlug ? (
               <Typography color="text.secondary">

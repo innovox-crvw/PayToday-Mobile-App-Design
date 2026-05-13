@@ -542,7 +542,7 @@ export function HubPaymentDemoFlowPage({ variant }: Props) {
 
   if (variant === 'payments' && (!categoryId || !itemId)) {
     const shop = pathPrefix ? `${pathPrefix}/shop` : '/shop'
-    return <Navigate to={`${shop}#shop-bill-pay`} replace />
+    return <Navigate to={shop} replace />
   }
 
   const displayPayee = effectivePayee
