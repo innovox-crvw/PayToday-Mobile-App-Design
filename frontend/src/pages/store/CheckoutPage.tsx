@@ -108,6 +108,19 @@ function splitGuestFullName(full: string): { first: string; last: string } {
 
 const STEP_LABELS = ['Delivery method', 'Address or pickup', 'Time window', 'Contact & payment']
 
+const instantPayLogoSrc = `${import.meta.env.BASE_URL}instant-pay-logo.svg`
+const avoTodayBrandLogoSrc = `${import.meta.env.BASE_URL}brand-logo.png`
+
+const checkoutPaymentMarkSx = {
+  width: 40,
+  height: 40,
+  flexShrink: 0,
+  objectFit: 'contain' as const,
+  display: 'block',
+}
+
+type CheckoutPaymentMethod = 'paytoday' | 'instant_pay' | 'demo_wallet'
+
 type CheckoutDeliveryMethod = 'home' | 'yango_delivery' | 'store_pickup' | 'deposit_box'
 
 function isCheckoutHomeLike(d: CheckoutDeliveryMethod): boolean {
@@ -160,7 +173,7 @@ export function CheckoutPage() {
   const [storefront, setStorefront] = useState<StorefrontConfig | null>(null)
   const [storefrontConfigReady, setStorefrontConfigReady] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [paymentMethod, setPaymentMethod] = useState<'paytoday' | 'demo_wallet'>('paytoday')
+  const [paymentMethod, setPaymentMethod] = useState<CheckoutPaymentMethod>('paytoday')
   const [walletBalanceCents, setWalletBalanceCents] = useState<number | null>(null)
   const [walletDemoAvailable, setWalletDemoAvailable] = useState(true)
   const [deliveryScheduledFor, setDeliveryScheduledFor] = useState('')
@@ -656,7 +669,7 @@ export function CheckoutPage() {
     }
     if (!user?.sub) {
       const ge = parseEmailString(guestEmail, 'guestEmail')
-      if (!ge.ok) {
+      if (ge.ok === false) {
         setGuestEmailErr(ge.message)
         setMsg(ge.message)
         return
@@ -1598,23 +1611,63 @@ export function CheckoutPage() {
               <RadioGroup
                 aria-labelledby="pay-method-label"
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as 'paytoday' | 'demo_wallet')}
+                onChange={(e) => setPaymentMethod(e.target.value as CheckoutPaymentMethod)}
               >
-                <FormControlLabel value="paytoday" control={<Radio />} label={`${APP_DISPLAY_NAME} (hosted checkout)`} disabled={submitting} />
+                <FormControlLabel
+                  value="paytoday"
+                  control={<Radio />}
+                  disabled={submitting}
+                  label={
+                    <Stack direction="row" spacing={1.25} alignItems="center" sx={{ py: 0.25 }}>
+                      <Box component="img" src={avoTodayBrandLogoSrc} alt="" sx={checkoutPaymentMarkSx} />
+                      <Stack spacing={0.25}>
+                        <Typography component="span" fontWeight={700}>
+                          {`${APP_DISPLAY_NAME} (hosted checkout)`}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" component="span">
+                          Pay on the secure {APP_DISPLAY_NAME} payment page.
+                        </Typography>
+                      </Stack>
+                    </Stack>
+                  }
+                />
+                <FormControlLabel
+                  value="instant_pay"
+                  control={<Radio />}
+                  disabled={submitting}
+                  label={
+                    <Stack direction="row" spacing={1.25} alignItems="center" sx={{ py: 0.25 }}>
+                      <Box component="img" src={instantPayLogoSrc} alt="" sx={checkoutPaymentMarkSx} />
+                      <Stack spacing={0.25}>
+                        <Typography component="span" fontWeight={700}>
+                          Instant pay
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" component="span">
+                          Secure hosted checkout.
+                        </Typography>
+                      </Stack>
+                    </Stack>
+                  }
+                />
                 <FormControlLabel
                   value="demo_wallet"
                   control={<Radio />}
                   disabled={submitting || !walletDemoAvailable}
                   label={
-                    <Stack spacing={0.25}>
-                      <Typography fontWeight={700}>{APP_WALLET_DISPLAY_NAME}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {walletDemoAvailable
-                          ? walletBalanceCents != null
-                            ? `Available: ${formatNad(walletBalanceCents)} — debited when the order is placed.`
-                            : 'Loading wallet balance…'
-                          : 'Wallet checkout is not available on this database.'}
-                      </Typography>
+                    <Stack direction="row" spacing={1.25} alignItems="center" sx={{ py: 0.25 }}>
+                      <Box component="img" src={avoTodayBrandLogoSrc} alt="" sx={checkoutPaymentMarkSx} />
+                      <Stack spacing={0.25}>
+                        <Typography component="span" fontWeight={700}>
+                          {APP_WALLET_DISPLAY_NAME}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" component="span">
+                          {walletDemoAvailable
+                            ? walletBalanceCents != null
+                              ? `Available: ${formatNad(walletBalanceCents)} — debited when the order is placed.`
+                              : 'Loading wallet balance…'
+                            : 'Wallet checkout is not available on this database.'}
+                        </Typography>
+                      </Stack>
                     </Stack>
                   }
                 />
@@ -1812,7 +1865,9 @@ export function CheckoutPage() {
                             ? `Confirm payment ${formatMoney(totalCents, totalsPreview.currency)}`
                             : paymentMethod === 'demo_wallet' && signedIn
                               ? 'Place order & pay with wallet'
-                              : `Pay with ${APP_DISPLAY_NAME}`}
+                              : paymentMethod === 'instant_pay' && signedIn
+                                ? 'Pay with Instant pay'
+                                : `Pay with ${APP_DISPLAY_NAME}`}
                       </Button>
                     )}
                   </Box>
@@ -2071,7 +2126,9 @@ export function CheckoutPage() {
                 ? 'Processing…'
                 : paymentMethod === 'demo_wallet' && signedIn
                   ? 'Place order & pay with wallet'
-                  : `Pay with ${APP_DISPLAY_NAME}`}
+                  : paymentMethod === 'instant_pay' && signedIn
+                    ? 'Pay with Instant pay'
+                    : `Pay with ${APP_DISPLAY_NAME}`}
             </Button>
           </Paper>
         </Grid>
