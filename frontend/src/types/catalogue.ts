@@ -51,4 +51,6 @@ export interface ProductListResponse {
   items: ProductDto[]
   catalogFallbackReason?: 'sql_unreachable'
   sqlConnectHint?: string
+  /** When true, `category` filter refers to a subtree with only alcohol products and the viewer is not age-verified. */
+  ageRestrictedCategoryHidden?: boolean
 }

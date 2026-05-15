@@ -13,7 +13,6 @@ import {
   ListItemText,
   Toolbar,
   Typography,
-  useTheme,
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 import MenuIcon from '@mui/icons-material/Menu'
@@ -34,12 +33,10 @@ const LINKS = [
   { to: '/admin/inventory', label: 'Inventory' },
   { to: '/admin/fulfillment', label: 'Fulfillment' },
   { to: '/admin/deposit-boxes', label: 'Deposit boxes' },
-  { to: '/admin/discounts', label: 'Discount codes' },
-  { to: '/admin/liquor-hours', label: 'Liquor hours' },
+  { to: '/admin/store-hours', label: 'Store hours' },
 ] as const
 
 export function AdminLayout() {
-  const theme = useTheme()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [signOutBusy, setSignOutBusy] = useState(false)
   const { pathname } = useLocation()
@@ -48,8 +45,26 @@ export function AdminLayout() {
   const drawerPaperSx = {
     boxSizing: 'border-box' as const,
     width: DRAWER_WIDTH,
-    borderRight: `1px solid ${theme.palette.divider}`,
-    bgcolor: 'background.paper',
+    borderRight: 'none',
+    bgcolor: '#1a1d24',
+    color: 'grey.100',
+  }
+
+  const navItemSx = {
+    borderRadius: 2,
+    py: 1.15,
+    mb: 0.35,
+    color: 'grey.300',
+    '&:hover': {
+      bgcolor: alpha('#fff', 0.06),
+    },
+    '&.Mui-selected': {
+      bgcolor: 'common.white',
+      color: 'grey.900',
+      '&:hover': {
+        bgcolor: 'common.white',
+      },
+    },
   }
 
   async function signOut() {
@@ -73,12 +88,12 @@ export function AdminLayout() {
         sx={{
           minHeight: { xs: 56, sm: 64 },
           borderBottom: 1,
-          borderColor: 'divider',
+          borderColor: alpha('#fff', 0.1),
           px: 2,
-          background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.08)} 0%, ${alpha(theme.palette.secondary.main, 0.06)} 100%)`,
+          bgcolor: 'transparent',
         }}
       >
-        <Typography variant="h6" fontWeight={800} letterSpacing={-0.25} sx={{ color: 'text.primary' }}>
+        <Typography variant="h6" fontWeight={800} letterSpacing={-0.25} sx={{ color: 'common.white' }}>
           {APP_DISPLAY_NAME} Ops
         </Typography>
       </Toolbar>
@@ -89,27 +104,26 @@ export function AdminLayout() {
             component={RouterLink}
             to={item.to}
             selected={pathname === item.to}
-            sx={{
-              borderRadius: 1.5,
-              py: 1.15,
-              mb: 0.25,
-              '&.Mui-selected': {
-                bgcolor: alpha(theme.palette.primary.main, 0.1),
-              },
-            }}
+            sx={navItemSx}
           >
             <ListItemText primary={item.label} primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }} />
           </ListItemButton>
         ))}
-        <Divider sx={{ my: 1.5 }} />
-        <ListItemButton onClick={() => void signOut()} disabled={signOutBusy} sx={{ borderRadius: 1.5, py: 1.15 }}>
-          <ListItemIcon sx={{ minWidth: 40 }}>
+        <Divider sx={{ my: 1.5, borderColor: alpha('#fff', 0.12) }} />
+        <ListItemButton disabled sx={{ ...navItemSx, opacity: 0.45 }}>
+          <ListItemText primary="Help" primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }} />
+        </ListItemButton>
+        <ListItemButton disabled sx={{ ...navItemSx, opacity: 0.45, mb: 1 }}>
+          <ListItemText primary="Settings" primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }} />
+        </ListItemButton>
+        <ListItemButton onClick={() => void signOut()} disabled={signOutBusy} sx={navItemSx}>
+          <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>
             <LogoutOutlinedIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary={signOutBusy ? 'Signing out…' : 'Sign out'} primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }} />
         </ListItemButton>
-        <ListItemButton component={RouterLink} to="/" sx={{ borderRadius: 1.5, py: 1.15 }}>
-          <ListItemText primary="← Back to storefront" primaryTypographyProps={{ variant: 'body2', color: 'text.secondary' }} />
+        <ListItemButton component={RouterLink} to="/" sx={{ ...navItemSx, color: 'grey.500', '&.Mui-selected': { bgcolor: 'transparent', color: 'grey.400' } }}>
+          <ListItemText primary="← Back to storefront" primaryTypographyProps={{ variant: 'body2' }} />
         </ListItemButton>
       </List>
     </Box>

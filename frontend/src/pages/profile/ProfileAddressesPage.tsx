@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import { Alert, Box, Button, Card, CardContent, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Skeleton, Stack, TextField, Typography } from '@mui/material'
 import LocationOnOutlinedIcon from '@mui/icons-material/LocationOnOutlined'
@@ -8,6 +8,12 @@ import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
+import { AddressMapPicker, type MapZoneMeta } from '../../components/checkout/AddressMapPicker'
+import { approxDemoPinForAddressParts } from '../../lib/yangoDeliveryDemo'
+import { formatMoney } from '../../lib/money'
+
+const mapsApiKey =
+  typeof import.meta.env.VITE_GOOGLE_MAPS_API_KEY === 'string' ? import.meta.env.VITE_GOOGLE_MAPS_API_KEY : undefined
 
 type AddressRow = {
   id: string
@@ -49,6 +55,16 @@ export function ProfileAddressesPage() {
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
+  const [addrZonePreview, setAddrZonePreview] = useState<MapZoneMeta | null>(null)
+
+  const addressMapFocus = useMemo(
+    () => approxDemoPinForAddressParts({ suburb: form.suburb, line1: form.line1, city: form.city }),
+    [form.suburb, form.line1, form.city],
+  )
+
+  useEffect(() => {
+    if (!dialogOpen) setAddrZonePreview(null)
+  }, [dialogOpen])
 
   const load = useCallback(async () => {
     setLoadErr(null)
@@ -323,7 +339,7 @@ export function ProfileAddressesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>{editingId ? 'Edit address' : 'New address'}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5} sx={{ pt: 1 }}>
@@ -340,6 +356,29 @@ export function ProfileAddressesPage() {
             <TextField label="Region / state" value={form.region} onChange={(e) => setForm((f) => ({ ...f, region: e.target.value }))} fullWidth />
             <TextField label="Postal code" value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value }))} fullWidth />
             <TextField label="Country" value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} fullWidth />
+            <Typography variant="subtitle2" fontWeight={800} sx={{ pt: 0.5 }}>
+              Delivery coverage preview
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Static map preview (not Google Maps unless configured). Bands and prices follow active home-delivery areas from
+              the database. Drag the pin to see which zone matches your address text.
+            </Typography>
+            <AddressMapPicker
+              mapsApiKey={mapsApiKey}
+              focusLatLng={addressMapFocus}
+              onZoneMetaChange={setAddrZonePreview}
+            />
+            {addrZonePreview?.zone ? (
+              <Typography variant="caption" color="text.secondary">
+                Selected band: <strong>{addrZonePreview.zone.name}</strong> — illustrative courier from{' '}
+                {formatMoney(addrZonePreview.zone.courierEstimateCents, 'NAD')}. Saving the address does not store this band;
+                choose again at checkout for home delivery.
+              </Typography>
+            ) : addrZonePreview && !addrZonePreview.zone ? (
+              <Typography variant="caption" color="warning.main">
+                Pin is outside the shaded delivery zones — adjust suburb/line 1 or move the pin for a match.
+              </Typography>
+            ) : null}
             <Typography variant="caption" color="text.secondary">
               <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input

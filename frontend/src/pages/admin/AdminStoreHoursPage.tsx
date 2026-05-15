@@ -56,7 +56,7 @@ const DEFAULT_ROWS: HoursRow[] = ISO_DAY_META.map((d) => ({
   is_active: d.iso < 7,
 }))
 
-export function AdminLiquorHoursPage() {
+export function AdminStoreHoursPage() {
   const [merchantId, setMerchantId] = useState('991001')
   const [rows, setRows] = useState<HoursRow[]>(DEFAULT_ROWS)
   const [err, setErr] = useState<string | null>(null)
@@ -68,7 +68,7 @@ export function AdminLiquorHoursPage() {
     setErr(null)
     setOk(null)
     try {
-      const res = await fetch(apiUrl(`/api/admin/merchants/${merchantId.trim()}/liquor-hours`), { credentials: 'include' })
+      const res = await fetch(apiUrl(`/api/admin/merchants/${merchantId.trim()}/store-hours`), { credentials: 'include' })
       const data = await readResponseJson<{ items?: HoursRow[]; error?: string }>(res)
       if (!res.ok) throw new Error(data.error ?? (await res.text()))
       if (data.items?.length) {
@@ -95,7 +95,7 @@ export function AdminLiquorHoursPage() {
     setOk(null)
     try {
       await fetchCsrfToken()
-      const res = await apiFetch(`/api/admin/merchants/${merchantId.trim()}/liquor-hours`, {
+      const res = await apiFetch(`/api/admin/merchants/${merchantId.trim()}/store-hours`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -124,21 +124,22 @@ export function AdminLiquorHoursPage() {
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h5" fontWeight={800} sx={{ mb: 3 }}>
-        Liquor selling hours
+        Store hours
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Times use the store&apos;s local day (Africa/Windhoek at checkout). Days follow ISO: 1 = Monday through 7 = Sunday.
+        Opening hours for the storefront (Africa/Windhoek). When the store is closed, customers can still browse but must
+        schedule pickup or delivery for a time inside these hours. ISO weekdays: 1 = Monday through 7 = Sunday.
       </Typography>
-      {err && (
+      {err ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           {err}
         </Alert>
-      )}
-      {ok && (
+      ) : null}
+      {ok ? (
         <Alert severity="success" sx={{ mb: 2 }}>
           {ok}
         </Alert>
-      )}
+      ) : null}
 
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 3 }}>
         <TextField
@@ -192,7 +193,7 @@ export function AdminLiquorHoursPage() {
                 <TableCell>
                   <FormControlLabel
                     control={<Checkbox checked={r.is_active} onChange={(e) => updateRow(i, { is_active: e.target.checked })} />}
-                    label="Active"
+                    label="Open"
                   />
                 </TableCell>
               </TableRow>

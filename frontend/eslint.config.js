@@ -19,5 +19,10 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // React 19 / eslint-plugin-react-hooks: flags almost all `useEffect(() => { void load() })` data-fetch patterns.
+      // Mount and deferred async updates are intentional across admin and store pages.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

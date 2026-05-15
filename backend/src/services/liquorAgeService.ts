@@ -1,6 +1,7 @@
 import type { ConnectionPool } from 'mssql'
 import { findUserById } from '../repos/usersRepo.js'
 import { env } from '../config/env.js'
+import { cartContainsLiquorGatedItems } from './ageRestrictedCategoryService.js'
 
 export function computeIsAdultFromDob(dob: Date | null | undefined, at: Date = new Date()): boolean {
   if (!dob || !(dob instanceof Date) || Number.isNaN(dob.getTime())) return false
@@ -22,14 +23,7 @@ export async function sessionIsAdultForLiquor(pool: ConnectionPool, jwtSub: stri
 }
 
 export async function cartContainsAlcohol(pool: ConnectionPool, cartId: string): Promise<boolean> {
-  const r = await pool.request().input('cid', cartId).query<{ c: number }>(`
-    SELECT COUNT_BIG(1) AS c
-    FROM dbo.cart_lines cl
-    INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
-    INNER JOIN dbo.products p ON p.id = v.product_id
-    WHERE cl.cart_id = @cid AND ISNULL(p.contains_alcohol, 0) = 1
-  `)
-  return Number(r.recordset[0]?.c ?? 0) > 0
+  return cartContainsLiquorGatedItems(pool, cartId)
 }
 
 export async function assertAdultForAlcoholCart(

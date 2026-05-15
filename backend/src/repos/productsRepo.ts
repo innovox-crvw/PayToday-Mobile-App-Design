@@ -1081,31 +1081,27 @@ function validateVariantDimensionPatch(patch: {
   packageHeightMm?: number | null
   grossWeightG?: number | null
 }): void {
-  const keys: Array<'packageLengthMm' | 'packageWidthMm' | 'packageHeightMm'> = [
-    'packageLengthMm',
-    'packageWidthMm',
-    'packageHeightMm',
-  ]
-  const present = keys.filter((k) => Object.prototype.hasOwnProperty.call(patch, k) && patch[k] !== undefined)
-  if (present.length > 0 && present.length < 3) {
-    throw new Error('packageLengthMm, packageWidthMm, and packageHeightMm must be sent together (or omit all three)')
-  }
-  if (present.length === 3) {
+  const lKey = Object.prototype.hasOwnProperty.call(patch, 'packageLengthMm')
+  const wKey = Object.prototype.hasOwnProperty.call(patch, 'packageWidthMm')
+  const hKey = Object.prototype.hasOwnProperty.call(patch, 'packageHeightMm')
+  if (lKey || wKey || hKey) {
+    if (!lKey || !wKey || !hKey) {
+      throw new Error('packageLengthMm, packageWidthMm, and packageHeightMm must be sent together')
+    }
     const l = patch.packageLengthMm
     const w = patch.packageWidthMm
     const h = patch.packageHeightMm
+    if (l == null || w == null || h == null) {
+      throw new Error('Package length, width, and height (mm) cannot be cleared; send non-negative integers for all three')
+    }
     for (const [label, v] of [
       ['packageLengthMm', l],
       ['packageWidthMm', w],
       ['packageHeightMm', h],
     ] as const) {
-      if (v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0)) {
-        throw new Error(`${label} must be null or a non-negative integer (mm)`)
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        throw new Error(`${label} must be a non-negative integer (mm)`)
       }
-    }
-    const anySet = l != null || w != null || h != null
-    if (anySet && (l == null || w == null || h == null)) {
-      throw new Error('When setting package size, all of packageLengthMm, packageWidthMm, and packageHeightMm are required')
     }
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'grossWeightG') && patch.grossWeightG !== undefined && patch.grossWeightG != null) {
@@ -1352,6 +1348,39 @@ export async function updateVariantAdmin(
 }
 
 const SUPER_DEALS_RAIL_CAP = 72
+
+/**
+ * True when the active category subtree has at least one product and every active product is alcohol.
+ * Used for storefront messaging when liquor gating hides the catalogue for non-adults.
+ */
+export async function isCategorySubtreeAlcoholOnly(pool: ConnectionPool, categorySlug: string): Promise<boolean> {
+  const slug = categorySlug.trim()
+  if (!slug) return false
+  try {
+    const r = await pool.request().input('slug', slug).query<{ v: number }>(`
+      ;WITH cat_subtree AS (
+        SELECT id FROM dbo.categories WHERE slug = @slug AND COALESCE(is_active, 1) = 1
+        UNION ALL
+        SELECT c.id FROM dbo.categories c
+        INNER JOIN cat_subtree t ON c.parent_id = t.id
+        WHERE COALESCE(c.is_active, 1) = 1
+      ),
+      agg AS (
+        SELECT
+          COUNT_BIG(CASE WHEN ISNULL(p.contains_alcohol, 0) = 0 THEN 1 END) AS non_alc,
+          COUNT_BIG(1) AS total
+        FROM dbo.products p
+        WHERE p.is_active = 1 AND p.category_id IN (SELECT id FROM cat_subtree)
+      )
+      SELECT CAST(CASE WHEN total > 0 AND non_alc = 0 THEN 1 ELSE 0 END AS INT) AS v FROM agg
+    `)
+    return Number(r.recordset[0]?.v ?? 0) === 1
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/contains_alcohol/i.test(msg)) return false
+    throw e
+  }
+}
 
 /**
  * Store home “Super deals”: active products with compare-at above sale price on any variant,

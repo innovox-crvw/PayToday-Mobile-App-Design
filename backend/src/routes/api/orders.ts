@@ -14,6 +14,7 @@ import {
 } from '../../services/orderService.js'
 import { getReturnableLinesForOrder } from '../../services/returnService.js'
 import { getOrderReviewByOrderId, insertOrderReview } from '../../queries/orderReviews.js'
+import { listDisputesForOrderStaff } from '../../services/disputeService.js'
 
 export const ordersRouter = Router()
 
@@ -448,7 +449,8 @@ ordersRouter.get('/:orderId', optionalAuth, async (req, res) => {
 
   const u = req.user
   if (isStaff(u?.role)) {
-    res.json(detail)
+    const disputes = await listDisputesForOrderStaff(pool, orderId)
+    res.json({ ...detail, disputes })
     return
   }
   if (u && detail.order.user_id === u.sub) {

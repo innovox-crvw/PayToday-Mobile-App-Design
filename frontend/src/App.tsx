@@ -4,8 +4,7 @@ import { AdminLayout } from './layouts/AdminLayout'
 import { StoreLayout } from './layouts/StoreLayout'
 import { AdminDepositPage } from './pages/admin/AdminDepositPage'
 import { AdminDisputesPage } from './pages/admin/AdminDisputesPage'
-import { AdminDiscountsPage } from './pages/admin/AdminDiscountsPage'
-import { AdminLiquorHoursPage } from './pages/admin/AdminLiquorHoursPage'
+import { AdminStoreHoursPage } from './pages/admin/AdminStoreHoursPage'
 import { AdminFulfillmentPage } from './pages/admin/AdminFulfillmentPage'
 import { AdminHomePage } from './pages/admin/AdminHomePage'
 import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
@@ -243,8 +242,7 @@ export default function App() {
           <Route path="inventory" element={<AdminInventoryPage />} />
           <Route path="fulfillment" element={<AdminFulfillmentPage />} />
           <Route path="deposit-boxes" element={<AdminDepositPage />} />
-          <Route path="discounts" element={<AdminDiscountsPage />} />
-          <Route path="liquor-hours" element={<AdminLiquorHoursPage />} />
+          <Route path="store-hours" element={<AdminStoreHoursPage />} />
         </Route>
       </Route>
 

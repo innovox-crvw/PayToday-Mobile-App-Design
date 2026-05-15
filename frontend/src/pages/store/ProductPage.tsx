@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink, useLocation, useParams } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -29,6 +30,7 @@ import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined'
 import type { ProductDto, ProductListResponse, ProductVariantDto } from '../../types/catalogue'
 import { PT_CATALOG_UPDATED } from '../../lib/catalogEvents'
 import { apiUrl, readApiError } from '../../lib/apiOrigin'
+import { liquorBlockedGuestMessage, liquorBlockedMinorMessage, liquorBlockedShortTitle } from '../../lib/liquorRestrictionMessages'
 import { friendlyFetchError } from '../../lib/fetchErrors'
 import {
   effectiveSellableMax,
@@ -40,13 +42,24 @@ import {
   variantSavingsCents,
 } from '../../lib/productStock'
 import { formatMoney } from '../../lib/money'
-import { addVariantToCart } from '../../lib/cartClient'
+import { addVariantToCart, LiquorRestrictedError } from '../../lib/cartClient'
 import { ProductImage } from '../../components/store/ProductImage'
+import { NedbankFinanceCallout } from '../../components/store/NedbankFinanceCallout'
+import { ScheduleOrderDialog } from '../../components/store/ScheduleOrderDialog'
+import { StoreClosedBanner } from '../../components/store/StoreClosedBanner'
 import { getDemoStoreForProduct, getDemoStoreSlugForProduct } from '../../data/demoStores'
 import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { SHOP_V2 } from '../../theme/storeV2'
+import { formatPackageDimensionsMm } from '../../lib/formatPackageDims'
+import { categorySlugEligibleForFinance } from '../../lib/categoryFinanceEligibility'
+import { FINANCING_MIN_PRICE_CENTS } from '../../lib/financingEligibility'
+import { saveCheckoutSchedulePreset, type CheckoutSchedulePreset } from '../../lib/storeHours'
+import { useStoreHours } from '../../hooks/useStoreHours'
+import type { StoreCategoryDto, StorefrontConfig } from '../../types/storefront'
 
 type CartFeedback = { kind: 'success'; qtyAdded: number } | { kind: 'error'; message: string }
+
+type LiquorBlockKind = 'guest' | 'minor'
 
 function isUuidLike(s: string): boolean {
   return /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(s.trim())
@@ -64,18 +77,12 @@ function variantChoiceLabel(v: ProductVariantDto): string {
 /** Optional promo rows under price (PayToday-neutral copy). Set false to hide. */
 const SHOW_PRODUCT_TOP_PROMO_STUBS = false
 
-function variantPackageLines(v: ProductVariantDto): { dims: string | null; weight: string | null } {
-  const l = v.packageLengthMm
-  const w = v.packageWidthMm
-  const h = v.packageHeightMm
-  const dims = l != null && w != null && h != null ? `${l} × ${w} × ${h} mm (L × W × H)` : null
-  const weight = v.grossWeightG != null ? `${v.grossWeightG} g` : null
-  return { dims, weight }
+function variantPackageSummary(v: ProductVariantDto): string | null {
+  return formatPackageDimensionsMm(v)
 }
 
 function variantHasPackageDisplay(v: ProductVariantDto): boolean {
-  const { dims, weight } = variantPackageLines(v)
-  return Boolean(dims || weight)
+  return Boolean(variantPackageSummary(v))
 }
 
 function normalizeProduct(raw: unknown): ProductDto {
@@ -95,6 +102,10 @@ function normalizeProduct(raw: unknown): ProductDto {
       compareAtPriceCents: v.compareAtPriceCents ?? null,
       inventoryPolicy: v.inventoryPolicy ?? 'track',
       options: v.options ?? [],
+      packageLengthMm: v.packageLengthMm ?? null,
+      packageWidthMm: v.packageWidthMm ?? null,
+      packageHeightMm: v.packageHeightMm ?? null,
+      grossWeightG: v.grossWeightG ?? null,
     })),
   }
 }
@@ -106,11 +117,13 @@ const DESCRIPTION_PREVIEW_CHARS = 280
 export function ProductPage() {
   const { slug } = useParams<{ slug: string }>()
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const shopPath = `${pathPrefix}/shop`
   const [product, setProduct] = useState<ProductDto | null>(null)
   const [related, setRelated] = useState<ProductDto[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [liquorBlockKind, setLiquorBlockKind] = useState<LiquorBlockKind | null>(null)
   const [qty, setQty] = useState(1)
   const [adding, setAdding] = useState(false)
   const [cartFeedback, setCartFeedback] = useState<CartFeedback | null>(null)
@@ -120,6 +133,10 @@ export function ProductPage() {
   const [galleryIndex, setGalleryIndex] = useState(0)
   const [descriptionExpanded, setDescriptionExpanded] = useState(false)
   const [shareSnack, setShareSnack] = useState<string | null>(null)
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false)
+  const [storeCategories, setStoreCategories] = useState<StoreCategoryDto[]>([])
+  const { status: storeHours } = useStoreHours()
+  const [storefrontConfig, setStorefrontConfig] = useState<StorefrontConfig | null>(null)
   const productFetchSeq = useRef(0)
   const relatedFetchSeq = useRef(0)
   const relatedRailRef = useRef<HTMLDivElement | null>(null)
@@ -131,16 +148,75 @@ export function ProductPage() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [cRes, cfgRes] = await Promise.all([
+          fetch(apiUrl('/api/categories?onlyWithProducts=1'), { credentials: 'include' }),
+          fetch(apiUrl('/api/storefront-config'), { credentials: 'include' }),
+        ])
+        if (cancelled) return
+        if (cRes.ok) {
+          const c = (await cRes.json()) as { items?: StoreCategoryDto[] }
+          setStoreCategories(c.items ?? [])
+        } else {
+          setStoreCategories([])
+        }
+        if (cfgRes.ok) {
+          setStorefrontConfig((await cfgRes.json()) as StorefrontConfig)
+        } else {
+          setStorefrontConfig(null)
+        }
+      } catch {
+        if (!cancelled) {
+          setStoreCategories([])
+          setStorefrontConfig(null)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!slug) return
     setError(null)
+    setLiquorBlockKind(null)
     setProduct(null)
     const seq = ++productFetchSeq.current
     ;(async () => {
       try {
-        const res = await fetch(apiUrl(`/api/products/${encodeURIComponent(slug)}`))
+        const res = await fetch(apiUrl(`/api/products/${encodeURIComponent(slug)}`), { credentials: 'include' })
         if (seq !== productFetchSeq.current) return
         if (res.status === 404) {
           setError('Product not found')
+          return
+        }
+        if (res.status === 403) {
+          let code: string | undefined
+          try {
+            const j = (await res.json()) as { code?: string }
+            code = j.code
+          } catch {
+            /* ignore */
+          }
+          if (code === 'liquor_restricted') {
+            let kind: LiquorBlockKind = 'guest'
+            try {
+              const me = await fetch(apiUrl('/api/auth/me'), { credentials: 'include' })
+              if (me.ok) {
+                const data = (await me.json()) as { user?: { sub?: string; isAdult?: boolean } }
+                if (data.user?.sub && data.user.isAdult === false) kind = 'minor'
+              }
+            } catch {
+              /* keep guest */
+            }
+            setLiquorBlockKind(kind)
+            setError(null)
+            return
+          }
+          setError(await readApiError(res))
           return
         }
         if (!res.ok) throw new Error(await readApiError(res))
@@ -165,7 +241,7 @@ export function ProductPage() {
     const seq = ++relatedFetchSeq.current
     ;(async () => {
       try {
-        const res = await fetch(apiUrl('/api/products'))
+        const res = await fetch(apiUrl('/api/products'), { credentials: 'include' })
         if (seq !== relatedFetchSeq.current) return
         if (!res.ok) {
           setRelated([])
@@ -182,7 +258,7 @@ export function ProductPage() {
         setRelated([])
       }
     })()
-  }, [product?.id, slug, catalogTick])
+  }, [product, slug, catalogTick])
 
   useEffect(() => {
     if (!product?.variants.length) return
@@ -237,6 +313,34 @@ export function ProductPage() {
 
   const heroImageUrl = galleryImages[galleryIndex]?.url ?? product?.imageUrl ?? null
 
+  const sortedStoreCategories = useMemo(
+    () =>
+      [...storeCategories].sort(
+        (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
+      ),
+    [storeCategories],
+  )
+
+  const selectedVariantPriceCents = useMemo(() => {
+    if (!product?.variants?.length) return null
+    const v = product.variants.find((x) => x.id === selectedVariantId) ?? product.variants[0]
+    const cents = v?.priceCents
+    return typeof cents === 'number' && Number.isFinite(cents) ? cents : null
+  }, [product, selectedVariantId])
+
+  const showNedbankFinanceOnProduct = useMemo(() => {
+    if (!product?.categorySlug?.trim()) return false
+    if (!categorySlugEligibleForFinance(product.categorySlug, sortedStoreCategories)) return false
+    if (selectedVariantPriceCents == null) return false
+    return selectedVariantPriceCents >= FINANCING_MIN_PRICE_CENTS
+  }, [product, sortedStoreCategories, selectedVariantPriceCents])
+
+  const financingApplicationUrl =
+    (storefrontConfig?.nedbankFinanceUrl ?? '').trim() || 'https://nedaccess.today-ww.net/'
+
+  const storeClosed = storeHours.configured && !storeHours.openNow
+  const checkoutPath = `${pathPrefix}/checkout`
+
   async function addToCart(variantId: string) {
     setAdding(true)
     setCartFeedback(null)
@@ -245,7 +349,13 @@ export function ProductPage() {
       await addVariantToCart(variantId, qtyAdded)
       setCartFeedback({ kind: 'success', qtyAdded })
     } catch (e) {
-      setCartFeedback({ kind: 'error', message: e instanceof Error ? e.message : 'Failed' })
+      const msg =
+        e instanceof LiquorRestrictedError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : 'Failed'
+      setCartFeedback({ kind: 'error', message: msg })
     } finally {
       setAdding(false)
     }
@@ -277,6 +387,39 @@ export function ProductPage() {
     }
   }
 
+  if (liquorBlockKind) {
+    const profileHref = pathPrefix ? `${pathPrefix}/profile` : '/profile'
+    const msg = liquorBlockKind === 'minor' ? liquorBlockedMinorMessage() : liquorBlockedGuestMessage()
+    return (
+      <Box
+        sx={{
+          bgcolor: SHOP_V2.pageBackground,
+          mx: { xs: -2, sm: -3 },
+          px: { xs: 2, sm: 3 },
+          py: { xs: 2, sm: 3 },
+          borderRadius: { md: SHOP_V2.radius },
+        }}
+      >
+        <Stack spacing={2} sx={{ maxWidth: 560, mx: 'auto' }}>
+          <Button component={RouterLink} to={shopPath} startIcon={<ChevronLeftIcon />} sx={{ alignSelf: 'flex-start', fontWeight: 700 }}>
+            Back to shop
+          </Button>
+          <Alert severity="warning" role="alert" sx={{ borderRadius: SHOP_V2.radius }}>
+            <Typography variant="subtitle1" fontWeight={800} gutterBottom>
+              {liquorBlockedShortTitle()}
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 1.5, lineHeight: 1.45 }}>
+              {msg}
+            </Typography>
+            <Button component={RouterLink} to={profileHref} variant="contained" size="small" sx={{ fontWeight: 800 }}>
+              My account
+            </Button>
+          </Alert>
+        </Stack>
+      </Box>
+    )
+  }
+
   if (error) {
     return (
       <Typography color="error" role="alert">
@@ -305,7 +448,7 @@ export function ProductPage() {
   const savingsLine =
     savingsCents != null && savingsCents > 0 && variant ? formatMoney(savingsCents, variant.currency) : null
 
-  const selectedVariantPkg = variant ? variantPackageLines(variant) : { dims: null as string | null, weight: null as string | null }
+  const selectedVariantPkgLine = variant ? variantPackageSummary(variant) : null
   const showSelectedVariantPkg = Boolean(variant && variantHasPackageDisplay(variant))
 
   const rawDescription = product.description || 'No description provided for this item.'
@@ -314,6 +457,37 @@ export function ProductPage() {
     descriptionNeedsTruncate && !descriptionExpanded
       ? `${rawDescription.slice(0, DESCRIPTION_PREVIEW_CHARS).trimEnd()}…`
       : rawDescription
+
+  async function handleScheduleOrder(preset: CheckoutSchedulePreset) {
+    if (!variant) return
+    setScheduleDialogOpen(false)
+    setAdding(true)
+    setCartFeedback(null)
+    try {
+      await addVariantToCart(variant.id, qty)
+      saveCheckoutSchedulePreset(preset)
+      navigate(checkoutPath)
+    } catch (e) {
+      const msg =
+        e instanceof LiquorRestrictedError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : 'Failed'
+      setCartFeedback({ kind: 'error', message: msg })
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function handleBuyClick() {
+    if (!variant) return
+    if (storeClosed) {
+      setScheduleDialogOpen(true)
+      return
+    }
+    await addToCart(variant.id)
+  }
 
   return (
     <Box
@@ -326,6 +500,9 @@ export function ProductPage() {
       }}
     >
       <Stack spacing={0} sx={{ maxWidth: 1100, mx: 'auto' }}>
+        <Box sx={{ mb: 2 }}>
+          <StoreClosedBanner status={storeHours} />
+        </Box>
         {/* Top: gallery + buy column (Avo-style) */}
         <Stack
           direction={{ xs: 'column', md: 'row' }}
@@ -770,7 +947,7 @@ export function ProductPage() {
                     </Typography>
                   </Stack>
                 ) : null}
-                {showSelectedVariantPkg ? (
+                {showSelectedVariantPkg && selectedVariantPkgLine ? (
                   <Box
                     sx={{
                       mt: 0.75,
@@ -784,20 +961,9 @@ export function ProductPage() {
                     <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
                       Package size & weight
                     </Typography>
-                    {selectedVariantPkg.dims ? (
-                      <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                        {selectedVariantPkg.dims}
-                      </Typography>
-                    ) : null}
-                    {selectedVariantPkg.weight ? (
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{ fontWeight: 600, mt: selectedVariantPkg.dims ? 0.35 : 0 }}
-                      >
-                        Weight: {selectedVariantPkg.weight}
-                      </Typography>
-                    ) : null}
+                    <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                      {selectedVariantPkgLine}
+                    </Typography>
                   </Box>
                 ) : null}
                 {product.variants.length > 1 && product.variants.some(variantHasPackageDisplay) ? (
@@ -807,15 +973,15 @@ export function ProductPage() {
                     </Typography>
                     <Stack spacing={0.75}>
                       {product.variants.map((vv) => {
-                        if (!variantHasPackageDisplay(vv)) return null
-                        const { dims, weight } = variantPackageLines(vv)
+                        const line = variantPackageSummary(vv)
+                        if (!line) return null
                         return (
                           <Typography key={vv.id} variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
                             <Box component="span" fontWeight={700} color="text.primary">
                               {variantChoiceLabel(vv)}
                             </Box>
-                            {dims ? ` — ${dims}` : ''}
-                            {weight ? `${dims ? ' · ' : ' — '}Weight: ${weight}` : ''}
+                            {' — '}
+                            {line}
                           </Typography>
                         )
                       })}
@@ -892,13 +1058,16 @@ export function ProductPage() {
               mt: { xs: 0.75, md: 0.5 },
             }}
           >
+            {showNedbankFinanceOnProduct ? (
+              <NedbankFinanceCallout applicationUrl={financingApplicationUrl} currency={variant?.currency} />
+            ) : null}
             {variant ? (
               <>
                 <Button
                   variant="contained"
                   size="large"
                   disabled={adding || !canBuy}
-                  onClick={() => void addToCart(variant.id)}
+                  onClick={() => void handleBuyClick()}
                   sx={{
                     fontWeight: 800,
                     minHeight: 48,
@@ -951,7 +1120,7 @@ export function ProductPage() {
                         </Typography>
                       )}
                     </Box>
-                    <span style={{ flexShrink: 0 }}>Add to cart</span>
+                    <span style={{ flexShrink: 0 }}>{storeClosed ? 'Schedule order' : 'Add to cart'}</span>
                   </Stack>
                 </Button>
                 {compareLine && savingsLine ? (
@@ -1217,6 +1386,13 @@ export function ProductPage() {
         autoHideDuration={2600}
         onClose={() => setShareSnack(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
+      <ScheduleOrderDialog
+        open={scheduleDialogOpen}
+        onClose={() => setScheduleDialogOpen(false)}
+        status={storeHours}
+        busy={adding}
+        onConfirm={(preset) => void handleScheduleOrder(preset)}
       />
       </Stack>
     </Box>

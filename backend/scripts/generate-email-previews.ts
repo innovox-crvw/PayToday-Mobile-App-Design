@@ -24,6 +24,21 @@ const samples: { file: string; templateKey: string; payload: Record<string, unkn
     templateKey: 'pickup_code_ready',
     payload: { orderId: 'ORD-EXAMPLE-001', code: '48291' },
   },
+  {
+    file: 'return-case-status.html',
+    templateKey: 'return_case_status',
+    payload: { orderId: 'ORD-EXAMPLE-001', returnCaseId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', status: 'approved' },
+  },
+  {
+    file: 'order-dispute-submitted.html',
+    templateKey: 'order_dispute_submitted',
+    payload: {
+      disputeId: '11111111-2222-3333-4444-555555555555',
+      orderId: 'ORD-EXAMPLE-001',
+      status: 'open',
+      reasonPreview: 'Item not as described — colour mismatch.',
+    },
+  },
 ]
 
 mkdirSync(outDir, { recursive: true })

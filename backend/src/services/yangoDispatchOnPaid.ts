@@ -3,7 +3,8 @@ import { env } from '../config/env.js'
 import { requestYangoDelivery } from './yangoClient.js'
 
 /**
- * After payment, request a Yango courier for paid home-delivery orders (best-effort; failures are logged).
+ * After payment, request a Yango courier for paid orders where the customer chose **Yango delivery**
+ * (`delivery_method = yango_delivery`). Generic home delivery does not trigger the Yango API.
  */
 export async function tryYangoDispatchAfterPaid(pool: ConnectionPool, orderId: string): Promise<void> {
   if (!env.yangoEnabled) return
@@ -31,7 +32,7 @@ export async function tryYangoDispatchAfterPaid(pool: ConnectionPool, orderId: s
     `)
   const row = o.recordset[0]
   if (!row || row.status?.toLowerCase() !== 'paid') return
-  if (row.delivery_method?.toLowerCase() !== 'home') return
+  if (row.delivery_method?.toLowerCase() !== 'yango_delivery') return
   const line1 = row.line1?.trim()
   const city = row.city?.trim()
   if (!line1 || !city) {

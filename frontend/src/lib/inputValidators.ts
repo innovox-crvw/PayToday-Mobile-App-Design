@@ -14,7 +14,13 @@ function isValidEmailFormat(email: string): boolean {
   return EMAIL_RE.test(s)
 }
 
-const ASCII_CTRL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
+function hasAsciiControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i)
+    if ((c >= 0 && c <= 8) || c === 11 || c === 12 || (c >= 14 && c <= 31) || c === 127) return true
+  }
+  return false
+}
 
 export const INPUT_LIMITS = {
   emailMax: 320,
@@ -23,10 +29,6 @@ export const INPUT_LIMITS = {
   productNameMax: 300,
   urlMax: 2000,
 } as const
-
-function hasAsciiControlChars(s: string): boolean {
-  return ASCII_CTRL_RE.test(s)
-}
 
 export function parseEmailString(raw: unknown, field = 'email'): FieldParseResult<string> {
   if (typeof raw !== 'string') return { ok: false, message: 'Must be a string', field }

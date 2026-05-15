@@ -26,12 +26,7 @@ export function OrdersListPage() {
   const [items, setItems] = useState<Row[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [listLoading, setListLoading] = useState(true)
-  const [reviewTick, setReviewTick] = useState(0)
-
-  const readyForReviewIds = useMemo(() => {
-    reviewTick
-    return getReadyForReviewOrderIds()
-  }, [reviewTick])
+  const [readyForReviewIds, setReadyForReviewIds] = useState(() => getReadyForReviewOrderIds())
 
   const counts = useMemo(() => {
     const m: Record<OrderListCategory, number> = {
@@ -72,7 +67,7 @@ export function OrdersListPage() {
   }, [])
 
   useEffect(() => {
-    const bump = () => setReviewTick((n) => n + 1)
+    const bump = () => setReadyForReviewIds(getReadyForReviewOrderIds())
     window.addEventListener('paytoday-store-review-updated', bump)
     const onVis = () => {
       if (document.visibilityState === 'visible') bump()

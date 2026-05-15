@@ -19,6 +19,7 @@ import {
   createProductSimple,
   deleteProductImage,
   insertProductImage,
+  isMissingPayTodayMerchantIdColumnError,
   listProductsAdmin,
   lookupProductPayTodayMerchantId,
   normalizeInventoryPolicy,
@@ -51,6 +52,94 @@ import {
   parseVariantNameRequired,
   parseVariantOptionsArray,
 } from '../../lib/inputValidators.js'
+
+const ZIP_DRY_RUN_SKU_IN_CHUNK = 120
+
+/**
+ * For ZIP image dry-run: same SKU → variant resolution and scope rules as real import,
+ * without reading image bytes beyond the ZIP directory listing.
+ */
+async function classifyZipImageSkusForDryRun(
+  pool: ConnectionPool,
+  skuNorms: readonly string[],
+  scope: number[] | undefined,
+): Promise<{ missingSkus: string[]; skippedScope: string[]; wouldLinkSkus: string[] }> {
+  const uniq = [...new Set(skuNorms.map((s) => String(s).toLowerCase()))]
+  if (!uniq.length) return { missingSkus: [], skippedScope: [], wouldLinkSkus: [] }
+
+  const bySku = new Map<string, { productId: string; mid: number | null | undefined }>()
+  let usedPayTodayMerchantColumn = true
+
+  async function loadSkuRows(includeMidColumn: boolean) {
+    bySku.clear()
+    for (let i = 0; i < uniq.length; i += ZIP_DRY_RUN_SKU_IN_CHUNK) {
+      const chunk = uniq.slice(i, i + ZIP_DRY_RUN_SKU_IN_CHUNK)
+      const req = pool.request()
+      chunk.forEach((s, idx) => req.input(`s${idx}`, s))
+      const inList = chunk.map((_, idx) => `@s${idx}`).join(',')
+      const midSelect = includeMidColumn ? ', p.pay_today_merchant_id AS mid' : ''
+      const r = await req.query<{ skuNorm: string; productId: string; mid?: number | null }>(`
+        ;WITH m AS (
+          SELECT LOWER(LTRIM(RTRIM(v.sku))) AS skuNorm,
+                 CAST(p.id AS NVARCHAR(36)) AS productId
+                 ${midSelect},
+                 ROW_NUMBER() OVER (PARTITION BY LOWER(LTRIM(RTRIM(v.sku))) ORDER BY v.id) AS rn
+          FROM dbo.product_variants v
+          INNER JOIN dbo.products p ON p.id = v.product_id
+          WHERE LOWER(LTRIM(RTRIM(v.sku))) IN (${inList})
+        )
+        SELECT skuNorm, productId${includeMidColumn ? ', mid' : ''} FROM m WHERE rn = 1
+      `)
+      for (const row of r.recordset) {
+        const sn = String(row.skuNorm).toLowerCase()
+        const mid: number | null | undefined = includeMidColumn
+          ? row.mid != null && row.mid !== undefined
+            ? Number(row.mid)
+            : null
+          : undefined
+        bySku.set(sn, { productId: row.productId, mid })
+      }
+    }
+  }
+
+  try {
+    await loadSkuRows(true)
+  } catch (e) {
+    if (!isMissingPayTodayMerchantIdColumnError(e)) throw e
+    usedPayTodayMerchantColumn = false
+    await loadSkuRows(false)
+  }
+
+  const missingSkus: string[] = []
+  const skippedScope: string[] = []
+  const wouldLinkSkus: string[] = []
+
+  for (const sku of uniq) {
+    const row = bySku.get(sku)
+    if (!row) {
+      missingSkus.push(sku)
+      continue
+    }
+    if (scope?.length) {
+      let mid: number | null | undefined = row.mid
+      if (!usedPayTodayMerchantColumn) {
+        const lu = await lookupProductPayTodayMerchantId(pool, row.productId)
+        if (!lu.ok) {
+          wouldLinkSkus.push(sku)
+          continue
+        }
+        mid = lu.payTodayMerchantId
+      }
+      if (mid != null && !isPayTodayMerchantIdAllowedForScope(scope, mid)) {
+        skippedScope.push(sku)
+        continue
+      }
+    }
+    wouldLinkSkus.push(sku)
+  }
+
+  return { missingSkus, skippedScope, wouldLinkSkus }
+}
 
 async function requireAdminProductMutationAccess(
   pool: ConnectionPool,
@@ -284,6 +373,17 @@ adminProductsRouter.post('/', async (req, res) => {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Invalid package dimensions' })
     return
   }
+  const pkgAny =
+    packageLengthMm !== undefined || packageWidthMm !== undefined || packageHeightMm !== undefined
+  if (pkgAny) {
+    if (packageLengthMm == null || packageWidthMm == null || packageHeightMm == null) {
+      res.status(400).json({
+        error:
+          'When providing package dimensions, send packageLengthMm, packageWidthMm, and packageHeightMm together as non-negative integers. Omit all three to use defaults (200×150×100 mm).',
+      })
+      return
+    }
+  }
   const { scope, uid } = await resolveAdminMerchantScopeFromRequest(pool, req)
 
   let payTodayMerchantId: number | null | undefined
@@ -412,10 +512,20 @@ adminProductsRouter.post('/import-images-zip', (req, res) => {
     try {
       if (dry) {
         const { skuToPlaceholderUrl, warnings } = await listZipSkuImageKeys(zipPath)
+        const skuNorms = [...skuToPlaceholderUrl.keys()]
+        const { missingSkus, skippedScope, wouldLinkSkus } = await classifyZipImageSkusForDryRun(pool, skuNorms, scope)
+        const wouldLink = new Set(wouldLinkSkus.map((s) => s.toLowerCase()))
         res.json({
           dryRun: true,
-          skus: [...skuToPlaceholderUrl.entries()].map(([sku, placeholderUrl]) => ({ sku, placeholderUrl })),
+          skus: [...skuToPlaceholderUrl.entries()].map(([sku, placeholderUrl]) => ({
+            sku,
+            placeholderUrl,
+            wouldLink: wouldLink.has(sku.toLowerCase()),
+          })),
           warnings,
+          missingSkus,
+          skippedScope,
+          wouldLinkCount: wouldLinkSkus.length,
         })
         return
       }
@@ -637,6 +747,19 @@ adminProductsRouter.patch('/:productId/variants/:variantId', async (req, res) =>
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Invalid dimensions' })
     return
+  }
+  const pkgTouched =
+    Object.prototype.hasOwnProperty.call(body, 'packageLengthMm') ||
+    Object.prototype.hasOwnProperty.call(body, 'packageWidthMm') ||
+    Object.prototype.hasOwnProperty.call(body, 'packageHeightMm')
+  if (pkgTouched) {
+    if (patch.packageLengthMm == null || patch.packageWidthMm == null || patch.packageHeightMm == null) {
+      res.status(400).json({
+        error:
+          'When updating package size, packageLengthMm, packageWidthMm, and packageHeightMm are required (non-negative integers each).',
+      })
+      return
+    }
   }
   try {
     await updateVariantAdmin(pool, productId, variantId, patch)

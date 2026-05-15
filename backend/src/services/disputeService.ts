@@ -1,4 +1,7 @@
 import type { ConnectionPool } from 'mssql'
+import { enqueueNotification } from './notifications.js'
+import { resolveOutboxChannel } from './notificationRouting.js'
+import { resolveOrderNotificationTarget } from './orderNotificationEmail.js'
 
 export const ORDER_DISPUTE_STATUSES = ['open', 'in_review', 'resolved', 'dismissed'] as const
 export type OrderDisputeStatus = (typeof ORDER_DISPUTE_STATUSES)[number]
@@ -123,6 +126,25 @@ export async function createOrderDispute(
   if (!disputeId) {
     throw new Error('Failed to create dispute')
   }
+
+  const target = await resolveOrderNotificationTarget(pool, input.orderId)
+  if (target?.email?.trim()) {
+    const channel = await resolveOutboxChannel(pool, target.userId, target.guestEmail, 'order_dispute_submitted')
+    const reasonPreview = reason.length > 160 ? `${reason.slice(0, 157)}…` : reason
+    await enqueueNotification(pool, {
+      userId: target.userId,
+      email: target.email.trim(),
+      channel,
+      templateKey: 'order_dispute_submitted',
+      payload: JSON.stringify({
+        disputeId,
+        orderId: input.orderId,
+        status: 'open',
+        reasonPreview,
+      }),
+    })
+  }
+
   return { disputeId }
 }
 
@@ -139,13 +161,11 @@ export type CustomerDisputeRow = {
   product_name: string | null
 }
 
-export async function listDisputesForOrder(
+/** Dispute rows for an order (no access check). Callers must enforce staff-only or equivalent. */
+export async function queryDisputesRowsForOrderId(
   pool: ConnectionPool,
   orderId: string,
-  userId: string | undefined,
-  guestEmailNorm: string,
 ): Promise<CustomerDisputeRow[]> {
-  await assertCustomerCanAccessOrder(pool, orderId, userId, userId ? '' : guestEmailNorm)
   const r = await pool.request().input('oid', orderId).query<CustomerDisputeRow>(`
     SELECT CAST(d.id AS NVARCHAR(36)) AS disputeId,
       d.status,
@@ -164,6 +184,23 @@ export async function listDisputesForOrder(
     ORDER BY d.created_at DESC
   `)
   return r.recordset
+}
+
+export async function listDisputesForOrderStaff(
+  pool: ConnectionPool,
+  orderId: string,
+): Promise<CustomerDisputeRow[]> {
+  return queryDisputesRowsForOrderId(pool, orderId)
+}
+
+export async function listDisputesForOrder(
+  pool: ConnectionPool,
+  orderId: string,
+  userId: string | undefined,
+  guestEmailNorm: string,
+): Promise<CustomerDisputeRow[]> {
+  await assertCustomerCanAccessOrder(pool, orderId, userId, userId ? '' : guestEmailNorm)
+  return queryDisputesRowsForOrderId(pool, orderId)
 }
 
 export type AdminDisputeListRow = {
@@ -214,29 +251,52 @@ export async function listDisputesAdmin(pool: ConnectionPool): Promise<AdminDisp
 export async function updateDisputeAdmin(
   pool: ConnectionPool,
   disputeId: string,
-  patch: { status: string; adminResolutionNote?: string | null },
+  patch: { status?: string; adminResolutionNote?: string | null },
 ): Promise<void> {
-  const status = parseDisputeStatus(patch.status)
-  if (!status) {
-    throw new Error('Invalid status')
+  const hasStatus = patch.status !== undefined && String(patch.status).trim() !== ''
+  const hasNote = patch.adminResolutionNote !== undefined
+  if (!hasStatus && !hasNote) {
+    throw new Error('Nothing to update')
   }
-  const note = patch.adminResolutionNote === undefined ? undefined : patch.adminResolutionNote?.trim() ?? null
-  const req = pool.request().input('id', disputeId).input('st', status)
-  if (note === undefined) {
-    await req.query(`
-      UPDATE dbo.order_disputes
-      SET status = @st, updated_at = SYSUTCDATETIME()
-      WHERE id = @id
-    `)
-  } else {
+
+  let status: OrderDisputeStatus | undefined
+  if (hasStatus) {
+    const s = parseDisputeStatus(String(patch.status))
+    if (!s) throw new Error('Invalid status')
+    status = s
+  }
+
+  const note = hasNote ? patch.adminResolutionNote?.trim() ?? null : undefined
+
+  if (hasStatus && hasNote) {
     await pool
       .request()
       .input('id', disputeId)
-      .input('st', status)
+      .input('st', status!)
       .input('note', note)
       .query(`
         UPDATE dbo.order_disputes
         SET status = @st, admin_resolution_note = @note, updated_at = SYSUTCDATETIME()
+        WHERE id = @id
+      `)
+  } else if (hasStatus) {
+    await pool
+      .request()
+      .input('id', disputeId)
+      .input('st', status!)
+      .query(`
+        UPDATE dbo.order_disputes
+        SET status = @st, updated_at = SYSUTCDATETIME()
+        WHERE id = @id
+      `)
+  } else {
+    await pool
+      .request()
+      .input('id', disputeId)
+      .input('note', note!)
+      .query(`
+        UPDATE dbo.order_disputes
+        SET admin_resolution_note = @note, updated_at = SYSUTCDATETIME()
         WHERE id = @id
       `)
   }

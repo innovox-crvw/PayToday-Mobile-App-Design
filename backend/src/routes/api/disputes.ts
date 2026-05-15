@@ -5,10 +5,15 @@ import {
   createOrderDispute,
   listDisputesAdmin,
   listDisputesForOrder,
+  listDisputesForOrderStaff,
   updateDisputeAdmin,
 } from '../../services/disputeService.js'
 
 export const disputesRouter = Router()
+
+function isStaffRole(role: string | undefined): boolean {
+  return role === 'admin' || role === 'ops' || role === 'fulfillment'
+}
 
 function guestEmailFromBody(req: { body?: unknown }): string {
   const b = req.body && typeof (req.body as { email?: unknown }).email === 'string' ? (req.body as { email: string }).email : ''
@@ -31,7 +36,9 @@ disputesRouter.get('/for-order/:orderId', optionalAuth, async (req, res) => {
   const guestQ = guestEmailFromQuery(req)
   const u = req.user
   try {
-    const items = await listDisputesForOrder(pool, orderId, u?.sub, guestQ)
+    const items = isStaffRole(u?.role)
+      ? await listDisputesForOrderStaff(pool, orderId)
+      : await listDisputesForOrder(pool, orderId, u?.sub, guestQ)
     res.json({ items })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Failed'
@@ -114,26 +121,32 @@ adminDisputesRouter.patch('/:disputeId', async (req, res) => {
     return
   }
   const disputeId = String(req.params.disputeId)
-  const status = typeof req.body?.status === 'string' ? req.body.status : ''
-  const adminResolutionNote = req.body?.adminResolutionNote
-  if (!status.trim()) {
-    res.status(400).json({ error: 'status is required' })
+  const body = req.body as { status?: unknown; adminResolutionNote?: unknown }
+  const statusRaw = typeof body.status === 'string' ? body.status.trim() : ''
+  const noteProvided = Object.prototype.hasOwnProperty.call(body, 'adminResolutionNote')
+  let adminResolutionNote: string | null | undefined
+  if (noteProvided) {
+    if (body.adminResolutionNote === null) {
+      adminResolutionNote = null
+    } else if (typeof body.adminResolutionNote === 'string') {
+      adminResolutionNote = body.adminResolutionNote
+    } else {
+      adminResolutionNote = String(body.adminResolutionNote ?? '')
+    }
+  }
+  if (!statusRaw && !noteProvided) {
+    res.status(400).json({ error: 'Send status and/or adminResolutionNote' })
     return
   }
   try {
     await updateDisputeAdmin(pool, disputeId, {
-      status,
-      adminResolutionNote:
-        adminResolutionNote === undefined
-          ? undefined
-          : adminResolutionNote === null
-            ? null
-            : String(adminResolutionNote),
+      ...(statusRaw ? { status: statusRaw } : {}),
+      ...(noteProvided ? { adminResolutionNote } : {}),
     })
     res.json({ ok: true })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Failed'
-    if (msg === 'Invalid status') {
+    if (msg === 'Invalid status' || msg === 'Nothing to update') {
       res.status(400).json({ error: msg })
       return
     }

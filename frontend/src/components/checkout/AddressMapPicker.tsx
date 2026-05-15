@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Card, CardContent, Chip, Stack, Typography } from '@mui/material'
 import { loadGoogleMapsOnce } from '../../lib/loadGoogleMapsOnce'
+import { mapsLiveApiKey } from '../../lib/googleMapsMode'
 import { formatMoney } from '../../lib/money'
 import {
   YANGO_DEMO_ZONES,
@@ -10,6 +11,7 @@ import {
   type YangoDemoZone,
 } from '../../lib/yangoDeliveryDemo'
 import { fetchHomeDeliveryZones } from '../../lib/yangoHomeDeliveryApi'
+import { DeliveryMapDemoCanvas } from './DeliveryMapDemoCanvas'
 
 export type MapZoneMeta = {
   zone: YangoDemoZone | null
@@ -23,9 +25,16 @@ type Props = {
   /** When user picks a saved address with coordinates, centre the pin here. */
   focusLatLng?: { lat: number; lng: number } | null
   onZoneMetaChange: (meta: MapZoneMeta) => void
+  /**
+   * When provided (non-empty), use these zones instead of fetching — must match checkout/cart so
+   * `homeDeliveryAreaId` (UUID) is never overwritten by a duplicate demo-only fetch from the picker.
+   */
+  deliveryZones?: YangoDemoZone[] | null
 }
 
-export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: Props) {
+export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange, deliveryZones }: Props) {
+  const liveKey = useMemo(() => mapsLiveApiKey(mapsApiKey), [mapsApiKey])
+
   const mapHostRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<{ setCenter: (p: { lat: number; lng: number }) => void } | null>(null)
   const markerRef = useRef<{ setPosition: (p: { lat: number; lng: number }) => void } | null>(null)
@@ -36,11 +45,15 @@ export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: 
   const [pin, setPin] = useState(defaultYangoDemoPin)
   const [mapLoadError, setMapLoadError] = useState<string | null>(null)
   const [mapReady, setMapReady] = useState(false)
-  const [apiZones, setApiZones] = useState<YangoDemoZone[]>(YANGO_DEMO_ZONES)
+  const useParentZones = deliveryZones != null && deliveryZones.length > 0
+  const [fetchedZones, setFetchedZones] = useState<YangoDemoZone[]>(YANGO_DEMO_ZONES)
 
   useEffect(() => {
-    void fetchHomeDeliveryZones().then(setApiZones)
-  }, [])
+    if (useParentZones) return
+    void fetchHomeDeliveryZones().then(setFetchedZones)
+  }, [useParentZones])
+
+  const apiZones = useParentZones ? deliveryZones! : fetchedZones
 
   useEffect(() => {
     if (!focusLatLng) return
@@ -65,8 +78,9 @@ export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: 
   }, [])
 
   useEffect(() => {
-    if (!mapsApiKey?.trim()) {
+    if (!liveKey) {
       setMapReady(false)
+      setMapLoadError(null)
       return
     }
     const el = mapHostRef.current
@@ -77,7 +91,7 @@ export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: 
 
     void (async () => {
       try {
-        await loadGoogleMapsOnce(mapsApiKey.trim())
+        await loadGoogleMapsOnce(liveKey)
         if (cancelled) return
         const g = (window as unknown as { google?: { maps: Record<string, unknown> } }).google?.maps
         if (!g) {
@@ -181,13 +195,24 @@ export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: 
       mapRef.current = null
       setMapReady(false)
     }
-  }, [mapsApiKey, apiZones])
+  }, [liveKey, apiZones])
 
   useEffect(() => {
     if (!mapReady) return
     markerRef.current?.setPosition(pin)
     mapRef.current?.setCenter(pin)
   }, [pin, mapReady])
+
+  const showLiveMap = Boolean(liveKey && mapReady && !mapLoadError)
+  const showDemoCanvas = !liveKey || Boolean(mapLoadError) || !showLiveMap
+
+  const demoCaption = !liveKey
+    ? 'Map preview (demo — set VITE_GOOGLE_MAPS_API_KEY for live Google Maps)'
+    : mapLoadError
+      ? 'Map preview (demo — Google Maps failed to load)'
+      : liveKey && !showLiveMap
+        ? 'Map preview (demo — loading live map in background)'
+        : 'Map preview (demo)'
 
   return (
     <Card variant="outlined" sx={{ borderRadius: 3 }}>
@@ -198,36 +223,53 @@ export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: 
               Map — choose delivery point
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Drag the pin or tap the map. Coloured areas show delivery bands by suburb; the courier estimate updates when you
-              are inside a zone.
+              Drag the pin or tap the map. Coloured areas follow active home-delivery zones from the database (names and
+              fees); rectangle positions use the built-in Windhoek layout or a grid when a zone has no map preset.
             </Typography>
           </Stack>
 
-          {mapsApiKey?.trim() ? (
-            mapLoadError ? (
-              <Alert severity="warning">{mapLoadError}</Alert>
-            ) : (
+          {!liveKey ? (
+            <Alert severity="info" sx={{ borderRadius: 2 }}>
+              Google Maps JavaScript API is not configured (empty key, or <Typography component="span" variant="body2" fontFamily="monospace">demo</Typography> /{' '}
+              <Typography component="span" variant="body2" fontFamily="monospace">placeholder</Typography>). The box below is
+              a static preview only.
+            </Alert>
+          ) : null}
+          {liveKey && mapLoadError ? <Alert severity="warning">{mapLoadError}</Alert> : null}
+
+          <Box sx={{ position: 'relative', height: 280 }}>
+            {liveKey ? (
               <Box
                 ref={mapHostRef}
                 role="application"
                 aria-label="Interactive map to select delivery location"
                 sx={{
-                  height: 280,
+                  height: '100%',
                   borderRadius: 2,
                   overflow: 'hidden',
                   bgcolor: 'action.hover',
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 0,
+                  visibility: showLiveMap ? 'visible' : 'hidden',
+                  pointerEvents: showLiveMap ? 'auto' : 'none',
                 }}
               />
-            )
-          ) : (
-            <Alert severity="info" sx={{ borderRadius: 2 }}>
-              Add <Typography component="span" variant="body2" fontFamily="monospace">VITE_GOOGLE_MAPS_API_KEY</Typography>{' '}
-              to your frontend env to enable the live map. You can still pick a zone with the buttons below.
-            </Alert>
-          )}
+            ) : null}
+            {showDemoCanvas ? (
+              <Box sx={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: showLiveMap ? 'none' : 'auto' }}>
+                <DeliveryMapDemoCanvas
+                  zones={apiZones}
+                  pin={pin}
+                  onPinChange={(lat, lng) => setPin({ lat, lng })}
+                  caption={demoCaption}
+                />
+              </Box>
+            ) : null}
+          </Box>
 
           <Typography variant="subtitle2" fontWeight={800}>
-            Delivery areas
+            Delivery areas (from store database)
           </Typography>
           <Stack direction="row" flexWrap="wrap" gap={1} role="list" aria-label="Delivery area zones">
             {apiZones.map((z) => {
@@ -266,7 +308,7 @@ export function AddressMapPicker({ mapsApiKey, focusLatLng, onZoneMetaChange }: 
             </Stack>
           ) : (
             <Alert severity="warning" sx={{ borderRadius: 2 }}>
-              Pin is outside demo zones — move the map pin or tap an area button to see the Yango courier estimate.
+              Pin is outside the shaded delivery zones — move the pin or tap an area button to match a service area.
             </Alert>
           )}
         </Stack>

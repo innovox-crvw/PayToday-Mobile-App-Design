@@ -10,6 +10,8 @@ import {
   Typography,
 } from '@mui/material'
 import { loadGoogleMapsOnce } from '../../lib/loadGoogleMapsOnce'
+import { mapsLiveApiKey } from '../../lib/googleMapsMode'
+import { DeliveryMapDemoCanvas } from './DeliveryMapDemoCanvas'
 import { formatMoney } from '../../lib/money'
 import {
   YANGO_DEMO_ZONES,
@@ -40,6 +42,8 @@ type Props = {
 }
 
 export function YangoDeliveryDemoPanel({ mapsApiKey, onScheduleChange }: Props) {
+  const liveKey = useMemo(() => mapsLiveApiKey(mapsApiKey), [mapsApiKey])
+
   const scheduleCbRef = useRef(onScheduleChange)
   useEffect(() => {
     scheduleCbRef.current = onScheduleChange
@@ -106,8 +110,9 @@ export function YangoDeliveryDemoPanel({ mapsApiKey, onScheduleChange }: Props) 
   }, [])
 
   useEffect(() => {
-    if (!mapsApiKey?.trim()) {
+    if (!liveKey) {
       setMapReady(false)
+      setMapLoadError(null)
       return
     }
     const el = mapHostRef.current
@@ -118,7 +123,7 @@ export function YangoDeliveryDemoPanel({ mapsApiKey, onScheduleChange }: Props) 
 
     void (async () => {
       try {
-        await loadGoogleMapsOnce(mapsApiKey.trim())
+        await loadGoogleMapsOnce(liveKey)
         if (cancelled) return
         const g = (window as unknown as { google?: { maps: Record<string, unknown> } }).google?.maps
         if (!g) {
@@ -222,13 +227,23 @@ export function YangoDeliveryDemoPanel({ mapsApiKey, onScheduleChange }: Props) 
       mapRef.current = null
       setMapReady(false)
     }
-  }, [mapsApiKey, apiZones])
+  }, [liveKey, apiZones])
 
   useEffect(() => {
     if (!mapReady) return
     markerRef.current?.setPosition(pin)
     mapRef.current?.setCenter(pin)
   }, [pin, mapReady])
+
+  const showLiveMap = Boolean(liveKey && mapReady && !mapLoadError)
+  const showDemoCanvas = !liveKey || Boolean(mapLoadError) || !showLiveMap
+  const demoCaption = !liveKey
+    ? 'Map preview (demo — set VITE_GOOGLE_MAPS_API_KEY for live Google Maps)'
+    : mapLoadError
+      ? 'Map preview (demo — Google Maps failed to load)'
+      : liveKey && !showLiveMap
+        ? 'Map preview (demo — loading live map in background)'
+        : 'Map preview (demo)'
 
   return (
     <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
@@ -243,31 +258,46 @@ export function YangoDeliveryDemoPanel({ mapsApiKey, onScheduleChange }: Props) 
           </Typography>
         </Stack>
 
-        {mapsApiKey?.trim() ? (
-          <>
-            {mapLoadError ? (
-              <Alert severity="warning">{mapLoadError}</Alert>
-            ) : (
-              <Box
-                ref={mapHostRef}
-                sx={{
-                  height: 280,
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  bgcolor: 'action.hover',
-                }}
-              />
-            )}
-          </>
-        ) : (
+        {!liveKey ? (
           <Alert severity="info" sx={{ borderRadius: 2 }}>
-            Add <Typography component="span" variant="body2" fontFamily="monospace">VITE_GOOGLE_MAPS_API_KEY</Typography>{' '}
-            to enable the live map. Demo zones and scheduling still work below.
+            Google Maps is not configured (empty key, or <Typography component="span" variant="body2" fontFamily="monospace">demo</Typography> /{' '}
+            <Typography component="span" variant="body2" fontFamily="monospace">placeholder</Typography>). The preview below
+            is static only; zones and fees come from the store database.
           </Alert>
-        )}
+        ) : null}
+        {liveKey && mapLoadError ? <Alert severity="warning">{mapLoadError}</Alert> : null}
+
+        <Box sx={{ position: 'relative', height: 280 }}>
+          {liveKey ? (
+            <Box
+              ref={mapHostRef}
+              sx={{
+                height: '100%',
+                borderRadius: 2,
+                overflow: 'hidden',
+                bgcolor: 'action.hover',
+                position: 'absolute',
+                inset: 0,
+                zIndex: 0,
+                visibility: showLiveMap ? 'visible' : 'hidden',
+                pointerEvents: showLiveMap ? 'auto' : 'none',
+              }}
+            />
+          ) : null}
+          {showDemoCanvas ? (
+            <Box sx={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: showLiveMap ? 'none' : 'auto' }}>
+              <DeliveryMapDemoCanvas
+                zones={apiZones}
+                pin={pin}
+                onPinChange={(lat, lng) => setPin({ lat, lng })}
+                caption={demoCaption}
+              />
+            </Box>
+          ) : null}
+        </Box>
 
         <Typography variant="subtitle2" fontWeight={800}>
-          Demo delivery areas
+          Delivery areas (from store database)
         </Typography>
         <Stack direction="row" flexWrap="wrap" gap={1}>
           {apiZones.map((z: YangoDemoZone) => {

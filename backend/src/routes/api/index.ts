@@ -28,7 +28,6 @@ import { notificationsRouter } from './notifications.js'
 import { hubDemoPaymentRouter } from './hubDemoPayment.js'
 import { walletRouter } from './wallet.js'
 import { adminRbacRouter } from './adminRbac.js'
-import { adminDiscountsRouter } from './adminDiscounts.js'
 import { adminShippingRouter } from './adminShipping.js'
 import { adminPromotionsRouter } from './adminPromotions.js'
 import { instalmentsRouter, adminInstalmentsRouter } from './instalments.js'
@@ -107,7 +106,6 @@ apiRouter.use('/admin/overview', adminOverviewRouter)
 apiRouter.use('/admin/deposit', adminDepositRouter)
 apiRouter.use('/admin/merchants', adminMerchantHoursRouter)
 apiRouter.use('/admin/rbac', adminRbacRouter)
-apiRouter.use('/admin/discounts', adminDiscountsRouter)
 apiRouter.use('/admin/shipping', adminShippingRouter)
 apiRouter.use('/admin/promotions', adminPromotionsRouter)
 apiRouter.use('/orders', instalmentsRouter)

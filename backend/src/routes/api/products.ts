@@ -3,6 +3,11 @@ import { env } from '../../config/env.js'
 import { getLastSqlConnectError, getSqlPool } from '../../db/pool.js'
 import { listProducts, getProductBySlug, type ListProductsOptions } from '../../repos/productsRepo.js'
 import { sessionIsAdultForLiquor } from '../../services/liquorAgeService.js'
+import {
+  isCategorySubtreeFullyLiquorGatedFromNonAdults,
+  productIdsMatchingLiquorGate,
+  productIsLiquorGatedForNonAdultViewer,
+} from '../../services/ageRestrictedCategoryService.js'
 
 export const productsRouter = Router()
 
@@ -44,14 +49,24 @@ productsRouter.get('/', async (req, res) => {
     return noDatabaseResponse(res, false)
   }
   try {
-    let items = await listProducts(pool, listOpts)
-    if (env.liquorGatingEnabled) {
-      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
-      if (!adult) {
-        items = items.filter((p) => !p.containsAlcohol)
+    const adult = env.liquorGatingEnabled ? await sessionIsAdultForLiquor(pool, req.user?.sub) : true
+    let ageRestrictedCategoryHidden = false
+    if (env.liquorGatingEnabled && categorySlug?.trim() && !adult) {
+      try {
+        ageRestrictedCategoryHidden = await isCategorySubtreeFullyLiquorGatedFromNonAdults(pool, categorySlug.trim())
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.warn('[products] ageRestrictedCategoryHidden check failed:', msg)
+        ageRestrictedCategoryHidden = false
       }
     }
-    res.json({ source: 'database', items })
+    let items = await listProducts(pool, listOpts)
+    if (env.liquorGatingEnabled && !adult) {
+      const ids = [...new Set(items.map((p) => p.id))]
+      const blocked = await productIdsMatchingLiquorGate(pool, ids)
+      items = items.filter((p) => !blocked.has(p.id))
+    }
+    res.json({ source: 'database', items, ...(ageRestrictedCategoryHidden ? { ageRestrictedCategoryHidden: true } : {}) })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[products] listProducts failed:', msg)
@@ -80,9 +95,9 @@ productsRouter.get('/:slug', async (req, res) => {
       res.status(404).json({ error: 'Not found' })
       return
     }
-    if (env.liquorGatingEnabled && p.containsAlcohol) {
+    if (env.liquorGatingEnabled) {
       const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
-      if (!adult) {
+      if (!adult && (await productIsLiquorGatedForNonAdultViewer(pool, p.id))) {
         res.status(403).json({ error: 'Age-restricted product', code: 'liquor_restricted' })
         return
       }

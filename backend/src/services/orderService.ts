@@ -21,7 +21,7 @@ export async function createOrderFromCart(
   input: {
     userId: string | undefined
     guestEmail: string | null
-    deliveryMethod: 'home' | 'deposit_box'
+    deliveryMethod: string
     shippingAddressId: string | null
     depositLocationId: string | null
     subtotalCents: number

@@ -29,6 +29,7 @@ import { setPaymentProcessing, updatePaymentReference } from '../../repos/paymen
 import { parseEmailString, parseOptionalGuestPersonName, parseOptionalPhoneDigits } from '../../lib/inputValidators.js'
 import { assertCheckoutAllowedByMerchantHours } from '../../services/merchantHoursService.js'
 import { assertAdultForAlcoholCart } from '../../services/liquorAgeService.js'
+import { parseCheckoutDeliveryMethod, isPickupDeliveryMethod, isHomeDeliveryMethod } from '../../lib/checkoutDelivery.js'
 import type { NextFunction, Request, Response } from 'express'
 
 class CheckoutValidationError extends Error {
@@ -242,7 +243,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
   }
 
-  const deliveryMethod = req.body?.deliveryMethod === 'deposit_box' ? 'deposit_box' : 'home'
+  const deliveryMethod = parseCheckoutDeliveryMethod(req.body?.deliveryMethod, env.yangoEnabled)
   const depositLocationId = typeof req.body?.depositLocationId === 'string' ? req.body.depositLocationId : null
   const shippingAddressId = typeof req.body?.shippingAddressId === 'string' ? req.body.shippingAddressId : null
   let guestEmail: string | null =
@@ -271,17 +272,17 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     return
   }
 
-  if (deliveryMethod === 'deposit_box' && !depositLocationId) {
-    res.status(400).json({ error: 'depositLocationId required for deposit_box' })
+  if (isPickupDeliveryMethod(deliveryMethod) && !depositLocationId) {
+    res.status(400).json({ error: 'depositLocationId required for store pickup or deposit box delivery' })
     return
   }
-  if (deliveryMethod === 'home' && !req.user) {
+  if (isHomeDeliveryMethod(deliveryMethod) && !req.user) {
     res.status(401).json({
       error: 'Sign in is required for home delivery. Choose pickup, or sign in and add a delivery address.',
     })
     return
   }
-  if (deliveryMethod === 'home' && req.user) {
+  if (isHomeDeliveryMethod(deliveryMethod) && req.user) {
     if (!shippingAddressId?.trim()) {
       res.status(400).json({ error: 'shippingAddressId required for home delivery' })
       return
@@ -305,7 +306,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
   }
 
-  if (deliveryMethod === 'deposit_box' && depositLocationId) {
+  if (isPickupDeliveryMethod(deliveryMethod) && depositLocationId) {
     try {
       await validateDepositLocationExists(pool, depositLocationId.trim())
     } catch (e) {
@@ -359,7 +360,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
   }
 
   let shippingCents = shippingCentsForDelivery(subtotalCents, deliveryMethod)
-  if (deliveryMethod === 'home') {
+  if (isHomeDeliveryMethod(deliveryMethod)) {
     const rawAreaId = typeof bodyObj.homeDeliveryAreaId === 'string' ? bodyObj.homeDeliveryAreaId.trim() : ''
     if (rawAreaId) {
       const area = await getHomeDeliveryAreaById(pool, rawAreaId)

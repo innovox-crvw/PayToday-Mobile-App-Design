@@ -31,7 +31,10 @@ import { storefrontVariantPriceRange } from '../../lib/productStock'
 import { ShopPageSection } from '../../components/store/ShopPageSection'
 import { ShopCatalogStickyBar } from '../../components/store/ShopCatalogStickyBar'
 import { ShopProductCard } from '../../components/store/ShopProductCard'
+import { StoreClosedBanner } from '../../components/store/StoreClosedBanner'
 import { getDemoStoreBySlug, getDemoStoreSlugForProduct, getDemoStoreForProduct } from '../../data/demoStores'
+import { useStoreHours } from '../../hooks/useStoreHours'
+import { categorySlugTouchesRoots } from '../../lib/categorySlugSubtree'
 import { SHOP_V2 } from '../../theme/storeV2'
 
 type SortKey = 'name' | 'price_asc' | 'price_desc'
@@ -45,31 +48,6 @@ function categoryDepth(c: StoreCategoryDto, all: StoreCategoryDto[]): number {
     cur = byId.get(cur)?.parentId ?? undefined
   }
   return d
-}
-
-/** True when the URL category slug matches a configured root or sits under it in `categories`. */
-function categorySlugTouchesMinorRestrictionRoots(
-  categorySlug: string,
-  categories: StoreCategoryDto[],
-  rootsLower: string[],
-): boolean {
-  if (!categorySlug.trim() || rootsLower.length === 0) return false
-  const slugLower = categorySlug.trim().toLowerCase()
-  const rootSet = new Set(rootsLower)
-  if (rootSet.has(slugLower)) return true
-  const cat = categories.find((c) => c.slug.trim().toLowerCase() === slugLower)
-  if (!cat) return false
-  const byId = new Map(categories.map((c) => [c.id, c]))
-  let cur: StoreCategoryDto | undefined = cat
-  let d = 0
-  while (cur && d < 64) {
-    if (rootSet.has(cur.slug.trim().toLowerCase())) return true
-    const pid = cur.parentId?.trim()
-    if (!pid) break
-    cur = byId.get(pid)
-    d += 1
-  }
-  return false
 }
 
 function resolvePromoHref(linkPath: string | null, pathPrefix: string, shop: string): string {
@@ -106,6 +84,7 @@ export function ShopPage() {
   const [ageRestrictedCategoryHidden, setAgeRestrictedCategoryHidden] = useState(false)
   /** Shown when navigating into a liquor/wine (etc.) category as a non-adult; re-opens when `category` changes. */
   const [minorRestrictedCategoryDialogOpen, setMinorRestrictedCategoryDialogOpen] = useState(false)
+  const { status: storeHours } = useStoreHours()
   const productsFetchSeq = useRef(0)
 
   useEffect(() => {
@@ -265,8 +244,7 @@ export function ShopPage() {
   )
 
   const categoryTouchesMinorRestriction = useMemo(
-    () =>
-      categorySlugTouchesMinorRestrictionRoots(categorySlug, sortedCategories, minorRestrictionRootsLower),
+    () => categorySlugTouchesRoots(categorySlug, sortedCategories, minorRestrictionRootsLower),
     [categorySlug, sortedCategories, minorRestrictionRootsLower],
   )
 
@@ -324,6 +302,7 @@ export function ShopPage() {
             {sqlWarning}
           </Alert>
         ) : null}
+        <StoreClosedBanner status={storeHours} />
         <Stack spacing={0.5}>
           <Typography variant="h5" component="h1" fontWeight={800} letterSpacing={-0.3}>
             Shop

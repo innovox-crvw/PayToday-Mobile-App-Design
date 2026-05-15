@@ -10,7 +10,15 @@ export function formatPackageDimensionsMm(line: {
   const h = line.packageHeightMm
   const g = line.grossWeightG
   const hasDims =
-    l != null && w != null && h != null && Number.isFinite(l) && Number.isFinite(w) && Number.isFinite(h) && l > 0 && w > 0 && h > 0
+    l != null &&
+    w != null &&
+    h != null &&
+    Number.isFinite(l) &&
+    Number.isFinite(w) &&
+    Number.isFinite(h) &&
+    l >= 0 &&
+    w >= 0 &&
+    h >= 0
   const dims = hasDims ? `${l} × ${w} × ${h} mm` : null
   const weight = g != null && Number.isFinite(g) && g > 0 ? `${g} g` : null
   if (dims && weight) return `${dims} · ${weight}`

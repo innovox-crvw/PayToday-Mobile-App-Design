@@ -4,7 +4,7 @@ import { getIntegrationSettingsMap } from '../../services/integrationSettingsCac
 import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js'
 import { sqlErrorMentionsInvalidColumn, sqlErrorMentionsMissingObject } from '../../db/sqlDriverError.js'
 import { getSqlPool } from '../../db/pool.js'
-import { listCategories } from '../../repos/categoriesRepo.js'
+import { listCategories, listCategoriesWithVisibleProducts } from '../../repos/categoriesRepo.js'
 import { staticHubPaymentCategoryItems } from '../../data/staticHubPaymentCategoryItems.js'
 import { listHubPaymentCategoryItems } from '../../repos/hubPaymentCategoryItemsRepo.js'
 import { listHubNavigationTiles } from '../../repos/hubNavigationTilesRepo.js'
@@ -12,6 +12,7 @@ import { listActivePromotions, type StorePromotionDto } from '../../repos/promot
 import { listPopularStoresByOrders } from '../../repos/storefrontPopularRepo.js'
 import { listSuperDealProducts } from '../../repos/productsRepo.js'
 import { sessionIsAdultForLiquor } from '../../services/liquorAgeService.js'
+import { productIdsMatchingLiquorGate } from '../../services/ageRestrictedCategoryService.js'
 import { storefrontMerchantHoursRouter } from './adminMerchantHours.js'
 import { listHomeDeliveryAreas } from '../../repos/homeDeliveryRepo.js'
 
@@ -79,18 +80,27 @@ storefrontPublicRouter.get('/storefront-config', async (_req, res) => {
     scanApiConfigured: Boolean(pt.scanApiBaseUrl),
     checkoutRequireSignIn: env.checkoutRequireSignIn,
     liquorGatingEnabled: env.liquorGatingEnabled,
+    minorRestrictedCategorySlugs: env.ageRestrictedCategorySlugs,
+    nedbankFinanceUrl: env.nedbankFinanceUrl,
+    defaultStoreMerchantId: env.defaultStoreMerchantId,
     yangoEnabled: env.yangoEnabled,
   })
 })
 
-storefrontPublicRouter.get('/categories', async (_req, res) => {
+storefrontPublicRouter.get('/categories', async (req, res) => {
   const pool = await getSqlPool({ eager: true })
   if (!pool) {
     res.json({ source: 'off', items: [] })
     return
   }
   try {
-    const items = await listCategories(pool, { includeInactive: false })
+    const onlyWithProducts = String(req.query.onlyWithProducts ?? '').trim() === '1'
+    let items = await listCategories(pool, { includeInactive: false })
+    if (onlyWithProducts) {
+      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
+      const excludeAlcohol = env.liquorGatingEnabled && !adult
+      items = await listCategoriesWithVisibleProducts(pool, { excludeAlcoholProducts: excludeAlcohol })
+    }
     res.json({ source: 'database', items })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -228,7 +238,9 @@ storefrontPublicRouter.get('/storefront/super-deals', async (req, res) => {
     if (env.liquorGatingEnabled) {
       const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
       if (!adult) {
-        items = items.filter((p) => !p.containsAlcohol)
+        const ids = [...new Set(items.map((p) => p.id))]
+        const blocked = await productIdsMatchingLiquorGate(pool, ids)
+        items = items.filter((p) => !blocked.has(p.id))
       }
     }
     res.json({ items })

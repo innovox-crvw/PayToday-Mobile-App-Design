@@ -1,6 +1,7 @@
 /**
  * Demo-only Yango-style zones for checkout (Windhoek–centric).
  * Zone `id` values match `home_delivery_areas.code` / `shipping_zones.code` for API merge.
+ * Optional `demoAddress` is the canonical demo postal row for that code (checkout presets are built from it).
  * Billing amounts come from the cart API + DB; courier figures here are UI fallbacks.
  */
 
@@ -13,6 +14,19 @@ export type YangoDemoSlot = {
   /** Optional minute offsets (0–59); default 0. Used for DB-driven presets. */
   startMinute?: number
   endMinute?: number
+}
+
+/** Example postal rows for checkout / map demos; `presetTitle` is the short toggle label. */
+export type YangoDemoZoneDemoAddress = {
+  presetTitle: string
+  line1: string
+  line2?: string
+  suburb: string
+  city: string
+  region?: string
+  postalCode?: string
+  country?: string
+  blurb: string
 }
 
 export type YangoDemoZone = {
@@ -29,6 +43,8 @@ export type YangoDemoZone = {
   /** Shown under the map. */
   serviceDaysLabel: string
   slots: YangoDemoSlot[]
+  /** Present on built-in Windhoek demos — same `id` as `home_delivery_areas.code` / `shipping_zones.code`. */
+  demoAddress?: YangoDemoZoneDemoAddress
 }
 
 /** Stable codes shared with SQL seeds (`shipping_zones.code`). */
@@ -46,6 +62,18 @@ export const YANGO_DEMO_ZONES: YangoDemoZone[] = [
       { id: 'whk-sc-aft', label: 'Afternoon 14:00–17:00', startHour: 14, endHour: 17 },
       { id: 'whk-sc-eve', label: 'Evening 17:00–20:00', startHour: 17, endHour: 20 },
     ],
+    demoAddress: {
+      presetTitle: 'CBD / Klein Windhoek',
+      line1: '123 Independence Avenue',
+      line2: 'Unit 4B',
+      suburb: 'Klein Windhoek',
+      city: 'Windhoek',
+      region: 'Khomas',
+      postalCode: '10021',
+      country: 'NA',
+      blurb:
+        'Area code whk_south_central — south / central band (CBD, Klein Windhoek, Academia). Checkout demo address; not a real customer.',
+    },
   },
   {
     id: 'whk_katutura_khomasdal',
@@ -59,6 +87,18 @@ export const YANGO_DEMO_ZONES: YangoDemoZone[] = [
       { id: 'whk-kk-mid', label: 'Late morning 10:00–13:00', startHour: 10, endHour: 13 },
       { id: 'whk-kk-aft', label: 'Afternoon 15:00–18:00', startHour: 15, endHour: 18 },
     ],
+    demoAddress: {
+      presetTitle: 'Katutura',
+      line1: '45 Ngoma Street',
+      line2: 'House',
+      suburb: 'Katutura',
+      city: 'Windhoek',
+      region: 'Khomas',
+      postalCode: '10028',
+      country: 'NA',
+      blurb:
+        'Area code whk_katutura_khomasdal — Katutura / Khomasdal band. Checkout demo address; not a real customer.',
+    },
   },
   {
     id: 'whk_north_east',
@@ -72,6 +112,17 @@ export const YANGO_DEMO_ZONES: YangoDemoZone[] = [
       { id: 'whk-ne-early', label: 'Early 08:00–11:00', startHour: 8, endHour: 11 },
       { id: 'whk-ne-mid', label: 'Midday 11:00–14:00', startHour: 11, endHour: 14 },
     ],
+    demoAddress: {
+      presetTitle: 'Olympia',
+      line1: '7 Mokuti Street',
+      suburb: 'Olympia',
+      city: 'Windhoek',
+      region: 'Khomas',
+      postalCode: '10024',
+      country: 'NA',
+      blurb:
+        'Area code whk_north_east — north-east band (Olympia, Eros). Checkout demo address; not a real customer.',
+    },
   },
 ]
 
@@ -89,6 +140,11 @@ export function zoneCenter(z: YangoDemoZone): { lat: number; lng: number } {
 export function findYangoDemoZoneById(id: string, zones?: YangoDemoZone[]): YangoDemoZone | undefined {
   const list = zones ?? YANGO_DEMO_ZONES
   return list.find((z) => z.id === id)
+}
+
+/** Demo postal row for a zone / `home_delivery_areas.code`, if defined on the zone. */
+export function getYangoDemoAddressForAreaCode(areaCode: string, zones?: YangoDemoZone[]): YangoDemoZoneDemoAddress | undefined {
+  return findYangoDemoZoneById(areaCode, zones)?.demoAddress
 }
 
 /**
