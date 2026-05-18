@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiUrl } from '../lib/apiOrigin'
-import type { StoreHoursStatus } from './storeHours'
+import type { StoreHoursStatus } from '../lib/storeHours'
 
 const OPEN_FALLBACK: StoreHoursStatus = {
   payTodayMerchantId: 991001,
