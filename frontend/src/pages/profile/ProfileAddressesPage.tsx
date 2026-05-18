@@ -1,20 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material'
+import { Alert, Box, Button, Card, CardContent, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Skeleton, Stack, TextField, Typography } from '@mui/material'
 import LocationOnOutlinedIcon from '@mui/icons-material/LocationOnOutlined'
 import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined'
 import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
@@ -22,12 +8,19 @@ import { WalletSubheader } from '../wallet/WalletSubheader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
+import { AddressMapPicker, type MapZoneMeta } from '../../components/checkout/AddressMapPicker'
+import { approxDemoPinForAddressParts } from '../../lib/yangoDeliveryDemo'
+import { formatMoney } from '../../lib/money'
+
+const mapsApiKey =
+  typeof import.meta.env.VITE_GOOGLE_MAPS_API_KEY === 'string' ? import.meta.env.VITE_GOOGLE_MAPS_API_KEY : undefined
 
 type AddressRow = {
   id: string
   label: string | null
   line1: string
   line2: string | null
+  suburb: string | null
   city: string
   region: string | null
   postal_code: string | null
@@ -39,6 +32,7 @@ const emptyForm = {
   label: '',
   line1: '',
   line2: '',
+  suburb: '',
   city: '',
   region: '',
   postalCode: '',
@@ -52,12 +46,25 @@ export function ProfileAddressesPage() {
 
   const { user, loading } = useAuthMe()
   const [items, setItems] = useState<AddressRow[]>([])
+  const [addrListLoading, setAddrListLoading] = useState(false)
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
+  const [addrZonePreview, setAddrZonePreview] = useState<MapZoneMeta | null>(null)
+
+  const addressMapFocus = useMemo(
+    () => approxDemoPinForAddressParts({ suburb: form.suburb, line1: form.line1, city: form.city }),
+    [form.suburb, form.line1, form.city],
+  )
+
+  useEffect(() => {
+    if (!dialogOpen) setAddrZonePreview(null)
+  }, [dialogOpen])
 
   const load = useCallback(async () => {
     setLoadErr(null)
@@ -77,8 +84,23 @@ export function ProfileAddressesPage() {
   }, [])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (!user) {
+      setAddrListLoading(false)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      setAddrListLoading(true)
+      try {
+        await load()
+      } finally {
+        if (!cancelled) setAddrListLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user, load])
 
   function openNew() {
     setEditingId(null)
@@ -93,6 +115,7 @@ export function ProfileAddressesPage() {
       label: row.label ?? '',
       line1: row.line1,
       line2: row.line2 ?? '',
+      suburb: row.suburb ?? '',
       city: row.city,
       region: row.region ?? '',
       postalCode: row.postal_code ?? '',
@@ -112,6 +135,7 @@ export function ProfileAddressesPage() {
         label: form.label.trim() || null,
         line1: form.line1.trim(),
         line2: form.line2.trim() || null,
+        suburb: form.suburb.trim() || null,
         city: form.city.trim(),
         region: form.region.trim() || null,
         postalCode: form.postalCode.trim() || null,
@@ -159,8 +183,15 @@ export function ProfileAddressesPage() {
     }
   }
 
-  async function remove(id: string) {
-    if (!window.confirm('Remove this address?')) return
+  function openDeleteConfirm(id: string) {
+    setDeleteTargetId(id)
+    setMsg(null)
+  }
+
+  async function confirmDeleteAddress() {
+    const id = deleteTargetId
+    if (!id) return
+    setDeleteBusy(true)
     setMsg(null)
     try {
       await fetchCsrfToken()
@@ -170,9 +201,12 @@ export function ProfileAddressesPage() {
         setMsg({ text: data.error ?? 'Could not delete', severity: 'error' })
         return
       }
+      setDeleteTargetId(null)
       await load()
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Failed', severity: 'error' })
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -228,11 +262,26 @@ export function ProfileAddressesPage() {
         Add address
       </Button>
 
-      {items.length === 0 && !loadErr ? (
+      {addrListLoading ? (
+        <Stack spacing={1.5} aria-busy="true" aria-label="Loading addresses">
+          {[0, 1, 2].map((k) => (
+            <Card key={k} variant="outlined" sx={{ borderRadius: 3 }}>
+              <CardContent sx={{ py: 2 }}>
+                <Skeleton variant="text" width="50%" height={28} />
+                <Skeleton variant="text" width="100%" />
+                <Skeleton variant="text" width="90%" />
+              </CardContent>
+            </Card>
+          ))}
+        </Stack>
+      ) : null}
+
+      {!addrListLoading && items.length === 0 && !loadErr ? (
         <Typography color="text.secondary">No saved addresses yet.</Typography>
       ) : null}
 
-      {items.map((a) => (
+      {!addrListLoading &&
+        items.map((a) => (
         <Card key={a.id} variant="outlined" sx={{ borderRadius: 3 }}>
           <CardContent>
             <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
@@ -264,16 +313,33 @@ export function ProfileAddressesPage() {
                 <Button size="small" onClick={() => openEdit(a)}>
                   Edit
                 </Button>
-                <Button size="small" color="warning" onClick={() => void remove(a.id)}>
+                <Button size="small" color="warning" onClick={() => openDeleteConfirm(a.id)}>
                   Delete
                 </Button>
               </Stack>
             </Stack>
           </CardContent>
         </Card>
-      ))}
+        ))}
 
-      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={deleteTargetId != null} onClose={() => !deleteBusy && setDeleteTargetId(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Delete address?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This address will be removed from your account. You can add it again later.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTargetId(null)} disabled={deleteBusy}>
+            Cancel
+          </Button>
+          <Button color="warning" variant="contained" disabled={deleteBusy} onClick={() => void confirmDeleteAddress()}>
+            {deleteBusy ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>{editingId ? 'Edit address' : 'New address'}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5} sx={{ pt: 1 }}>
@@ -285,10 +351,34 @@ export function ProfileAddressesPage() {
             <TextField label="Label (optional)" value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} fullWidth />
             <TextField label="Line 1" required value={form.line1} onChange={(e) => setForm((f) => ({ ...f, line1: e.target.value }))} fullWidth />
             <TextField label="Line 2" value={form.line2} onChange={(e) => setForm((f) => ({ ...f, line2: e.target.value }))} fullWidth />
+            <TextField label="Suburb" value={form.suburb} onChange={(e) => setForm((f) => ({ ...f, suburb: e.target.value }))} fullWidth />
             <TextField label="City" required value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))} fullWidth />
             <TextField label="Region / state" value={form.region} onChange={(e) => setForm((f) => ({ ...f, region: e.target.value }))} fullWidth />
             <TextField label="Postal code" value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value }))} fullWidth />
             <TextField label="Country" value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} fullWidth />
+            <Typography variant="subtitle2" fontWeight={800} sx={{ pt: 0.5 }}>
+              Delivery coverage preview
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Static map preview (not Google Maps unless configured). Bands and prices follow active home-delivery areas from
+              the database. Drag the pin to see which zone matches your address text.
+            </Typography>
+            <AddressMapPicker
+              mapsApiKey={mapsApiKey}
+              focusLatLng={addressMapFocus}
+              onZoneMetaChange={setAddrZonePreview}
+            />
+            {addrZonePreview?.zone ? (
+              <Typography variant="caption" color="text.secondary">
+                Selected band: <strong>{addrZonePreview.zone.name}</strong> — illustrative courier from{' '}
+                {formatMoney(addrZonePreview.zone.courierEstimateCents, 'NAD')}. Saving the address does not store this band;
+                choose again at checkout for home delivery.
+              </Typography>
+            ) : addrZonePreview && !addrZonePreview.zone ? (
+              <Typography variant="caption" color="warning.main">
+                Pin is outside the shaded delivery zones — adjust suburb/line 1 or move the pin for a match.
+              </Typography>
+            ) : null}
             <Typography variant="caption" color="text.secondary">
               <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input

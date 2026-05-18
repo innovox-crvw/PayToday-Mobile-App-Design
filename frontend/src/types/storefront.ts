@@ -7,6 +7,8 @@ export interface StoreCategoryDto {
   isActive?: boolean
   /** Allowlisted key from API; UI maps via `categoryIcons`. */
   iconKey?: string | null
+  /** When true (or an ancestor is true), product pages may show financing for variants at or above the store minimum (N$5,000). */
+  financeEligible?: boolean
 }
 
 export interface StorePromotionDto {
@@ -34,6 +36,26 @@ export interface StorefrontConfig {
   scanApiConfigured: boolean
   /** When true, the API rejects guest checkout (`CHECKOUT_REQUIRE_SIGN_IN`). */
   checkoutRequireSignIn?: boolean
+  liquorGatingEnabled?: boolean
+  /** Category root slugs (e.g. liquor, wine) used for minor UX + gating; from `AGE_RESTRICTED_CATEGORY_SLUGS`. */
+  minorRestrictedCategorySlugs?: string[]
+  /** URL opened by “Apply for finance” (default NedAccess); override with `NEDBANK_FINANCE_URL`. */
+  nedbankFinanceUrl?: string
+  defaultStoreMerchantId?: number
+  yangoEnabled?: boolean
+}
+
+export interface StoreCheckoutPreview {
+  outsideStoreHours: boolean
+  requiresScheduledTime: boolean
+}
+
+/** Populated on `GET /api/cart?preview=1` when the database cart is used. */
+export interface LiquorCheckoutPreview {
+  hasAlcohol: boolean
+  outsideLiquorSellingWindow: boolean
+  /** When true, checkout must include a scheduled window (home or pickup) until liquor hours allow immediate fulfilment. */
+  requiresDeliveryTime: boolean
 }
 
 export interface CartTotalsPreview {
@@ -41,6 +63,8 @@ export interface CartTotalsPreview {
   currency: string
   shippingCentsHome: number
   shippingCentsPickup: number
+  /** Optional express home-delivery estimate when API is configured with `SHIPPING_EXPRESS_CENTS`. */
+  shippingCentsExpress?: number | null
   taxCents: number
   /** Promotional / voucher discounts (cents); 0 when none applied. */
   discountCents?: number

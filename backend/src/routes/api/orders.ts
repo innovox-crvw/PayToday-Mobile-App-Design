@@ -14,6 +14,7 @@ import {
 } from '../../services/orderService.js'
 import { getReturnableLinesForOrder } from '../../services/returnService.js'
 import { getOrderReviewByOrderId, insertOrderReview } from '../../queries/orderReviews.js'
+import { listDisputesForOrderStaff } from '../../services/disputeService.js'
 
 export const ordersRouter = Router()
 
@@ -448,7 +449,8 @@ ordersRouter.get('/:orderId', optionalAuth, async (req, res) => {
 
   const u = req.user
   if (isStaff(u?.role)) {
-    res.json(detail)
+    const disputes = await listDisputesForOrderStaff(pool, orderId)
+    res.json({ ...detail, disputes })
     return
   }
   if (u && detail.order.user_id === u.sub) {
@@ -482,9 +484,30 @@ async function loadOrderDetail(
     paytoday_reference: string | null
     deposit_location_id: string | null
     deposit_location_name: string | null
+    contains_alcohol: boolean
+    delivery_scheduled_for: string | null
+    home_delivery_window: { start: string; end: string; label: string | null } | null
   } | null
-  lines: { variantId: string; quantity: number; unitPriceCents: number; sku: string; productName: string }[]
-  fulfillment: { stage: string; carrier_name: string | null; tracking_reference: string | null } | null
+  lines: {
+    variantId: string
+    variantName: string | null
+    quantity: number
+    unitPriceCents: number
+    sku: string
+    productName: string
+    packageLengthMm: number | null
+    packageWidthMm: number | null
+    packageHeightMm: number | null
+    grossWeightG: number | null
+  }[]
+  fulfillment: {
+    stage: string
+    carrier_name: string | null
+    tracking_reference: string | null
+    yango_delivery_id: string | null
+    yango_status: string | null
+    yango_tracking_url: string | null
+  } | null
   /** Snapshot from `addresses` at read time (lineup with shipping_address_id). */
   shippingAddress: {
     label: string | null
@@ -517,6 +540,11 @@ async function loadOrderDetail(
       paytoday_reference: string | null
       deposit_location_id: string | null
       deposit_location_name: string | null
+      contains_alcohol: number | boolean | null
+      delivery_scheduled_for: Date | null
+      home_delivery_window_start: Date | null
+      home_delivery_window_end: Date | null
+      home_delivery_window_label: string | null
       ship_label: string | null
       ship_line1: string | null
       ship_line2: string | null
@@ -533,6 +561,11 @@ async function loadOrderDetail(
         CAST(o.user_id AS NVARCHAR(36)) AS user_id, o.created_at, o.paytoday_reference,
         CAST(o.deposit_location_id AS NVARCHAR(36)) AS deposit_location_id,
         (SELECT TOP 1 dl.name FROM dbo.deposit_locations dl WHERE dl.id = o.deposit_location_id) AS deposit_location_name,
+        ISNULL(o.contains_alcohol, 0) AS contains_alcohol,
+        o.delivery_scheduled_for,
+        o.home_delivery_window_start,
+        o.home_delivery_window_end,
+        o.home_delivery_window_label,
         sa.label AS ship_label, sa.line1 AS ship_line1, sa.line2 AS ship_line2, sa.city AS ship_city,
         sa.region AS ship_region, sa.postal_code AS ship_postal, sa.country AS ship_country
       FROM dbo.orders o
@@ -566,9 +599,16 @@ async function loadOrderDetail(
       unit_price_cents: number
       sku: string
       product_name: string
+      variant_name: string | null
+      package_length_mm: number | null
+      package_width_mm: number | null
+      package_height_mm: number | null
+      gross_weight_g: number | null
     }>(`
       SELECT CAST(ol.variant_id AS NVARCHAR(36)) AS variant_id, ol.quantity, ol.unit_price_cents,
-        v.sku, p.name AS product_name
+        v.sku, p.name AS product_name,
+        v.name AS variant_name,
+        v.package_length_mm, v.package_width_mm, v.package_height_mm, v.gross_weight_g
       FROM dbo.order_lines ol
       INNER JOIN dbo.product_variants v ON v.id = ol.variant_id
       INNER JOIN dbo.products p ON p.id = v.product_id
@@ -578,8 +618,17 @@ async function loadOrderDetail(
   const f = await pool
     .request()
     .input('oid', orderId)
-    .query<{ stage: string; carrier_name: string | null; tracking_reference: string | null }>(`
-      SELECT stage, carrier_name, tracking_reference FROM dbo.fulfillment_tasks WHERE order_id = @oid
+    .query<{
+      stage: string
+      carrier_name: string | null
+      tracking_reference: string | null
+      yango_delivery_id: string | null
+      yango_status: string | null
+      yango_tracking_url: string | null
+    }>(`
+      SELECT stage, carrier_name, tracking_reference,
+        yango_delivery_id, yango_status, yango_tracking_url
+      FROM dbo.fulfillment_tasks WHERE order_id = @oid
     `)
 
   const activePickup = await pool
@@ -589,6 +638,24 @@ async function loadOrderDetail(
       `SELECT COUNT(*) AS n FROM dbo.pickup_codes WHERE order_id = @oid AND used_at IS NULL AND expires_at > SYSUTCDATETIME()`,
     )
   const activePickupCodes = Number(activePickup.recordset[0]?.n ?? 0)
+
+  const winStart = row.home_delivery_window_start
+  const winEnd = row.home_delivery_window_end
+  const homeDeliveryWindow =
+    winStart instanceof Date &&
+    winEnd instanceof Date &&
+    !Number.isNaN(winStart.getTime()) &&
+    !Number.isNaN(winEnd.getTime())
+      ? {
+          start: winStart.toISOString(),
+          end: winEnd.toISOString(),
+          label: row.home_delivery_window_label?.trim() ? row.home_delivery_window_label.trim() : null,
+        }
+      : null
+  const deliveryScheduled =
+    row.delivery_scheduled_for instanceof Date && !Number.isNaN(row.delivery_scheduled_for.getTime())
+      ? row.delivery_scheduled_for.toISOString()
+      : null
 
   return {
     order: {
@@ -606,19 +673,30 @@ async function loadOrderDetail(
       paytoday_reference: row.paytoday_reference,
       deposit_location_id: row.deposit_location_id,
       deposit_location_name: row.deposit_location_name,
+      contains_alcohol: Boolean(Number(row.contains_alcohol ?? 0)),
+      delivery_scheduled_for: deliveryScheduled,
+      home_delivery_window: homeDeliveryWindow,
     },
     lines: linesR.recordset.map((l) => ({
       variantId: l.variant_id,
+      variantName: l.variant_name,
       quantity: l.quantity,
       unitPriceCents: l.unit_price_cents,
       sku: l.sku,
       productName: l.product_name,
+      packageLengthMm: l.package_length_mm != null ? Number(l.package_length_mm) : null,
+      packageWidthMm: l.package_width_mm != null ? Number(l.package_width_mm) : null,
+      packageHeightMm: l.package_height_mm != null ? Number(l.package_height_mm) : null,
+      grossWeightG: l.gross_weight_g != null ? Number(l.gross_weight_g) : null,
     })),
     fulfillment: f.recordset[0]
       ? {
           stage: f.recordset[0].stage,
           carrier_name: f.recordset[0].carrier_name,
           tracking_reference: f.recordset[0].tracking_reference,
+          yango_delivery_id: f.recordset[0].yango_delivery_id ?? null,
+          yango_status: f.recordset[0].yango_status ?? null,
+          yango_tracking_url: f.recordset[0].yango_tracking_url ?? null,
         }
       : null,
     shippingAddress,

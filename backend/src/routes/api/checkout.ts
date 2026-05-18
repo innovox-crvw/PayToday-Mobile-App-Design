@@ -22,9 +22,14 @@ import {
 import { getIntegrationSettingsMap } from '../../services/integrationSettingsCache.js'
 import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js'
 import { shippingCentsForDelivery, taxCentsForSubtotal } from '../../services/shipping.js'
+import { previewDiscountCode, redeemDiscountCode } from '../../services/discountService.js'
+import { getHomeDeliveryAreaById, shippingCentsForArea } from '../../repos/homeDeliveryRepo.js'
 import { findUserById } from '../../repos/usersRepo.js'
 import { setPaymentProcessing, updatePaymentReference } from '../../repos/paymentsRepo.js'
 import { parseEmailString, parseOptionalGuestPersonName, parseOptionalPhoneDigits } from '../../lib/inputValidators.js'
+import { assertCheckoutAllowedByMerchantHours } from '../../services/merchantHoursService.js'
+import { assertAdultForAlcoholCart } from '../../services/liquorAgeService.js'
+import { parseCheckoutDeliveryMethod, isPickupDeliveryMethod, isHomeDeliveryMethod } from '../../lib/checkoutDelivery.js'
 import type { NextFunction, Request, Response } from 'express'
 
 class CheckoutValidationError extends Error {
@@ -39,6 +44,9 @@ class CheckoutValidationError extends Error {
 export const checkoutRouter = Router()
 checkoutRouter.use(optionalAuth)
 
+const CHECKOUT_DB_HINT =
+  'Start Microsoft SQL Server on the host and port in SQL_CONNECTION_STRING, then run npm run db:setup from the project root. Check the API console on startup for “MS SQL connected” vs “not reachable”.'
+
 function checkoutSignInGate(req: Request, res: Response, next: NextFunction): void {
   if (!env.checkoutRequireSignIn) {
     next()
@@ -46,9 +54,6 @@ function checkoutSignInGate(req: Request, res: Response, next: NextFunction): vo
   }
   requireAuth(req, res, next)
 }
-
-const CHECKOUT_DB_HINT =
-  'Start Microsoft SQL Server on the host and port in SQL_CONNECTION_STRING, then run npm run db:setup from the project root. Check the API console on startup for “MS SQL connected” vs “not reachable”.'
 
 function splitFullName(fullName: string | null | undefined): { first: string | null; last: string | null } {
   const t = fullName?.trim()
@@ -58,6 +63,31 @@ function splitFullName(fullName: string | null | undefined): { first: string | n
   const first = t.slice(0, i).slice(0, 120)
   const last = t.slice(i + 1).trim().slice(0, 120)
   return { first, last: last || null }
+}
+
+function parseCheckoutScheduling(body: unknown): {
+  deliveryScheduledFor: Date | null
+  homeDeliveryWindowStart: Date | null
+  homeDeliveryWindowEnd: Date | null
+  homeDeliveryWindowLabel: string | null
+} {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+  const clean = (d: Date) => (Number.isNaN(d.getTime()) ? null : d)
+  const ds =
+    typeof b.deliveryScheduledFor === 'string' && b.deliveryScheduledFor.trim()
+      ? clean(new Date(b.deliveryScheduledFor.trim()))
+      : null
+  const hw = b.homeDeliveryWindow && typeof b.homeDeliveryWindow === 'object' ? (b.homeDeliveryWindow as Record<string, unknown>) : null
+  const s =
+    hw && typeof hw.start === 'string' && hw.start.trim() ? clean(new Date(String(hw.start).trim())) : null
+  const e = hw && typeof hw.end === 'string' && hw.end.trim() ? clean(new Date(String(hw.end).trim())) : null
+  const lab = hw && typeof hw.label === 'string' && hw.label.trim() ? String(hw.label).trim().slice(0, 200) : null
+  return {
+    deliveryScheduledFor: ds,
+    homeDeliveryWindowStart: s,
+    homeDeliveryWindowEnd: e,
+    homeDeliveryWindowLabel: lab,
+  }
 }
 
 async function payerFieldsForPaymentIntent(
@@ -213,7 +243,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
   }
 
-  const deliveryMethod = req.body?.deliveryMethod === 'deposit_box' ? 'deposit_box' : 'home'
+  const deliveryMethod = parseCheckoutDeliveryMethod(req.body?.deliveryMethod, env.yangoEnabled)
   const depositLocationId = typeof req.body?.depositLocationId === 'string' ? req.body.depositLocationId : null
   const shippingAddressId = typeof req.body?.shippingAddressId === 'string' ? req.body.shippingAddressId : null
   let guestEmail: string | null =
@@ -242,17 +272,17 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     return
   }
 
-  if (deliveryMethod === 'deposit_box' && !depositLocationId) {
-    res.status(400).json({ error: 'depositLocationId required for deposit_box' })
+  if (isPickupDeliveryMethod(deliveryMethod) && !depositLocationId) {
+    res.status(400).json({ error: 'depositLocationId required for store pickup or deposit box delivery' })
     return
   }
-  if (deliveryMethod === 'home' && !req.user) {
+  if (isHomeDeliveryMethod(deliveryMethod) && !req.user) {
     res.status(401).json({
       error: 'Sign in is required for home delivery. Choose pickup, or sign in and add a delivery address.',
     })
     return
   }
-  if (deliveryMethod === 'home' && req.user) {
+  if (isHomeDeliveryMethod(deliveryMethod) && req.user) {
     if (!shippingAddressId?.trim()) {
       res.status(400).json({ error: 'shippingAddressId required for home delivery' })
       return
@@ -276,7 +306,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
   }
 
-  if (deliveryMethod === 'deposit_box' && depositLocationId) {
+  if (isPickupDeliveryMethod(deliveryMethod) && depositLocationId) {
     try {
       await validateDepositLocationExists(pool, depositLocationId.trim())
     } catch (e) {
@@ -291,6 +321,25 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
   const lines = await getCartLines(pool, cartId)
   if (lines.length === 0) {
     res.status(400).json({ error: 'Cart is empty' })
+    return
+  }
+
+  const scheduling = parseCheckoutScheduling(req.body)
+  const bodyObj = req.body && typeof req.body === 'object' ? (req.body as Record<string, unknown>) : {}
+  const prefsRaw = bodyObj.deliveryPreferences
+  if (typeof prefsRaw === 'string' && prefsRaw.trim()) {
+    const prefs = prefsRaw.trim().slice(0, 280)
+    const base = scheduling.homeDeliveryWindowLabel?.trim() ?? ''
+    scheduling.homeDeliveryWindowLabel = [base, `Customer availability: ${prefs}`].filter(Boolean).join(' — ').slice(0, 200)
+  }
+
+  try {
+    await assertCheckoutAllowedByMerchantHours(pool, cartId, { deliveryMethod, scheduling })
+    if (env.liquorGatingEnabled) {
+      await assertAdultForAlcoholCart(pool, cartId, checkoutSqlUserId ?? undefined)
+    }
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Checkout not allowed' })
     return
   }
 
@@ -310,8 +359,35 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     currency = l.currency
   }
 
-  const shippingCents = shippingCentsForDelivery(subtotalCents, deliveryMethod)
+  let shippingCents = shippingCentsForDelivery(subtotalCents, deliveryMethod)
+  if (isHomeDeliveryMethod(deliveryMethod)) {
+    const rawAreaId = typeof bodyObj.homeDeliveryAreaId === 'string' ? bodyObj.homeDeliveryAreaId.trim() : ''
+    if (rawAreaId) {
+      const area = await getHomeDeliveryAreaById(pool, rawAreaId)
+      if (area) {
+        let areaShipping = await shippingCentsForArea(pool, subtotalCents, rawAreaId)
+        if (area.free_above_cents <= 0 && env.shippingFreeSubtotalCents > 0 && subtotalCents >= env.shippingFreeSubtotalCents) {
+          areaShipping = 0
+        }
+        shippingCents = areaShipping
+      }
+    }
+  }
   const taxCents = taxCentsForSubtotal(subtotalCents)
+
+  /* Discount code (optional) */
+  let discountCents = 0
+  let discountCodeId: string | null = null
+  const rawDiscountCode = typeof req.body?.discountCode === 'string' ? req.body.discountCode.trim() : ''
+  if (rawDiscountCode) {
+    const disc = await previewDiscountCode(pool, rawDiscountCode, subtotalCents)
+    if ('error' in disc) {
+      res.status(400).json({ error: disc.error, field: 'discountCode', code: 'discount_invalid' })
+      return
+    }
+    discountCents = disc.discountCents
+    discountCodeId = disc.discountCodeId
+  }
 
   let orderId: string
   let totalCents: number
@@ -330,11 +406,17 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       subtotalCents,
       shippingCents,
       taxCents,
+      discountCents,
+      discountCodeId,
       checkoutIdempotencyKey,
+      scheduling,
     })
     orderId = o.orderId
     totalCents = o.totalCents
     currency = o.currency
+    if (discountCodeId) {
+      try { await redeemDiscountCode(pool, discountCodeId) } catch { /* best-effort */ }
+    }
 
     reference = `PTSTORE-${orderId}`
     const paymentIdemKey = crypto.randomUUID()

@@ -136,15 +136,11 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
     const catSql = `
         SELECT TOP 12
           ISNULL(c.name, N'Uncategorised') AS categoryName,
-          CAST(SUM(ISNULL(qty.sumQty, 0)) AS INT) AS units
+          CAST(SUM(CAST(ISNULL(iq.quantity, 0) AS BIGINT)) AS INT) AS units
         FROM dbo.products p
         LEFT JOIN dbo.categories c ON c.id = p.category_id
         INNER JOIN dbo.product_variants v ON v.product_id = p.id
-        LEFT JOIN (
-          SELECT variant_id, SUM(quantity) AS sumQty
-          FROM dbo.inventory_quantity
-          GROUP BY variant_id
-        ) qty ON qty.variant_id = v.id
+        LEFT JOIN dbo.inventory_quantity iq ON iq.variant_id = v.id
         WHERE 1 = 1${scoped ? catFilter : ''}
         GROUP BY ISNULL(c.name, N'Uncategorised')
         ORDER BY units DESC

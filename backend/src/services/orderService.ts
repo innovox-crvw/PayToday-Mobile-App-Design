@@ -2,6 +2,7 @@ import type { ConnectionPool, Transaction } from 'mssql'
 import type { InventoryPolicy } from '../types/catalogue.js'
 import { normalizeInventoryPolicy } from '../repos/productsRepo.js'
 import { validateCartAndReturnLines } from './checkoutValidation.js'
+import { cartContainsAlcohol } from './liquorAgeService.js'
 
 async function readInventoryPolicy(tx: Transaction, variantId: string): Promise<InventoryPolicy> {
   try {
@@ -20,13 +21,22 @@ export async function createOrderFromCart(
   input: {
     userId: string | undefined
     guestEmail: string | null
-    deliveryMethod: 'home' | 'deposit_box'
+    deliveryMethod: string
     shippingAddressId: string | null
     depositLocationId: string | null
     subtotalCents: number
     shippingCents: number
     taxCents: number
+    discountCents?: number
+    discountCodeId?: string | null
     checkoutIdempotencyKey: string | null
+    /** Optional alcohol / home delivery scheduling (migration 055). */
+    scheduling?: {
+      deliveryScheduledFor: Date | null
+      homeDeliveryWindowStart: Date | null
+      homeDeliveryWindowEnd: Date | null
+      homeDeliveryWindowLabel: string | null
+    }
   },
 ): Promise<{ orderId: string; totalCents: number; currency: string }> {
   const transaction = pool.transaction()
@@ -45,12 +55,20 @@ export async function createOrderFromCart(
       throw new Error('Cart total changed — refresh and try again')
     }
 
+    const hasAlcohol = await cartContainsAlcohol(transaction as unknown as ConnectionPool, cartId)
+    const deliveryScheduledFor = input.scheduling?.deliveryScheduledFor ?? null
+    const homeDeliveryWindowStart = input.scheduling?.homeDeliveryWindowStart ?? null
+    const homeDeliveryWindowEnd = input.scheduling?.homeDeliveryWindowEnd ?? null
+    const rawLabel = input.scheduling?.homeDeliveryWindowLabel
+    const homeDeliveryWindowLabel = rawLabel?.trim() ? rawLabel.trim().slice(0, 200) : null
+
     const wh = await transaction
       .request()
       .query<{ id: string }>(`SELECT TOP 1 CAST(id AS NVARCHAR(36)) AS id FROM dbo.warehouses ORDER BY code`)
     const warehouseId = wh.recordset[0]?.id
 
-    const totalCents = input.subtotalCents + input.shippingCents + input.taxCents
+    const discountCents = input.discountCents ?? 0
+    const totalCents = Math.max(0, input.subtotalCents + input.shippingCents + input.taxCents - discountCents)
 
     const o = await transaction
       .request()
@@ -62,18 +80,27 @@ export async function createOrderFromCart(
       .input('subtotal', input.subtotalCents)
       .input('shipping', input.shippingCents)
       .input('tax', input.taxCents)
+      .input('discountCents', discountCents)
+      .input('discountCodeId', input.discountCodeId ?? null)
       .input('total', totalCents)
       .input('currency', currency)
       .input('idem', input.checkoutIdempotencyKey)
+      .input('containsAlcohol', hasAlcohol ? 1 : 0)
+      .input('deliveryScheduledFor', deliveryScheduledFor)
+      .input('homeWinStart', homeDeliveryWindowStart)
+      .input('homeWinEnd', homeDeliveryWindowEnd)
+      .input('homeWinLabel', homeDeliveryWindowLabel)
       .query<{ id: string }>(`
       INSERT INTO dbo.orders (
         user_id, guest_email, status, delivery_method, shipping_address_id, deposit_location_id,
-        subtotal_cents, shipping_cents, tax_cents, total_cents, currency, checkout_idempotency_key
+        subtotal_cents, shipping_cents, tax_cents, discount_cents, discount_code_id, total_cents, currency, checkout_idempotency_key,
+        contains_alcohol, delivery_scheduled_for, home_delivery_window_start, home_delivery_window_end, home_delivery_window_label
       )
       OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
       VALUES (
         @userId, @guestEmail, N'pending_payment', @deliveryMethod, @shippingAddressId, @depositLocationId,
-        @subtotal, @shipping, @tax, @total, @currency, @idem
+        @subtotal, @shipping, @tax, @discountCents, @discountCodeId, @total, @currency, @idem,
+        @containsAlcohol, @deliveryScheduledFor, @homeWinStart, @homeWinEnd, @homeWinLabel
       )
     `)
     const orderId = o.recordset[0].id

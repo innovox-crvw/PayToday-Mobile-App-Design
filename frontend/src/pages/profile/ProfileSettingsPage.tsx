@@ -61,6 +61,8 @@ export function ProfileSettingsPage() {
   const [uiLanguage, setUiLanguage] = useState('en')
   const [reducedMotion, setReducedMotion] = useState(false)
   const [prefsMsg, setPrefsMsg] = useState<string | null>(null)
+  const [uiLocale, setUiLocale] = useState<string>('en-NA')
+  const [localeSaving, setLocaleSaving] = useState(false)
 
   const [publicCfg, setPublicCfg] = useState<{
     publicStoreUrl?: string
@@ -87,6 +89,28 @@ export function ProfileSettingsPage() {
     setUiLanguage(readUiLanguage() || 'en')
     setReducedMotion(readReducedMotion())
   }, [])
+
+  useEffect(() => {
+    if (user && (user as { ui_locale?: string }).ui_locale) {
+      setUiLocale((user as { ui_locale?: string }).ui_locale ?? 'en-NA')
+    }
+  }, [user])
+
+  async function saveUiLocale(locale: string) {
+    setUiLocale(locale)
+    if (!user) return
+    setLocaleSaving(true)
+    try {
+      await fetchCsrfToken()
+      await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uiLocale: locale }),
+      })
+      setPrefsMsg('Language / locale saved to your account.')
+      window.setTimeout(() => setPrefsMsg(null), 2500)
+    } catch { /* ignore */ } finally { setLocaleSaving(false) }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -262,15 +286,29 @@ export function ProfileSettingsPage() {
 
             <TextField
               select
-              label="Language"
+              label="Language (device)"
               value={uiLanguage}
               onChange={(e) => persistUiLanguage(e.target.value)}
               fullWidth
-              helperText="Sets page language (labels). Full translations coming later."
+              helperText="Sets page language on this device only. Full translations coming later."
             >
               <MenuItem value="en">English (default)</MenuItem>
               <MenuItem value="en-ZA">English (South Africa)</MenuItem>
               <MenuItem value="af">Afrikaans (label only)</MenuItem>
+            </TextField>
+            <TextField
+              select
+              label="Language / locale (account)"
+              value={uiLocale}
+              onChange={(e) => { void saveUiLocale(e.target.value) }}
+              fullWidth
+              disabled={localeSaving || !user}
+              helperText={user ? 'Saved to your account.' : 'Sign in to save locale to account.'}
+            >
+              <MenuItem value="en-NA">English (Namibia)</MenuItem>
+              <MenuItem value="af-NA">Afrikaans (Namibia)</MenuItem>
+              <MenuItem value="en-ZA">English (South Africa)</MenuItem>
+              <MenuItem value="en-US">English (US)</MenuItem>
             </TextField>
 
             <FormControlLabel

@@ -84,10 +84,16 @@ function ledgerRowToDto(row: {
         ? 'Store purchase'
         : et === 'store_refund_credit'
           ? 'Store refund (after fee)'
-          : 'Wallet payment'
+          : et === 'finance_approve_credit'
+            ? 'Financing payout (demo)'
+            : 'Wallet payment'
   return {
     id: row.id,
-    business: isCredit ? 'Demo wallet funding' : payee || 'Wallet payment',
+    business: isCredit
+      ? et === 'finance_approve_credit'
+        ? 'Nedbank financing (demo)'
+        : 'Demo wallet funding'
+      : payee || 'Wallet payment',
     status: 'successful',
     reference: ref,
     date,

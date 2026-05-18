@@ -28,6 +28,9 @@ export type AuthMeUser = {
   emailVerified?: boolean
   /** Present when `/api/auth/me` merged a SQL row: local bcrypt vs PayToday (Keycloak-linked). */
   accountKind?: 'local' | 'paytoday'
+  dateOfBirth?: string | null
+  /** Derived server-side from `dateOfBirth` when liquor gating is enabled. */
+  isAdult?: boolean
   /** Linked PayToday merchants (migration 022); empty when none or legacy schema. */
   merchants?: AuthMeMerchant[]
 }

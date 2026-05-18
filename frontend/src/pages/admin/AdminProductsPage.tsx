@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InventoryPolicy } from '../../types/catalogue'
 import {
   Alert,
@@ -18,6 +18,8 @@ import {
   Paper,
   Stack,
   Switch,
+  Tab,
+  Tabs,
   Table,
   TableBody,
   TableCell,
@@ -28,8 +30,10 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import AddIcon from '@mui/icons-material/Add'
 import CloseIcon from '@mui/icons-material/Close'
+import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import Grid from '@mui/material/Grid2'
 import type { ProductDto } from '../../types/catalogue'
 import { AdminProductGalleryEditor } from '../../components/admin/AdminProductGalleryEditor'
@@ -92,13 +96,13 @@ export function AdminProductsPage() {
   const [compareAtCreate, setCompareAtCreate] = useState('')
   const [inventoryPolicyCreate, setInventoryPolicyCreate] = useState<InventoryPolicy>('track')
   const [variantOptionsCreate, setVariantOptionsCreate] = useState('')
-  const [packageLenCreate, setPackageLenCreate] = useState('')
-  const [packageWidCreate, setPackageWidCreate] = useState('')
-  const [packageHgtCreate, setPackageHgtCreate] = useState('')
+  const [packageLenCreate, setPackageLenCreate] = useState('200')
+  const [packageWidCreate, setPackageWidCreate] = useState('150')
+  const [packageHgtCreate, setPackageHgtCreate] = useState('100')
   const [grossWeightCreate, setGrossWeightCreate] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [editProduct, setEditProduct] = useState<
-    Record<string, { name: string; slug: string; description: string; isActive: boolean; categoryId: string }>
+    Record<string, { name: string; slug: string; description: string; isActive: boolean; categoryId: string; containsAlcohol: boolean }>
   >({})
   const [editVariant, setEditVariant] = useState<
     Record<
@@ -125,6 +129,8 @@ export function AdminProductsPage() {
   const [tablePage, setTablePage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(25)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importTab, setImportTab] = useState(0)
 
   const bulkCsvFileRef = useRef<HTMLInputElement | null>(null)
   const [bulkCsvText, setBulkCsvText] = useState('')
@@ -133,13 +139,16 @@ export function AdminProductsPage() {
   const [bulkCsvOk, setBulkCsvOk] = useState<string | null>(null)
   const [bulkCsvParseErrors, setBulkCsvParseErrors] = useState<CsvParseErr[]>([])
   const [bulkCsvRowErrors, setBulkCsvRowErrors] = useState<CsvRowErr[]>([])
+  const bulkZipFileRef = useRef<HTMLInputElement | null>(null)
+  const [bulkZipBusy, setBulkZipBusy] = useState(false)
+  const [bulkZipOk, setBulkZipOk] = useState<string | null>(null)
 
   const createDiscountPreview = useMemo(
     () => adminDiscountPreview(priceCents, compareAtCreate, 'NAD'),
     [priceCents, compareAtCreate],
   )
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null)
     try {
       const [res, catRes] = await Promise.all([
@@ -163,6 +172,7 @@ export function AdminProductsPage() {
           description: p.description,
           isActive: p.isActive !== false,
           categoryId: p.categoryId || '',
+          containsAlcohol: p.containsAlcohol === true,
         }
         for (const v of p.variants) {
           nextEv[v.id] = {
@@ -189,16 +199,22 @@ export function AdminProductsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     }
-  }
-
-  useEffect(() => {
-    void load()
   }, [])
 
   useEffect(() => {
-    if (editingProductId && !items.some((x) => x.id === editingProductId)) {
-      setEditingProductId(null)
-    }
+    const t = window.setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (editingProductId && !items.some((x) => x.id === editingProductId)) {
+        setEditingProductId(null)
+      }
+    }, 0)
+    return () => clearTimeout(t)
   }, [items, editingProductId])
 
   const filteredCatalogue = useMemo(() => {
@@ -218,10 +234,13 @@ export function AdminProductsPage() {
   }, [filteredCatalogue, tablePage, rowsPerPage])
 
   useEffect(() => {
-    setTablePage((p) => {
-      const maxPage = Math.max(0, Math.ceil(filteredCatalogue.length / rowsPerPage) - 1)
-      return Math.min(p, maxPage)
-    })
+    const t = window.setTimeout(() => {
+      setTablePage((p) => {
+        const maxPage = Math.max(0, Math.ceil(filteredCatalogue.length / rowsPerPage) - 1)
+        return Math.min(p, maxPage)
+      })
+    }, 0)
+    return () => clearTimeout(t)
   }, [filteredCatalogue.length, rowsPerPage])
 
   const editingProduct = editingProductId ? (items.find((x) => x.id === editingProductId) ?? null) : null
@@ -237,9 +256,9 @@ export function AdminProductsPage() {
     setCompareAtCreate('')
     setInventoryPolicyCreate('track')
     setVariantOptionsCreate('')
-    setPackageLenCreate('')
-    setPackageWidCreate('')
-    setPackageHgtCreate('')
+    setPackageLenCreate('200')
+    setPackageWidCreate('150')
+    setPackageHgtCreate('100')
     setGrossWeightCreate('')
     setCategoryId('')
   }
@@ -252,32 +271,32 @@ export function AdminProductsPage() {
   async function createProduct() {
     setError(null)
     const slugR = parseProductSlug(slug, 'slug')
-    if (!slugR.ok) {
+    if (slugR.ok === false) {
       setError(slugR.message)
       return
     }
     const nameR = parseProductName(name, 'name')
-    if (!nameR.ok) {
+    if (nameR.ok === false) {
       setError(nameR.message)
       return
     }
     const skuR = parseSku(sku, 'sku')
-    if (!skuR.ok) {
+    if (skuR.ok === false) {
       setError(skuR.message)
       return
     }
     const imgR = parseOptionalCatalogImageUrl(imageUrl.trim() || null, 'imageUrl')
-    if (!imgR.ok) {
+    if (imgR.ok === false) {
       setError(imgR.message)
       return
     }
     const priceR = parseNonNegativeIntCents(priceCents, 'priceCents')
-    if (!priceR.ok) {
+    if (priceR.ok === false) {
       setError(priceR.message)
       return
     }
     const stockR = parseNonNegativeInt(initialStock, 'initialStock')
-    if (!stockR.ok) {
+    if (stockR.ok === false) {
       setError(stockR.message)
       return
     }
@@ -298,29 +317,23 @@ export function AdminProductsPage() {
     const wStr = packageWidCreate.trim()
     const hStr = packageHgtCreate.trim()
     const gStr = grossWeightCreate.trim()
-    const anyLwh = Boolean(lStr || wStr || hStr)
-    if (anyLwh && !(lStr && wStr && hStr)) {
-      setError('Package length, width, and height (mm) must all be filled, or all left empty.')
+    if (!lStr || !wStr || !hStr) {
+      setError('Package length, width, and height (mm) are all required.')
       return
     }
-    let packageLengthMm: number | null = null
-    let packageWidthMm: number | null = null
-    let packageHeightMm: number | null = null
-    if (lStr && wStr && hStr) {
-      packageLengthMm = Number(lStr)
-      packageWidthMm = Number(wStr)
-      packageHeightMm = Number(hStr)
-      if (
-        !Number.isInteger(packageLengthMm) ||
-        !Number.isInteger(packageWidthMm) ||
-        !Number.isInteger(packageHeightMm) ||
-        packageLengthMm < 0 ||
-        packageWidthMm < 0 ||
-        packageHeightMm < 0
-      ) {
-        setError('Package dimensions must be whole numbers of millimetres (0 or greater).')
-        return
-      }
+    const packageLengthMm = Number(lStr)
+    const packageWidthMm = Number(wStr)
+    const packageHeightMm = Number(hStr)
+    if (
+      !Number.isInteger(packageLengthMm) ||
+      !Number.isInteger(packageWidthMm) ||
+      !Number.isInteger(packageHeightMm) ||
+      packageLengthMm < 0 ||
+      packageWidthMm < 0 ||
+      packageHeightMm < 0
+    ) {
+      setError('Package dimensions must be whole numbers of millimetres (0 or greater).')
+      return
     }
     let grossWeightG: number | null = null
     if (gStr) {
@@ -385,7 +398,7 @@ export function AdminProductsPage() {
       setBulkCsvText(typeof reader.result === 'string' ? reader.result : '')
     }
     reader.onerror = () => {
-      setError('Could not read the CSV file.')
+      setError("Couldn't read that file.")
       setBulkCsvFileName(null)
       setBulkCsvText('')
     }
@@ -398,7 +411,7 @@ export function AdminProductsPage() {
     setBulkCsvParseErrors([])
     setBulkCsvRowErrors([])
     if (!bulkCsvText.trim()) {
-      setError('Choose a CSV file or paste file contents before importing.')
+      setError('Pick a CSV file first.')
       return
     }
     setBulkCsvBusy(true)
@@ -412,7 +425,7 @@ export function AdminProductsPage() {
       if (res.ok) {
         const data = await readResponseJson<{ ok?: boolean; applied?: number }>(res)
         const n = Number(data.applied ?? 0)
-        setBulkCsvOk(`Import complete — ${n} product(s) created.`)
+        setBulkCsvOk(`Done — ${n} product(s) added.`)
         await load()
         return
       }
@@ -427,15 +440,67 @@ export function AdminProductsPage() {
         if (typeof data.error === 'string' && data.error.trim()) {
           setError(data.error.trim())
         } else if (!data.parseErrors?.length && !data.rowErrors?.length) {
-          setError(`Import failed (HTTP ${res.status}).`)
+          setError(`Import failed (${res.status}).`)
         }
       } catch {
-        setError(await res.text().then((t) => t.trim().slice(0, 400) || `Import failed (HTTP ${res.status}).`))
+        setError(await res.text().then((t) => t.trim().slice(0, 400) || `Import failed (${res.status}).`))
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Import failed')
     } finally {
       setBulkCsvBusy(false)
+    }
+  }
+
+  async function submitBulkZipImport(dryRun: boolean) {
+    setError(null)
+    setBulkZipOk(null)
+    const file = bulkZipFileRef.current?.files?.[0]
+    if (!file) {
+      setError('Choose a ZIP first.')
+      return
+    }
+    setBulkZipBusy(true)
+    try {
+      await fetchCsrfToken()
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await apiFetch(`/api/admin/products/import-images-zip${dryRun ? '?dryRun=1' : ''}`, {
+        method: 'POST',
+        body: fd,
+      })
+      if (!res.ok) {
+        setError((await res.text()).trim().slice(0, 400) || `ZIP import failed (${res.status})`)
+        return
+      }
+      const data = (await res.json()) as {
+        dryRun?: boolean
+        skus?: { sku: string; placeholderUrl: string; wouldLink?: boolean }[]
+        warnings?: string[]
+        linked?: number
+        missingSkus?: string[]
+        skippedScope?: string[]
+        wouldLinkCount?: number
+      }
+      if (data.dryRun) {
+        const n = data.skus?.length ?? 0
+        const link = Number(data.wouldLinkCount ?? 0)
+        const miss = (data.missingSkus ?? []).length
+        const skip = (data.skippedScope ?? []).length
+        const w = (data.warnings ?? []).slice(0, 8).join(' · ')
+        setBulkZipOk(
+          `Checked ${n} file(s): ${link} OK, ${miss} unknown SKU, ${skip} wrong store.${w ? ` · ${w}` : ''}`,
+        )
+        return
+      }
+      setBulkZipOk(
+        `Imported ${data.linked ?? 0} image(s). Not found: ${(data.missingSkus ?? []).length}. Skipped (store): ${(data.skippedScope ?? []).length}.`,
+      )
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'ZIP import failed')
+    } finally {
+      setBulkZipBusy(false)
     }
   }
 
@@ -453,6 +518,7 @@ export function AdminProductsPage() {
           slug: e.slug,
           description: e.description,
           isActive: e.isActive,
+          containsAlcohol: e.containsAlcohol,
           categoryId: e.categoryId.trim() ? e.categoryId.trim() : null,
         }),
       })
@@ -484,29 +550,23 @@ export function AdminProductsPage() {
     const wStr = (e.packageWidthMm ?? '').trim()
     const hStr = (e.packageHeightMm ?? '').trim()
     const gStr = (e.grossWeightG ?? '').trim()
-    const anyLwh = Boolean(lStr || wStr || hStr)
-    if (anyLwh && !(lStr && wStr && hStr)) {
-      setError('Package length, width, and height (mm) must all be filled, or all left empty.')
+    if (!lStr || !wStr || !hStr) {
+      setError('Package length, width, and height (mm) are all required.')
       return
     }
-    let packageLengthMm: number | null = null
-    let packageWidthMm: number | null = null
-    let packageHeightMm: number | null = null
-    if (lStr && wStr && hStr) {
-      packageLengthMm = Number(lStr)
-      packageWidthMm = Number(wStr)
-      packageHeightMm = Number(hStr)
-      if (
-        !Number.isInteger(packageLengthMm) ||
-        !Number.isInteger(packageWidthMm) ||
-        !Number.isInteger(packageHeightMm) ||
-        packageLengthMm < 0 ||
-        packageWidthMm < 0 ||
-        packageHeightMm < 0
-      ) {
-        setError('Package dimensions must be whole numbers of millimetres (0 or greater).')
-        return
-      }
+    const packageLengthMm = Number(lStr)
+    const packageWidthMm = Number(wStr)
+    const packageHeightMm = Number(hStr)
+    if (
+      !Number.isInteger(packageLengthMm) ||
+      !Number.isInteger(packageWidthMm) ||
+      !Number.isInteger(packageHeightMm) ||
+      packageLengthMm < 0 ||
+      packageWidthMm < 0 ||
+      packageHeightMm < 0
+    ) {
+      setError('Package dimensions must be whole numbers of millimetres (0 or greater).')
+      return
     }
     let grossWeightG: number | null = null
     if (gStr) {
@@ -577,6 +637,7 @@ export function AdminProductsPage() {
         description: p.description,
         isActive: p.isActive !== false,
         categoryId: p.categoryId || '',
+        containsAlcohol: p.containsAlcohol === true,
       } as const)
     const v0 = p.variants[0]
     return (
@@ -665,6 +726,20 @@ export function AdminProductsPage() {
                 />
               }
               label="Visible in storefront"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={ep?.containsAlcohol ?? false}
+                  onChange={(ev) =>
+                    setEditProduct((m) => ({
+                      ...m,
+                      [p.id]: { ...(m[p.id] ?? draft), containsAlcohol: ev.target.checked },
+                    }))
+                  }
+                />
+              }
+              label="Age-restricted (alcohol)"
             />
             <Button size="small" variant="outlined" onClick={() => void saveProduct(p.id)} sx={{ alignSelf: 'flex-start' }}>
               Save product details
@@ -861,11 +936,12 @@ export function AdminProductsPage() {
 
                   <Stack spacing={1}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700}>
-                      Package size & weight (optional, per SKU)
+                      Package size & weight (L × W × H required per SKU)
                     </Typography>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.45 }}>
-                      Length, width, and height are in millimetres (integers). Leave all three empty if unknown. Gross weight is
-                      grams; can be set on its own. Fields map to <Box component="span" sx={{ fontFamily: 'monospace' }}>package_*_mm</Box> /{' '}
+                      Length, width, and height in millimetres (integers, 0 or greater). All three are required for each variant.
+                      Gross weight is optional (grams). Fields map to{' '}
+                      <Box component="span" sx={{ fontFamily: 'monospace' }}>package_*_mm</Box> /{' '}
                       <Box component="span" sx={{ fontFamily: 'monospace' }}>gross_weight_g</Box> on{' '}
                       <Box component="span" sx={{ fontFamily: 'monospace' }}>{PRODUCT_VARIANTS_TABLE}</Box>.
                     </Typography>
@@ -1035,105 +1111,234 @@ export function AdminProductsPage() {
             <Typography variant="h5" fontWeight={800}>
               Products and catalogue
             </Typography>
-            <Typography variant="body2" color="text.secondary" maxWidth={800} sx={{ mt: 0.5 }}>
+            <Typography variant="body2" color="text.secondary" maxWidth={800} sx={{ mt: 0.5, lineHeight: 1.6 }}>
               Tune copy and pricing per variant after you add a product. Stock levels and low-stock alerts are on the Inventory page.
               This list refreshes after each save.
             </Typography>
           </Box>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => {
-              setError(null)
-              setCreateDialogOpen(true)
-            }}
-            sx={{ flexShrink: 0, fontWeight: 700, alignSelf: { xs: 'stretch', sm: 'center' } }}
-          >
-            Add product
-          </Button>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ flexShrink: 0, alignSelf: { xs: 'stretch', sm: 'center' }, width: { xs: 1, sm: 'auto' } }}>
+            <Button
+              variant="outlined"
+              startIcon={<CloudUploadIcon />}
+              onClick={() => {
+                setError(null)
+                setImportTab(0)
+                setImportDialogOpen(true)
+              }}
+              sx={{ fontWeight: 700 }}
+            >
+              Import catalogue
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => {
+                setError(null)
+                setCreateDialogOpen(true)
+              }}
+              sx={{ fontWeight: 700 }}
+            >
+              Add product
+            </Button>
+          </Stack>
         </Stack>
         {error && <Alert severity="warning">{error}</Alert>}
         {(authUser?.role === 'admin' || authUser?.role === 'fulfillment') && (authUser.merchants?.length ?? 0) > 0 ? (
           <Alert severity="info">
-            Catalogue here is limited to your linked store(s):{' '}
-            <strong>{authUser.merchants!.map((m) => m.name).join(', ')}</strong>. Customers on the shop still see products from every
-            merchant together.
+            You only manage products for: <strong>{authUser.merchants!.map((m) => m.name).join(', ')}</strong>. The public shop still lists
+            all merchants.
           </Alert>
         ) : null}
 
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-            Bulk import (CSV)
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }} maxWidth={920}>
-            Upload a UTF-8 CSV to create many products at once (one row = one product with a default variant). Products need an{' '}
-            <Box component="span" sx={{ fontWeight: 700 }}>https image_url</Box> to be created as{' '}
-            <Box component="span" sx={{ fontWeight: 700 }}>active</Box> and appear on the store. Optional{' '}
-            <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>category_slug</Box> must match an existing category
-            (see Admin → Categories). Optional column <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>pay_today_merchant_id</Box> per row;
-            if omitted, your primary linked merchant from sign-in is used. When your account is linked to specific merchants, each row must use
-            one of those merchant ids (or omit the column). Max 500 data rows; whole file max ~512 KB.
-          </Typography>
-          <Typography variant="body2" sx={{ mb: 1.5 }}>
-            <Button component="a" href={BULK_CSV_TEMPLATE_URL} download variant="text" size="small" sx={{ fontWeight: 700 }}>
-              Download CSV template
-            </Button>
-          </Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }} flexWrap="wrap" useFlexGap>
-            <input
-              ref={bulkCsvFileRef}
-              type="file"
-              accept=".csv,text/csv,text/plain"
-              hidden
-              onChange={(e) => onBulkCsvFilePicked(e.target.files?.[0] ?? null)}
-            />
-            <Button variant="outlined" onClick={() => bulkCsvFileRef.current?.click()}>
-              Choose CSV…
-            </Button>
-            <Box sx={{ flex: 1, minWidth: 120 }} />
-            <Button variant="contained" disabled={bulkCsvBusy || !bulkCsvText.trim()} onClick={() => void submitBulkCsvImport()}>
-              {bulkCsvBusy ? 'Importing…' : 'Run import'}
-            </Button>
-          </Stack>
-          {bulkCsvFileName ? (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              Selected: {bulkCsvFileName}
-            </Typography>
-          ) : null}
-          {bulkCsvOk ? (
-            <Alert severity="success" sx={{ mt: 1.5 }}>
-              {bulkCsvOk}
-            </Alert>
-          ) : null}
-          {bulkCsvParseErrors.length > 0 ? (
-            <Alert severity="error" sx={{ mt: 1.5 }}>
-              <Typography fontWeight={700} gutterBottom>
-                Parse / header errors
-              </Typography>
-              <Stack component="ul" sx={{ m: 0, pl: 2 }}>
-                {bulkCsvParseErrors.map((e) => (
-                  <Typography key={`bp-${e.line}-${e.message}`} component="li" variant="body2">
-                    Line {e.line}: {e.message}
+        <Dialog
+          open={importDialogOpen}
+          onClose={() => setImportDialogOpen(false)}
+          maxWidth="md"
+          fullWidth
+          scroll="paper"
+          aria-labelledby="admin-import-catalogue-title"
+        >
+          <DialogTitle id="admin-import-catalogue-title" sx={{ pr: 6 }}>
+            Import catalogue
+            <IconButton
+              aria-label="Close"
+              onClick={() => setImportDialogOpen(false)}
+              sx={{ position: 'absolute', right: 8, top: 8 }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent dividers sx={{ pt: 1 }}>
+            <Tabs
+              value={importTab}
+              onChange={(_, v) => setImportTab(v)}
+              sx={{ borderBottom: 1, borderColor: 'divider', mb: 2, '& .MuiTab-root': { fontWeight: 700, textTransform: 'none' } }}
+            >
+              <Tab label="CSV bulk import" />
+              <Tab label="ZIP images" />
+            </Tabs>
+
+            {importTab === 0 ? (
+              <Stack spacing={2}>
+                <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.65 }}>
+                  Add many products at once. Use the template so columns match. File must be <strong>UTF-8</strong>.
+                </Typography>
+                <Box
+                  component="ul"
+                  sx={{
+                    m: 0,
+                    pl: 2.5,
+                    color: 'text.primary',
+                    '& li': { mb: 1 },
+                    typography: 'body2',
+                    lineHeight: 1.65,
+                  }}
+                >
+                  <Typography component="li" variant="body2">
+                    <strong>One row</strong> = one product and its default variant.
                   </Typography>
-                ))}
-              </Stack>
-            </Alert>
-          ) : null}
-          {bulkCsvRowErrors.length > 0 ? (
-            <Alert severity="error" sx={{ mt: 1.5 }}>
-              <Typography fontWeight={700} gutterBottom>
-                Row errors
-              </Typography>
-              <Stack component="ul" sx={{ m: 0, pl: 2 }}>
-                {bulkCsvRowErrors.map((e) => (
-                  <Typography key={`br-${e.line}-${e.sku}-${e.message}`} component="li" variant="body2">
-                    Line {e.line} ({e.sku}): {e.message}
+                  <Typography component="li" variant="body2">
+                    <Box component="span" sx={{ fontWeight: 700 }}>
+                      image_url
+                    </Box>{' '}
+                    must be <strong>https</strong> — products need this to go live on the store.
                   </Typography>
-                ))}
+                  <Typography component="li" variant="body2">
+                    <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.9rem', bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5 }}>
+                      category_slug
+                    </Box>{' '}
+                    is optional; if set, it must already exist under Admin → Categories.
+                  </Typography>
+                  <Typography component="li" variant="body2">
+                    <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.9rem', bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5 }}>
+                      pay_today_merchant_id
+                    </Box>{' '}
+                    is optional (defaults to your primary merchant). If your login is limited to certain stores, each row must use one of
+                    those IDs.
+                  </Typography>
+                  <Typography component="li" variant="body2">
+                    Max <strong>500</strong> data rows; whole file about <strong>512 KB</strong>.
+                  </Typography>
+                </Box>
+                <Button component="a" href={BULK_CSV_TEMPLATE_URL} download variant="outlined" size="small" sx={{ fontWeight: 700, alignSelf: 'flex-start' }}>
+                  Download CSV template
+                </Button>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }} flexWrap="wrap" useFlexGap>
+                  <input
+                    ref={bulkCsvFileRef}
+                    type="file"
+                    accept=".csv,text/csv,text/plain"
+                    hidden
+                    onChange={(e) => onBulkCsvFilePicked(e.target.files?.[0] ?? null)}
+                  />
+                  <Button variant="outlined" onClick={() => bulkCsvFileRef.current?.click()} sx={{ fontWeight: 700 }}>
+                    Choose CSV file
+                  </Button>
+                  <Box sx={{ flex: 1, minWidth: 0 }} />
+                  <Button variant="contained" disabled={bulkCsvBusy || !bulkCsvText.trim()} onClick={() => void submitBulkCsvImport()} sx={{ fontWeight: 700 }}>
+                    {bulkCsvBusy ? 'Importing…' : 'Run import'}
+                  </Button>
+                </Stack>
+                {bulkCsvFileName ? (
+                  <Typography variant="body2" color="text.secondary">
+                    Selected: <strong>{bulkCsvFileName}</strong>
+                  </Typography>
+                ) : null}
+                {bulkCsvText.trim() ? (
+                  <TextField
+                    label="CSV preview (read-only excerpt)"
+                    value={bulkCsvText.slice(0, 8000)}
+                    fullWidth
+                    multiline
+                    minRows={6}
+                    maxRows={14}
+                    InputProps={{ readOnly: true }}
+                    size="small"
+                    sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', lineHeight: 1.5 } }}
+                    helperText={bulkCsvText.length > 8000 ? `Showing first 8000 characters of ${bulkCsvText.length.toLocaleString()} total.` : undefined}
+                  />
+                ) : (
+                  <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50', borderStyle: 'dashed' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Choose a CSV file to preview its contents here before running the import.
+                    </Typography>
+                  </Paper>
+                )}
+                {bulkCsvOk ? (
+                  <Alert severity="success" variant="outlined" sx={{ borderRadius: 2 }}>
+                    {bulkCsvOk}
+                  </Alert>
+                ) : null}
+                {bulkCsvParseErrors.length > 0 ? (
+                  <Alert severity="error" sx={{ borderRadius: 2 }}>
+                    <Typography fontWeight={800} gutterBottom variant="subtitle2">
+                      CSV format issues
+                    </Typography>
+                    <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                      {bulkCsvParseErrors.map((e) => (
+                        <Typography key={`bp-${e.line}-${e.message}`} component="li" variant="body2" sx={{ mb: 0.5 }}>
+                          Line {e.line}: {e.message}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Alert>
+                ) : null}
+                {bulkCsvRowErrors.length > 0 ? (
+                  <Alert severity="error" sx={{ borderRadius: 2 }}>
+                    <Typography fontWeight={800} gutterBottom variant="subtitle2">
+                      Row fixes
+                    </Typography>
+                    <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                      {bulkCsvRowErrors.map((e) => (
+                        <Typography key={`br-${e.line}-${e.sku}-${e.message}`} component="li" variant="body2" sx={{ mb: 0.5 }}>
+                          Line {e.line} ({e.sku}): {e.message}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Alert>
+                ) : null}
               </Stack>
-            </Alert>
-          ) : null}
-        </Paper>
+            ) : (
+              <Stack spacing={2}>
+                <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.65 }}>
+                  Name each file{' '}
+                  <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.95rem', bgcolor: 'action.hover', px: 0.5, borderRadius: 0.5 }}>
+                    SKU.jpg
+                  </Box>{' '}
+                  (png / webp / gif also work). Files are matched to variants by SKU.
+                </Typography>
+                <Typography variant="body2" sx={{ lineHeight: 1.65 }}>
+                  <strong>Validate</strong> checks the ZIP against your catalogue without uploading. <strong>Import images</strong> uploads
+                  and attaches gallery images to matching variants.
+                </Typography>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }} flexWrap="wrap" useFlexGap>
+                  <input ref={bulkZipFileRef} type="file" accept=".zip,application/zip" hidden onChange={() => setBulkZipOk(null)} />
+                  <Button variant="outlined" onClick={() => bulkZipFileRef.current?.click()} sx={{ fontWeight: 700 }}>
+                    Choose ZIP file
+                  </Button>
+                  <Button variant="outlined" disabled={bulkZipBusy} onClick={() => void submitBulkZipImport(true)} sx={{ fontWeight: 700 }}>
+                    Validate only
+                  </Button>
+                  <Button variant="contained" disabled={bulkZipBusy} onClick={() => void submitBulkZipImport(false)} sx={{ fontWeight: 700 }}>
+                    {bulkZipBusy ? 'Working…' : 'Import images'}
+                  </Button>
+                </Stack>
+                {bulkZipOk ? (
+                  <Alert severity="success" variant="outlined" sx={{ borderRadius: 2 }}>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                      {bulkZipOk}
+                    </Typography>
+                  </Alert>
+                ) : null}
+              </Stack>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 2 }}>
+            <Button onClick={() => setImportDialogOpen(false)} color="inherit" sx={{ fontWeight: 700 }}>
+              Close
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         <Dialog
           open={createDialogOpen}
@@ -1188,11 +1393,12 @@ export function AdminProductsPage() {
                     <MenuItem value="not_tracked">Not tracked</MenuItem>
                   </TextField>
                   <Typography variant="body2" fontWeight={700}>
-                    Package size & weight (optional)
+                    Package size & weight (L × W × H required)
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.45 }}>
-                    Length, width, height in millimetres (integers). Enter all three or leave all three empty. Gross weight in grams
-                    can be set on its own. Stored on <Box component="span" sx={{ fontFamily: 'monospace' }}>{PRODUCT_VARIANTS_TABLE}</Box>.
+                    Length, width, height in millimetres (integers, 0 or greater). Defaults shown (200×150×100 mm) — adjust to the
+                    real outer carton. Gross weight in grams is optional. Stored on{' '}
+                    <Box component="span" sx={{ fontFamily: 'monospace' }}>{PRODUCT_VARIANTS_TABLE}</Box>.
                   </Typography>
                   <Typography
                     variant="caption"
@@ -1327,9 +1533,9 @@ export function AdminProductsPage() {
           </DialogActions>
         </Dialog>
 
-        <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2 }, borderRadius: 2 }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} justifyContent="space-between" sx={{ mb: 1.5 }}>
-            <Typography variant="subtitle1" fontWeight={700}>
+        <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }} justifyContent="space-between" sx={{ mb: 2 }}>
+            <Typography variant="h6" fontWeight={800} sx={{ lineHeight: 1.3 }}>
               Catalogue ({items.length} products
               {tableSearch.trim() ? ` · ${filteredCatalogue.length} match${filteredCatalogue.length === 1 ? '' : 'es'}` : ''})
             </Typography>
@@ -1341,7 +1547,7 @@ export function AdminProductsPage() {
                 setTableSearch(ev.target.value)
                 setTablePage(0)
               }}
-              sx={{ width: 1, maxWidth: { sm: 360 } }}
+              sx={{ width: 1, maxWidth: { sm: 400 } }}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
@@ -1351,90 +1557,116 @@ export function AdminProductsPage() {
               }}
             />
           </Stack>
-        <TableContainer sx={{ maxHeight: { xs: '55vh', md: '70vh' }, borderRadius: 1, border: 1, borderColor: 'divider' }}>
-          <Table stickyHeader size="small">
+        <TableContainer
+          sx={{
+            maxHeight: { xs: '58vh', md: '72vh' },
+            borderRadius: 2,
+            border: 1,
+            borderColor: 'divider',
+            overflow: 'auto',
+            bgcolor: 'grey.50',
+          }}
+        >
+          <Table stickyHeader size="medium" sx={{ minWidth: 720, '& .MuiTableCell-root': { verticalAlign: 'middle' } }}>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ width: 56 }} />
-                <TableCell>Name</TableCell>
-                <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Slug</TableCell>
-                <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>Category</TableCell>
-                <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>SKU</TableCell>
-                <TableCell align="right" sx={{ display: { xs: 'none', md: 'table-cell' } }}>
+                <TableCell sx={{ width: 72, fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem' }}>
+                  Image
+                </TableCell>
+                <TableCell sx={{ fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem', minWidth: 200 }}>
+                  Product
+                </TableCell>
+                <TableCell sx={{ fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem', minWidth: 120 }}>
+                  SKU
+                </TableCell>
+                <TableCell align="right" sx={{ fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
                   Price
                 </TableCell>
-                <TableCell align="right">Variants</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right" />
+                <TableCell align="right" sx={{ fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem' }}>
+                  Variants
+                </TableCell>
+                <TableCell sx={{ fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem' }}>Status</TableCell>
+                <TableCell align="right" sx={{ fontWeight: 800, bgcolor: 'grey.100', color: 'text.primary', fontSize: '0.875rem', width: 100 }} />
               </TableRow>
             </TableHead>
             <TableBody>
               {paginatedCatalogue.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9}>
-                    <Typography variant="body2" color="text.secondary">
-                      {items.length === 0 ? 'No products yet. Use Add product to create one.' : 'No products match this search.'}
+                  <TableCell colSpan={7}>
+                    <Typography variant="body1" color="text.secondary" sx={{ py: 3, lineHeight: 1.6 }}>
+                      {items.length === 0 ? 'No products yet. Use Add product to create one, or open Import catalogue for a CSV.' : 'No products match this search.'}
                     </Typography>
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedCatalogue.map((p) => {
+                paginatedCatalogue.map((p, idx) => {
                   const v0 = p.variants[0]
                   return (
-                    <TableRow key={p.id} hover selected={editingProductId === p.id}>
-                      <TableCell>
+                    <TableRow
+                      key={p.id}
+                      hover
+                      selected={editingProductId === p.id}
+                      sx={{
+                        bgcolor: idx % 2 === 0 ? 'background.paper' : (th) => alpha(th.palette.common.black, 0.03),
+                      }}
+                    >
+                      <TableCell sx={{ py: 2 }}>
                         <Box
                           sx={{
-                            width: 40,
-                            height: 40,
-                            borderRadius: 1,
+                            width: 52,
+                            height: 52,
+                            borderRadius: 1.5,
+                            border: 1,
+                            borderColor: 'divider',
                             bgcolor: 'action.hover',
                             backgroundImage: p.imageUrl ? `url(${p.imageUrl})` : undefined,
                             backgroundSize: 'cover',
                             backgroundPosition: 'center',
+                            flexShrink: 0,
                           }}
                         />
                       </TableCell>
-                      <TableCell>
-                        <Typography fontWeight={700} noWrap sx={{ maxWidth: { xs: 160, sm: 220, md: 280 } }}>
+                      <TableCell sx={{ py: 2, maxWidth: 360 }}>
+                        <Typography fontWeight={800} sx={{ lineHeight: 1.35, wordBreak: 'break-word' }}>
                           {p.name}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'block', md: 'none' } }} noWrap>
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, lineHeight: 1.5, wordBreak: 'break-all' }}>
                           {p.slug}
                         </Typography>
-                      </TableCell>
-                      <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
-                        <Typography variant="body2" color="text.secondary" noWrap sx={{ maxWidth: 160 }}>
-                          {p.slug}
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25, lineHeight: 1.5 }}>
+                          {p.categoryName ?? 'No category'}
                         </Typography>
                       </TableCell>
-                      <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
-                        <Typography variant="body2" noWrap sx={{ maxWidth: 140 }}>
-                          {p.categoryName ?? '—'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell sx={{ display: { xs: 'none', lg: 'table-cell' } }}>
-                        <Typography variant="body2" noWrap sx={{ maxWidth: 120 }}>
+                      <TableCell sx={{ py: 2 }}>
+                        <Typography variant="body2" sx={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600, lineHeight: 1.5 }}>
                           {v0?.sku ?? '—'}
                         </Typography>
                       </TableCell>
-                      <TableCell align="right" sx={{ display: { xs: 'none', md: 'table-cell' } }}>
-                        {v0 ? formatMoney(v0.priceCents, v0.currency) : '—'}
+                      <TableCell align="right" sx={{ py: 2 }}>
+                        <Typography variant="body2" fontWeight={700}>
+                          {v0 ? formatMoney(v0.priceCents, v0.currency) : '—'}
+                        </Typography>
                       </TableCell>
-                      <TableCell align="right">{p.variants.length}</TableCell>
-                      <TableCell>
+                      <TableCell align="right" sx={{ py: 2 }}>
+                        <Typography variant="body2" fontWeight={700}>
+                          {p.variants.length}
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ py: 2 }}>
                         <Chip
-                          size="small"
+                          size="medium"
                           label={p.isActive === false ? 'Hidden' : 'Live'}
                           color={p.isActive === false ? 'default' : 'success'}
                           variant={p.isActive === false ? 'outlined' : 'filled'}
+                          sx={{ fontWeight: 700 }}
                         />
                       </TableCell>
-                      <TableCell align="right">
+                      <TableCell align="right" sx={{ py: 2 }}>
                         <Button
-                          size="small"
+                          size="medium"
                           variant={editingProductId === p.id ? 'contained' : 'outlined'}
                           onClick={() => setEditingProductId(p.id)}
+                          sx={{ fontWeight: 700, minWidth: 88 }}
                         >
                           Edit
                         </Button>

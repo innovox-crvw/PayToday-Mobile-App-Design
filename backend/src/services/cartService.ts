@@ -198,20 +198,55 @@ export async function mergeGuestCartIntoUser(pool: ConnectionPool, sessionToken:
   await pool.request().input('guestCartId', guestCartId).query(`DELETE FROM dbo.carts WHERE id = @guestCartId`)
 }
 
-export async function getCartLines(
-  executor: SqlExecutor,
-  cartId: string,
-): Promise<
-  {
-    lineId: string
-    variantId: string
-    quantity: number
-    sku: string
-    name: string
-    unitPriceCents: number
-    currency: string
-  }[]
-> {
+export type CartLineDto = {
+  lineId: string
+  variantId: string
+  quantity: number
+  sku: string
+  name: string
+  productName: string
+  variantName: string
+  unitPriceCents: number
+  currency: string
+  imageUrl: string | null
+  compareAtPriceCents: number | null
+}
+
+function mapCartLineRow(row: {
+  lineId: string
+  variantId: string
+  quantity: number
+  sku: string
+  variantName: string
+  snap_cents: number
+  line_curr: string | null
+  currency: string
+  productName: string
+  imageUrl?: string | null
+  compareAtRaw?: number | null
+}): CartLineDto {
+  const cur = (row.line_curr ?? row.currency ?? 'NAD').trim().slice(0, 3).toUpperCase() || 'NAD'
+  const unit = row.snap_cents
+  const compareRaw = row.compareAtRaw
+  const compareAtPriceCents =
+    compareRaw != null && Number.isFinite(compareRaw) && compareRaw > unit ? compareRaw : null
+  const imageUrl = typeof row.imageUrl === 'string' && row.imageUrl.trim() ? row.imageUrl.trim() : null
+  return {
+    lineId: row.lineId,
+    variantId: row.variantId,
+    quantity: row.quantity,
+    sku: row.sku,
+    productName: row.productName,
+    variantName: row.variantName,
+    name: `${row.productName} — ${row.variantName}`,
+    unitPriceCents: unit,
+    currency: cur,
+    imageUrl,
+    compareAtPriceCents,
+  }
+}
+
+export async function getCartLines(executor: SqlExecutor, cartId: string): Promise<CartLineDto[]> {
   try {
     const r = await executor.request().input('cartId', cartId).query<{
       lineId: string
@@ -224,6 +259,8 @@ export async function getCartLines(
       line_curr: string | null
       currency: string
       productName: string
+      imageUrl: string | null
+      compareAtRaw: number | null
     }>(`
       SELECT CAST(cl.variant_id AS NVARCHAR(36)) AS lineId,
              CAST(cl.variant_id AS NVARCHAR(36)) AS variantId,
@@ -234,59 +271,109 @@ export async function getCartLines(
              v.price_cents,
              LTRIM(RTRIM(cl.line_currency)) AS line_curr,
              v.currency,
-             p.name AS productName
+             p.name AS productName,
+             imgs.image_url AS imageUrl,
+             v.compare_at_price_cents AS compareAtRaw
       FROM dbo.cart_lines cl
       INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
       INNER JOIN dbo.products p ON p.id = v.product_id
+      OUTER APPLY (
+        SELECT TOP 1 pi.url AS image_url
+        FROM dbo.product_images pi
+        WHERE pi.product_id = p.id
+          AND (pi.variant_id IS NULL OR pi.variant_id = v.id)
+        ORDER BY CASE WHEN pi.variant_id = v.id THEN 0 ELSE 1 END, pi.sort_order
+      ) imgs
       WHERE cl.cart_id = @cartId
     `)
-    return r.recordset.map((row) => {
-      const cur = (row.line_curr ?? row.currency ?? 'NAD').trim().slice(0, 3).toUpperCase() || 'NAD'
-      return {
-        lineId: row.lineId,
-        variantId: row.variantId,
-        quantity: row.quantity,
-        sku: row.sku,
-        name: `${row.productName} — ${row.variantName}`,
-        unitPriceCents: row.snap_cents,
-        currency: cur,
-      }
-    })
+    return r.recordset.map((row) =>
+      mapCartLineRow({
+        ...row,
+        imageUrl: row.imageUrl,
+        compareAtRaw: row.compareAtRaw,
+      }),
+    )
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    if (!/unit_price_cents|line_currency|Invalid column name/i.test(msg)) throw e
-    const r = await executor.request().input('cartId', cartId).query<{
-      lineId: string
-      variantId: string
-      quantity: number
-      sku: string
-      variantName: string
-      price_cents: number
-      currency: string
-      productName: string
-    }>(`
-      SELECT CAST(cl.variant_id AS NVARCHAR(36)) AS lineId,
-             CAST(cl.variant_id AS NVARCHAR(36)) AS variantId,
-             cl.quantity,
-             v.sku,
-             v.name AS variantName,
-             v.price_cents,
-             v.currency,
-             p.name AS productName
-      FROM dbo.cart_lines cl
-      INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
-      INNER JOIN dbo.products p ON p.id = v.product_id
-      WHERE cl.cart_id = @cartId
-    `)
-    return r.recordset.map((row) => ({
-      lineId: row.lineId,
-      variantId: row.variantId,
-      quantity: row.quantity,
-      sku: row.sku,
-      name: `${row.productName} — ${row.variantName}`,
-      unitPriceCents: row.price_cents,
-      currency: row.currency.trim(),
-    }))
+    if (!/unit_price_cents|line_currency|compare_at_price_cents|product_images|Invalid column name/i.test(msg)) throw e
+    try {
+      const r = await executor.request().input('cartId', cartId).query<{
+        lineId: string
+        variantId: string
+        quantity: number
+        sku: string
+        variantName: string
+        snap_cents: number
+        line_curr: string | null
+        currency: string
+        productName: string
+        imageUrl: string | null
+      }>(`
+        SELECT CAST(cl.variant_id AS NVARCHAR(36)) AS lineId,
+               CAST(cl.variant_id AS NVARCHAR(36)) AS variantId,
+               cl.quantity,
+               v.sku,
+               v.name AS variantName,
+               COALESCE(cl.unit_price_cents, v.price_cents) AS snap_cents,
+               LTRIM(RTRIM(cl.line_currency)) AS line_curr,
+               v.currency,
+               p.name AS productName,
+               imgs.image_url AS imageUrl
+        FROM dbo.cart_lines cl
+        INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
+        INNER JOIN dbo.products p ON p.id = v.product_id
+        OUTER APPLY (
+          SELECT TOP 1 pi.url AS image_url
+          FROM dbo.product_images pi
+          WHERE pi.product_id = p.id
+            AND (pi.variant_id IS NULL OR pi.variant_id = v.id)
+          ORDER BY CASE WHEN pi.variant_id = v.id THEN 0 ELSE 1 END, pi.sort_order
+        ) imgs
+        WHERE cl.cart_id = @cartId
+      `)
+      return r.recordset.map((row) => mapCartLineRow({ ...row, compareAtRaw: null }))
+    } catch (e2) {
+      const msg2 = e2 instanceof Error ? e2.message : String(e2)
+      if (!/unit_price_cents|line_currency|product_images|Invalid column name/i.test(msg2)) throw e2
+      const r = await executor.request().input('cartId', cartId).query<{
+        lineId: string
+        variantId: string
+        quantity: number
+        sku: string
+        variantName: string
+        price_cents: number
+        currency: string
+        productName: string
+      }>(`
+        SELECT CAST(cl.variant_id AS NVARCHAR(36)) AS lineId,
+               CAST(cl.variant_id AS NVARCHAR(36)) AS variantId,
+               cl.quantity,
+               v.sku,
+               v.name AS variantName,
+               v.price_cents,
+               v.currency,
+               p.name AS productName
+        FROM dbo.cart_lines cl
+        INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
+        INNER JOIN dbo.products p ON p.id = v.product_id
+        WHERE cl.cart_id = @cartId
+      `)
+      return r.recordset.map((row) =>
+        mapCartLineRow({
+          lineId: row.lineId,
+          variantId: row.variantId,
+          quantity: row.quantity,
+          sku: row.sku,
+          variantName: row.variantName,
+          snap_cents: row.price_cents,
+          line_curr: null,
+          currency: row.currency,
+          productName: row.productName,
+          imageUrl: null,
+          compareAtRaw: null,
+        }),
+      )
+    }
   }
 }
 

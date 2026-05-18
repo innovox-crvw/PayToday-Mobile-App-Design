@@ -129,6 +129,40 @@ export const env = {
   paytodayForgotPasswordUrl: (process.env.PAYTODAY_FORGOT_PASSWORD_URL ?? '').trim(),
   /** When true, `POST /api/checkout` requires `req.user` (no guest checkout). */
   checkoutRequireSignIn: parseEnvBool(process.env.CHECKOUT_REQUIRE_SIGN_IN, false),
+  /** When false, skip liquor age checks and alcohol hiding on catalogue APIs (dev / migration). */
+  liquorGatingEnabled: parseEnvBool(process.env.LIQUOR_GATING_ENABLED, true),
+  /**
+   * Category slugs (and their descendants) treated like alcohol for minors when `liquorGatingEnabled`.
+   * Comma-separated, lowercase. Example: `liquor,wine` or `liquor,wine-spirits`.
+   */
+  ageRestrictedCategorySlugs: (() => {
+    const raw = process.env.AGE_RESTRICTED_CATEGORY_SLUGS ?? 'liquor,wine'
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const part of raw.split(',')) {
+      const s = part.trim().toLowerCase()
+      if (!s || seen.has(s)) continue
+      if (!/^[a-z0-9-]{1,80}$/u.test(s)) continue
+      seen.add(s)
+      out.push(s)
+    }
+    return out.length ? out : ['liquor', 'wine']
+  })(),
+  /** Storefront “Apply for finance” opens this URL (NedAccess); override with NEDBANK_FINANCE_URL. */
+  nedbankFinanceUrl: (() => {
+    const u = (process.env.NEDBANK_FINANCE_URL ?? '').trim()
+    return u || 'https://nedaccess.today-ww.net/'
+  })(),
+  /** PayToday merchant id for single-store hours on the public storefront (demo default 991001). */
+  defaultStoreMerchantId: (() => {
+    const n = Number(process.env.DEFAULT_STORE_MERCHANT_ID ?? 991001)
+    return Number.isInteger(n) && n >= 0 ? n : 991001
+  })(),
+  /** When true and Yango env is set, attempt courier dispatch after payment for home delivery. */
+  yangoEnabled: parseEnvBool(process.env.YANGO_ENABLED, false),
+  yangoApiBaseUrl: (process.env.YANGO_API_BASE_URL ?? '').trim().replace(/\/$/u, ''),
+  yangoApiKey: (process.env.YANGO_API_KEY ?? '').trim(),
+  yangoWebhookSecret: (process.env.YANGO_WEBHOOK_SECRET ?? '').trim(),
   /** Public browser origin for SPA after payment (no trailing slash). */
   publicStoreUrl: (process.env.PUBLIC_STORE_URL ?? 'http://localhost:5173').replace(/\/$/u, ''),
   /** API origin for PayToday returnUrl (browser hits API first, then redirect to SPA). */
@@ -137,6 +171,8 @@ export const env = {
   cartLineMinQty: Math.max(1, Number(process.env.CART_LINE_MIN_QTY ?? 1) || 1),
   cartLineMaxQty: Math.min(100_000, Math.max(1, Number(process.env.CART_LINE_MAX_QTY ?? 999) || 999)),
   shippingFlatCents: Math.max(0, Number(process.env.SHIPPING_FLAT_CENTS ?? 0) || 0),
+  /** Optional express home-delivery estimate (cents). When 0, cart UI hides express option. */
+  shippingExpressCents: Math.max(0, Number(process.env.SHIPPING_EXPRESS_CENTS ?? 0) || 0),
   /** If > 0, home delivery shipping is 0 when subtotal (cents) is >= this (Avo-style free shipping over threshold). */
   shippingFreeSubtotalCents: Math.max(0, Number(process.env.SHIPPING_FREE_SUBTOTAL_CENTS ?? 0) || 0),
   vatRateBps: Math.max(0, Number(process.env.VAT_RATE_BPS ?? 0) || 0),

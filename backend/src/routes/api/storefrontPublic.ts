@@ -4,14 +4,32 @@ import { getIntegrationSettingsMap } from '../../services/integrationSettingsCac
 import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js'
 import { sqlErrorMentionsInvalidColumn, sqlErrorMentionsMissingObject } from '../../db/sqlDriverError.js'
 import { getSqlPool } from '../../db/pool.js'
-import { listCategories } from '../../repos/categoriesRepo.js'
+import { listCategories, listCategoriesWithVisibleProducts } from '../../repos/categoriesRepo.js'
 import { staticHubPaymentCategoryItems } from '../../data/staticHubPaymentCategoryItems.js'
 import { listHubPaymentCategoryItems } from '../../repos/hubPaymentCategoryItemsRepo.js'
 import { listHubNavigationTiles } from '../../repos/hubNavigationTilesRepo.js'
 import { listActivePromotions, type StorePromotionDto } from '../../repos/promotionsRepo.js'
 import { listPopularStoresByOrders } from '../../repos/storefrontPopularRepo.js'
+import { listSuperDealProducts } from '../../repos/productsRepo.js'
+import { sessionIsAdultForLiquor } from '../../services/liquorAgeService.js'
+import { productIdsMatchingLiquorGate } from '../../services/ageRestrictedCategoryService.js'
+import { storefrontMerchantHoursRouter } from './adminMerchantHours.js'
+import { listHomeDeliveryAreas } from '../../repos/homeDeliveryRepo.js'
 
 export const storefrontPublicRouter = Router()
+
+storefrontPublicRouter.use('/storefront/merchant-hours', storefrontMerchantHoursRouter)
+
+storefrontPublicRouter.get('/storefront/home-delivery', async (_req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) { res.status(503).json({ error: 'Database not configured' }); return }
+  try {
+    const areas = await listHomeDeliveryAreas(pool)
+    res.json({ areas })
+  } catch {
+    res.json({ areas: [] })
+  }
+})
 
 const HERO_IMG = {
   welcome:
@@ -61,17 +79,28 @@ storefrontPublicRouter.get('/storefront-config', async (_req, res) => {
     vatRateBps: env.vatRateBps,
     scanApiConfigured: Boolean(pt.scanApiBaseUrl),
     checkoutRequireSignIn: env.checkoutRequireSignIn,
+    liquorGatingEnabled: env.liquorGatingEnabled,
+    minorRestrictedCategorySlugs: env.ageRestrictedCategorySlugs,
+    nedbankFinanceUrl: env.nedbankFinanceUrl,
+    defaultStoreMerchantId: env.defaultStoreMerchantId,
+    yangoEnabled: env.yangoEnabled,
   })
 })
 
-storefrontPublicRouter.get('/categories', async (_req, res) => {
+storefrontPublicRouter.get('/categories', async (req, res) => {
   const pool = await getSqlPool({ eager: true })
   if (!pool) {
     res.json({ source: 'off', items: [] })
     return
   }
   try {
-    const items = await listCategories(pool, { includeInactive: false })
+    const onlyWithProducts = String(req.query.onlyWithProducts ?? '').trim() === '1'
+    let items = await listCategories(pool, { includeInactive: false })
+    if (onlyWithProducts) {
+      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
+      const excludeAlcohol = env.liquorGatingEnabled && !adult
+      items = await listCategoriesWithVisibleProducts(pool, { excludeAlcoholProducts: excludeAlcohol })
+    }
     res.json({ source: 'database', items })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -194,6 +223,31 @@ storefrontPublicRouter.get('/storefront/popular-stores', async (req, res) => {
       items: [],
       detail: process.env.NODE_ENV === 'development' ? msg : undefined,
     })
+  }
+})
+
+/** Home Super deals rail — discounted catalogue items (compare-at above sale), best savings first. */
+storefrontPublicRouter.get('/storefront/super-deals', async (req, res) => {
+  const pool = await getSqlPool({ eager: true })
+  if (!pool) {
+    res.json({ items: [] })
+    return
+  }
+  try {
+    let items = await listSuperDealProducts(pool)
+    if (env.liquorGatingEnabled) {
+      const adult = await sessionIsAdultForLiquor(pool, req.user?.sub)
+      if (!adult) {
+        const ids = [...new Set(items.map((p) => p.id))]
+        const blocked = await productIdsMatchingLiquorGate(pool, ids)
+        items = items.filter((p) => !blocked.has(p.id))
+      }
+    }
+    res.json({ items })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[storefront/super-deals] failed:', msg)
+    res.json({ items: [], detail: process.env.NODE_ENV === 'development' ? msg : undefined })
   }
 })
 

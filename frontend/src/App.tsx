@@ -3,6 +3,8 @@ import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-do
 import { AdminLayout } from './layouts/AdminLayout'
 import { StoreLayout } from './layouts/StoreLayout'
 import { AdminDepositPage } from './pages/admin/AdminDepositPage'
+import { AdminDisputesPage } from './pages/admin/AdminDisputesPage'
+import { AdminStoreHoursPage } from './pages/admin/AdminStoreHoursPage'
 import { AdminFulfillmentPage } from './pages/admin/AdminFulfillmentPage'
 import { AdminHomePage } from './pages/admin/AdminHomePage'
 import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
@@ -23,6 +25,7 @@ import { ForgotPasswordPage } from './pages/store/ForgotPasswordPage'
 import { ResetPasswordPage } from './pages/store/ResetPasswordPage'
 import { OrdersListPage } from './pages/store/OrdersListPage'
 import { OrderDetailPage } from './pages/store/OrderDetailPage'
+import { OrderDisputePage } from './pages/store/OrderDisputePage'
 import { OrderReviewPage } from './pages/store/OrderReviewPage'
 import { ReturnRequestPage } from './pages/store/ReturnRequestPage'
 import { TrackOrderPage } from './pages/store/TrackOrderPage'
@@ -74,16 +77,15 @@ import { OnboardingPermissionsPage } from './pages/onboarding/OnboardingPermissi
 import { OnboardingAddCardFlowPage } from './pages/onboarding/OnboardingAddCardFlowPage'
 import { OnboardingAddBankFlowPage } from './pages/onboarding/OnboardingAddBankFlowPage'
 
-function shopBillPayHref(pathPrefix: string) {
-  const base = pathPrefix ? `${pathPrefix}/shop` : '/shop'
-  return `${base}#shop-bill-pay`
+function storeShopHref(pathPrefix: string) {
+  return pathPrefix ? `${pathPrefix}/shop` : '/shop'
 }
 
-/** `/payments` hub removed — land on Store with bill-pay section. */
+/** `/payments` hub removed — land on Store shop. */
 function PaymentsRootRedirect() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  return <Navigate to={shopBillPayHref(pathPrefix)} replace />
+  return <Navigate to={storeShopHref(pathPrefix)} replace />
 }
 
 /** Old URLs `/payments/category/:slug` → `/payments/:slug` */
@@ -92,7 +94,7 @@ function LegacyPaymentsCategoryRedirect() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const slug = categoryId?.trim() ?? ''
-  if (!slug) return <Navigate to={shopBillPayHref(pathPrefix)} replace />
+  if (!slug) return <Navigate to={storeShopHref(pathPrefix)} replace />
   return <Navigate to={`${pathPrefix}/payments/${slug}`} replace />
 }
 
@@ -165,6 +167,7 @@ function storeRouteElements(withHome: boolean) {
       <Route path="orders" element={<OrdersListPage />} />
       <Route path="orders/track" element={<TrackOrderPage />} />
       <Route path="orders/:orderId/return" element={<ReturnRequestPage />} />
+      <Route path="orders/:orderId/dispute" element={<OrderDisputePage />} />
       <Route path="orders/:orderId/review" element={<OrderReviewPage />} />
       <Route path="orders/:orderId" element={<OrderDetailPage />} />
       <Route path="account" element={<AccountPage />} />
@@ -234,10 +237,12 @@ export default function App() {
           <Route path="categories" element={<AdminCategoriesPage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
           <Route path="returns" element={<AdminReturnsPage />} />
+          <Route path="disputes" element={<AdminDisputesPage />} />
           <Route path="reviews" element={<AdminOrderReviewsPage />} />
           <Route path="inventory" element={<AdminInventoryPage />} />
           <Route path="fulfillment" element={<AdminFulfillmentPage />} />
           <Route path="deposit-boxes" element={<AdminDepositPage />} />
+          <Route path="store-hours" element={<AdminStoreHoursPage />} />
         </Route>
       </Route>
 

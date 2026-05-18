@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link as RouterLink, useLocation, useParams } from 'react-router-dom'
+import { Link as RouterLink, Navigate, useLocation, useParams } from 'react-router-dom'
 import {
   Alert,
+  Box,
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -10,12 +12,18 @@ import {
   Paper,
   Rating,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from '@mui/material'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { formatHomeDeliveryWindow } from '../../lib/formatHomeDeliveryWindow'
+import { formatPackageDimensionsMm } from '../../lib/formatPackageDims'
 import { formatMoney } from '../../lib/money'
 import {
   fetchOrderReviewFromApi,
@@ -36,17 +44,35 @@ type Detail = {
     subtotal_cents: number
     shipping_cents: number
     tax_cents: number
+    discount_cents?: number
     total_cents: number
     currency: string
     delivery_method: string
     deposit_location_id: string | null
     deposit_location_name: string | null
-    containsAlcohol?: boolean
-    deliveryScheduledFor?: string | null
-    homeDeliveryWindow?: { start: string; end: string; label: string | null } | null
+    contains_alcohol?: boolean
+    delivery_scheduled_for?: string | null
+    home_delivery_window?: { start: string; end: string; label: string | null } | null
   }
-  lines: { productName: string; sku: string; quantity: number; unitPriceCents: number }[]
-  fulfillment: { stage: string; carrier_name: string | null; tracking_reference: string | null } | null
+  lines: {
+    productName: string
+    sku: string
+    quantity: number
+    unitPriceCents: number
+    variantName?: string | null
+    packageLengthMm?: number | null
+    packageWidthMm?: number | null
+    packageHeightMm?: number | null
+    grossWeightG?: number | null
+  }[]
+  fulfillment: {
+    stage: string
+    carrier_name: string | null
+    tracking_reference: string | null
+    yango_delivery_id?: string | null
+    yango_status?: string | null
+    yango_tracking_url?: string | null
+  } | null
   shippingAddress: {
     label: string | null
     line1: string
@@ -84,6 +110,7 @@ export function OrderDetailPage() {
   const [refundBusy, setRefundBusy] = useState(false)
   const [volatilePickup, setVolatilePickup] = useState<{ code: string; expiresAt: string } | null>(null)
   const [pickupGenBusy, setPickupGenBusy] = useState(false)
+  const [pickupVerifyBusy, setPickupVerifyBusy] = useState(false)
   const [pickupGenErr, setPickupGenErr] = useState<string | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
 
@@ -91,9 +118,55 @@ export function OrderDetailPage() {
   const [orderReadyForReviewLocal, setOrderReadyForReviewLocal] = useState(false)
   const [apiReview, setApiReview] = useState<StoredOrderReview | null | undefined>(undefined)
 
+  const [disputeHint, setDisputeHint] = useState<'none' | 'open' | 'closed'>('none')
+  const [paymentPlan, setPaymentPlan] = useState<{
+    plan_type: string
+    total_instalments: number
+    instalment_cents: number
+    currency: string
+    status: string
+    instalments: { id: string; instalment_number: number; amount_cents: number; status: string; due_date: string; paid_at: string | null }[]
+  } | null>(null)
+
   useEffect(() => {
     setOrderReadyForReviewLocal(false)
   }, [orderId])
+
+  useEffect(() => {
+    if (!orderId) return
+    let cancelled = false
+    void fetch(apiUrl(`/api/orders/${orderId}/payment-plan`), { credentials: 'include' })
+      .then(async (res) => {
+        if (!res.ok || cancelled) return
+        const d = (await res.json()) as { plan: typeof paymentPlan }
+        if (!cancelled) setPaymentPlan(d.plan ?? null)
+      })
+      .catch(() => { /* migration may not be run */ })
+    return () => { cancelled = true }
+  }, [orderId])
+
+  useEffect(() => {
+    if (!orderId) return
+    const q = guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''
+    let cancelled = false
+    void fetch(apiUrl(`/api/disputes/for-order/${orderId}${q}`), { credentials: 'include' })
+      .then(async (res) => {
+        if (!res.ok || cancelled) return
+        const data = (await res.json()) as { items: { status: string }[] }
+        const items = data.items ?? []
+        if (items.some((d) => d.status === 'open' || d.status === 'in_review')) {
+          if (!cancelled) setDisputeHint('open')
+        } else if (items.length) {
+          if (!cancelled) setDisputeHint('closed')
+        } else if (!cancelled) setDisputeHint('none')
+      })
+      .catch(() => {
+        /* table may not exist until migration — ignore */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [orderId, guestEmailForApi])
 
   useEffect(() => {
     if (!volatilePickup) return
@@ -187,6 +260,7 @@ export function OrderDetailPage() {
 
   async function verifyPickup() {
     setPickupMsg(null)
+    setPickupVerifyBusy(true)
     try {
       await fetchCsrfToken()
       const url = guestEmailForApi
@@ -207,6 +281,8 @@ export function OrderDetailPage() {
       await loadDetail()
     } catch (e) {
       setPickupMsg(e instanceof Error ? e.message : 'Failed')
+    } finally {
+      setPickupVerifyBusy(false)
     }
   }
 
@@ -223,7 +299,7 @@ export function OrderDetailPage() {
       })
       const data = (await res.json()) as { error?: string; ok?: boolean }
       if (!res.ok) {
-        setActionMsg({ severity: 'warning', text: data.error ?? (await res.text()) })
+        setActionMsg({ severity: 'warning', text: data.error ?? 'Cancel failed' })
         return
       }
       setActionMsg({ severity: 'success', text: 'Order cancelled. Any reserved stock has been released.' })
@@ -254,7 +330,7 @@ export function OrderDetailPage() {
         walletNote?: string
       }
       if (!res.ok) {
-        setActionMsg({ severity: 'warning', text: data.error ?? (await res.text()) })
+        setActionMsg({ severity: 'warning', text: data.error ?? 'Refund failed' })
         return
       }
       const cur = detail?.order
@@ -273,6 +349,10 @@ export function OrderDetailPage() {
     } finally {
       setRefundBusy(false)
     }
+  }
+
+  if (!orderId) {
+    return <Navigate to={`${pathPrefix}/orders`} replace />
   }
 
   if (err) {
@@ -300,6 +380,7 @@ export function OrderDetailPage() {
   const volatileExpiresMs = volatilePickup ? new Date(volatilePickup.expiresAt).getTime() : 0
   const volatileSecondsLeft = volatilePickup ? Math.max(0, Math.ceil((volatileExpiresMs - nowMs) / 1000)) : 0
   const volatileExpiredOnClient = Boolean(volatilePickup && volatileSecondsLeft <= 0)
+  const canDispute = !['draft', 'cancelled', 'refunded'].includes(String(st).toLowerCase())
 
   return (
     <Stack spacing={2} sx={{ maxWidth: 560, mx: 'auto', py: 2 }}>
@@ -312,36 +393,80 @@ export function OrderDetailPage() {
       <Typography color="text.secondary">
         {formatOrderStatusLabel(o.status)} · {o.delivery_method}
       </Typography>
-      {o.containsAlcohol && o.deliveryScheduledFor ? (
+      {o.contains_alcohol && o.delivery_scheduled_for ? (
         <Alert severity="warning">
-          Alcohol fulfilment is scheduled for {new Date(o.deliveryScheduledFor).toLocaleString()}.
+          Alcohol fulfilment is scheduled for {new Date(o.delivery_scheduled_for).toLocaleString()}.
         </Alert>
       ) : null}
-      {o.delivery_method === 'home' && o.homeDeliveryWindow ? (
+      {o.delivery_method === 'home' && o.home_delivery_window ? (
         <Typography variant="body2" color="text.secondary">
           Preferred delivery:{' '}
           {formatHomeDeliveryWindow(
-            o.homeDeliveryWindow.start,
-            o.homeDeliveryWindow.end,
-            o.homeDeliveryWindow.label,
+            o.home_delivery_window.start,
+            o.home_delivery_window.end,
+            o.home_delivery_window.label,
           )}
         </Typography>
       ) : null}
       <Typography>
         Subtotal {formatMoney(o.subtotal_cents, o.currency)} · Shipping {formatMoney(o.shipping_cents, o.currency)} · Tax{' '}
         {formatMoney(o.tax_cents, o.currency)}
+        {o.discount_cents != null && o.discount_cents > 0 ? ` · Discount -${formatMoney(o.discount_cents, o.currency)}` : ''}
       </Typography>
       <Typography variant="h6" fontWeight={800}>
         Total {formatMoney(o.total_cents, o.currency)}
       </Typography>
+      {paymentPlan && (
+        <Paper variant="outlined" sx={{ p: 1.5, mt: 1 }}>
+          <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>
+            Payment plan — {paymentPlan.plan_type} · {paymentPlan.total_instalments} instalments
+            <Chip label={paymentPlan.status} size="small" sx={{ ml: 1 }} color={paymentPlan.status === 'active' ? 'primary' : paymentPlan.status === 'completed' ? 'success' : 'default'} />
+          </Typography>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>#</TableCell>
+                <TableCell>Amount</TableCell>
+                <TableCell>Due</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell>Paid</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {paymentPlan.instalments.map((i) => (
+                <TableRow key={i.id}>
+                  <TableCell>{i.instalment_number}</TableCell>
+                  <TableCell>{formatMoney(i.amount_cents, paymentPlan.currency)}</TableCell>
+                  <TableCell>{i.due_date}</TableCell>
+                  <TableCell><Chip label={i.status} size="small" color={i.status === 'paid' ? 'success' : i.status === 'overdue' ? 'error' : 'default'} /></TableCell>
+                  <TableCell>{i.paid_at ? new Date(i.paid_at).toLocaleDateString() : '—'}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Paper>
+      )}
+
       <Typography variant="subtitle1" fontWeight={700}>
         Items
       </Typography>
-      {detail.lines.map((l) => (
-        <Typography key={l.sku}>
-          {l.productName} × {l.quantity} @ {formatMoney(l.unitPriceCents, o.currency)}
-        </Typography>
-      ))}
+      {detail.lines.map((l, idx) => {
+        const pkg = formatPackageDimensionsMm(l)
+        return (
+          <Typography key={`${l.sku}-${idx}`} variant="body2">
+            {l.productName}
+            {l.variantName ? ` · ${l.variantName}` : ''} × {l.quantity} @ {formatMoney(l.unitPriceCents, o.currency)}
+            {pkg ? (
+              <>
+                <br />
+                <Box component="span" color="text.secondary" sx={{ fontSize: '0.85rem' }}>
+                  Package: {pkg}
+                </Box>
+              </>
+            ) : null}
+          </Typography>
+        )
+      })}
       {detail.shippingAddress && o.delivery_method === 'home' ? (
         <Stack spacing={0.5} sx={{ pt: 1 }}>
           <Typography variant="subtitle2" fontWeight={700}>
@@ -362,6 +487,16 @@ export function OrderDetailPage() {
           Shipment: {detail.fulfillment.stage}
           {detail.fulfillment.carrier_name ? ` · ${detail.fulfillment.carrier_name}` : ''}
           {detail.fulfillment.tracking_reference ? ` · Tracking: ${detail.fulfillment.tracking_reference}` : ''}
+          {detail.fulfillment.yango_delivery_id ? ` · Yango: ${detail.fulfillment.yango_delivery_id}` : ''}
+          {detail.fulfillment.yango_status ? ` (${detail.fulfillment.yango_status})` : ''}
+          {detail.fulfillment.yango_tracking_url ? (
+            <>
+              {' '}
+              <a href={detail.fulfillment.yango_tracking_url} target="_blank" rel="noreferrer">
+                Track delivery
+              </a>
+            </>
+          ) : null}
         </Typography>
       )}
 
@@ -432,6 +567,25 @@ export function OrderDetailPage() {
         </Button>
       )}
 
+      {canDispute ? (
+        <Stack spacing={1} sx={{ pt: 0.5 }}>
+          {disputeHint === 'open' ? (
+            <Alert severity="info">You have an open dispute on this order. We will update you here and by email when it changes.</Alert>
+          ) : null}
+          <Button
+            component={RouterLink}
+            to={`${pathPrefix}/orders/${orderId}/dispute${guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''}`}
+            variant="outlined"
+            color="secondary"
+          >
+            Dispute transaction
+          </Button>
+          <Typography variant="caption" color="text.secondary">
+            For billing or delivery problems. Returns use &quot;Request a return&quot; when shipped.
+          </Typography>
+        </Stack>
+      ) : null}
+
       {depositPickupEligible && (
         <Stack spacing={1} sx={{ pt: 1 }}>
           <Typography variant="subtitle2" fontWeight={700}>
@@ -498,7 +652,7 @@ export function OrderDetailPage() {
             total; the remainder is returned where your payment method allows ({APP_WALLET_DISPLAY_NAME} credits apply immediately
             when you paid with the wallet).
           </Typography>
-          <Button variant="outlined" onClick={() => setRefundOpen(true)}>
+          <Button variant="outlined" disabled={refundBusy} onClick={() => setRefundOpen(true)}>
             Request refund…
           </Button>
         </Stack>
@@ -539,9 +693,15 @@ export function OrderDetailPage() {
           <Typography variant="body2" color="text.secondary">
             After you have collected your order from the locker, enter the pickup code you used and confirm.
           </Typography>
-          <TextField size="small" label="Pickup code" value={pickupCode} onChange={(e) => setPickupCode(e.target.value)} />
-          <Button variant="outlined" onClick={() => void verifyPickup()}>
-            Verify code
+          <TextField
+            size="small"
+            label="Pickup code"
+            value={pickupCode}
+            onChange={(e) => setPickupCode(e.target.value)}
+            disabled={pickupVerifyBusy}
+          />
+          <Button variant="outlined" disabled={pickupVerifyBusy} onClick={() => void verifyPickup()}>
+            {pickupVerifyBusy ? 'Verifying…' : 'Verify code'}
           </Button>
           {pickupMsg && <Alert severity="info">{pickupMsg}</Alert>}
         </Stack>

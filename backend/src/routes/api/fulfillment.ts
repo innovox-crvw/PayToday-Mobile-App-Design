@@ -22,8 +22,12 @@ fulfillmentRouter.get('/orders', async (_req, res) => {
     currency: string
     stage: string
     delivery_method: string
+    yango_delivery_id: string | null
+    yango_status: string | null
+    yango_tracking_url: string | null
   }>(`
-    SELECT CAST(o.id AS NVARCHAR(36)) AS orderId, o.status, o.total_cents, o.currency, f.stage, o.delivery_method
+    SELECT CAST(o.id AS NVARCHAR(36)) AS orderId, o.status, o.total_cents, o.currency, f.stage, o.delivery_method,
+      f.yango_delivery_id, f.yango_status, f.yango_tracking_url
     FROM dbo.orders o
     INNER JOIN dbo.fulfillment_tasks f ON f.order_id = o.id
     ORDER BY o.created_at DESC

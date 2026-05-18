@@ -7,6 +7,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
+import type { Readable } from 'node:stream'
 import yauzl from 'yauzl'
 import { parseSku } from '../lib/inputValidators.js'
 
@@ -53,7 +54,7 @@ function collectEntries(zipfile: yauzl.ZipFile): Promise<yauzl.Entry[]> {
 
 async function extractEntryToPath(zipfile: yauzl.ZipFile, entry: yauzl.Entry, destPath: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    zipfile.openReadStream(entry, (err, rs) => {
+    zipfile.openReadStream(entry, (err: Error | null, rs: Readable | undefined) => {
       if (err || !rs) {
         reject(err ?? new Error('openReadStream failed'))
         return
@@ -109,7 +110,7 @@ export async function listZipSkuImageKeys(zipPath: string): Promise<{
 }> {
   const warnings: string[] = []
   const zipListing = await new Promise<yauzl.ZipFile>((resolve, reject) => {
-    yauzl.open(zipPath, { lazyEntries: true, validateEntrySizes: true }, (err, zf) => {
+    yauzl.open(zipPath, { lazyEntries: true, validateEntrySizes: true }, (err: Error | null, zf: yauzl.ZipFile | undefined) => {
       if (err || !zf) reject(err ?? new Error('Unable to open ZIP'))
       else resolve(zf)
     })
@@ -172,7 +173,7 @@ export async function buildSkuImageUrlMapFromZipFile(
   await fsp.mkdir(uploadDir, { recursive: true })
 
   const zipListing = await new Promise<yauzl.ZipFile>((resolve, reject) => {
-    yauzl.open(zipPath, { lazyEntries: true, validateEntrySizes: true }, (err, zf) => {
+    yauzl.open(zipPath, { lazyEntries: true, validateEntrySizes: true }, (err: Error | null, zf: yauzl.ZipFile | undefined) => {
       if (err || !zf) reject(err ?? new Error('Unable to open ZIP'))
       else resolve(zf)
     })
@@ -215,31 +216,35 @@ export async function buildSkuImageUrlMapFromZipFile(
   }
 
   await new Promise<void>((resolve, reject) => {
-    yauzl.open(zipPath, { lazyEntries: true, validateEntrySizes: true }, (err, zipfile) => {
-      if (err || !zipfile) {
-        reject(err ?? new Error('Unable to open ZIP for extraction'))
-        return
-      }
-      zipfile.on('entry', (entry) => {
-        const key = entry.fileName.replace(/\\/g, '/')
-        const meta = extractMap.get(key)
-        if (!meta || /\/$/u.test(entry.fileName)) {
-          zipfile.readEntry()
+    yauzl.open(
+      zipPath,
+      { lazyEntries: true, validateEntrySizes: true },
+      (err: Error | null, zipfile: yauzl.ZipFile | undefined) => {
+        if (err || !zipfile) {
+          reject(err ?? new Error('Unable to open ZIP for extraction'))
           return
         }
-        const outName = `${randomUUID()}${meta.ext}`
-        const destAbs = path.join(uploadDir, outName)
-        void extractEntryToPath(zipfile, entry, destAbs)
-          .then(() => {
-            skuToPublicUrl.set(meta.skuNorm, `/api/uploads/products/${encodeURIComponent(outName)}`)
+        zipfile.on('entry', (entry: yauzl.Entry) => {
+          const key = entry.fileName.replace(/\\/g, '/')
+          const meta = extractMap.get(key)
+          if (!meta || /\/$/u.test(entry.fileName)) {
             zipfile.readEntry()
-          })
-          .catch(reject)
-      })
-      zipfile.on('end', () => resolve())
-      zipfile.on('error', reject)
-      zipfile.readEntry()
-    })
+            return
+          }
+          const outName = `${randomUUID()}${meta.ext}`
+          const destAbs = path.join(uploadDir, outName)
+          void extractEntryToPath(zipfile, entry, destAbs)
+            .then(() => {
+              skuToPublicUrl.set(meta.skuNorm, `/api/uploads/products/${encodeURIComponent(outName)}`)
+              zipfile.readEntry()
+            })
+            .catch(reject)
+        })
+        zipfile.on('end', () => resolve())
+        zipfile.on('error', reject)
+        zipfile.readEntry()
+      },
+    )
   })
 
   return { skuToPublicUrl, warnings }
