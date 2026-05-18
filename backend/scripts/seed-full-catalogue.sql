@@ -135,7 +135,6 @@ BEGIN
   WHERE slug IN (N'electronics', N'home')
     AND finance_eligible = 0;
 END;
-GO
 
 /* ─────────────────────────────────────────────────────────────────────────────
    2.  Scope existing un-scoped demo products to merchant 5229
@@ -148,7 +147,6 @@ BEGIN
   SET pay_today_merchant_id = 5229
   WHERE pay_today_merchant_id IS NULL;
 END;
-GO
 
 /* ─────────────────────────────────────────────────────────────────────────────
    3.  Fill missing package dimensions on existing variants
@@ -166,7 +164,6 @@ BEGIN
      OR package_width_mm  IS NULL
      OR package_height_mm IS NULL;
 END;
-GO
 
 /* ─────────────────────────────────────────────────────────────────────────────
    4.  New top-level categories
@@ -182,7 +179,6 @@ IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'baby')
 IF NOT EXISTS (SELECT 1 FROM dbo.categories WHERE slug = N'sports-fitness')
   INSERT INTO dbo.categories (id, slug, name, parent_id, sort_order, is_active, icon_key)
   VALUES ('7E100001-0000-4000-8000-000000000009', N'sports-fitness', N'Sports & fitness', NULL, 60, 1, N'sports');
-GO
 
 /* ─────────────────────────────────────────────────────────────────────────────
    5.  New sub-categories
@@ -243,7 +239,6 @@ BEGIN
     VALUES ('7E100001-0000-4000-8000-000000000012', N'hot-drinks', N'Coffee & tea',
             (SELECT id FROM dbo.categories WHERE slug = N'groceries'), 70, 1, N'beverages');
 END;
-GO
 
 /* ─────────────────────────────────────────────────────────────────────────────
    6.  New products
