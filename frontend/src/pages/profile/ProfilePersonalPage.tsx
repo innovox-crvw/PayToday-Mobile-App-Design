@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Link as RouterLink } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -7,24 +7,46 @@ import {
   Card,
   CardContent,
   CircularProgress,
-  Divider,
   Stack,
   TextField,
   Typography,
 } from '@mui/material'
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
+import CalendarMonthOutlinedIcon from '@mui/icons-material/CalendarMonthOutlined'
+import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined'
+import TranslateOutlinedIcon from '@mui/icons-material/TranslateOutlined'
+import MailOutlineIcon from '@mui/icons-material/MailOutline'
 import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined'
-import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
-import { WalletSubheader } from '../wallet/WalletSubheader'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import { AccountInfoCard } from '../../components/profile/AccountInfoCard'
+import { AccountSectionHeader } from '../../components/profile/AccountSectionHeader'
 import { useStorePathPrefix } from './profilePaths'
+import { formatDobDisplay, formatUiLanguageDisplay } from './accountNav'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
+import { readUiLanguage } from '../../lib/appPreferences'
+
+type AddressRow = {
+  city: string
+  region: string | null
+  country: string
+  is_default: boolean
+}
+
+type EditSection = 'name' | 'dob' | 'email' | 'password' | null
 
 export function ProfilePersonalPage() {
   const prefix = useStorePathPrefix()
+  const navigate = useNavigate()
+
   const confirmPath = prefix ? `${prefix}/profile/confirm-email` : '/profile/confirm-email'
-  const profileHubPath = prefix ? `${prefix}/profile` : '/profile'
+  const addressesPath = prefix ? `${prefix}/profile/addresses` : '/profile/addresses'
+  const settingsPath = prefix ? `${prefix}/profile/settings` : '/profile/settings'
+  const signInPath = `${prefix}/onboarding/login?returnTo=${encodeURIComponent(`${prefix}/profile/personal`)}`
 
   const { user, loading } = useAuthMe()
+
+  const [editSection, setEditSection] = useState<EditSection>(null)
   const [fullName, setFullName] = useState('')
   const [dateOfBirth, setDateOfBirth] = useState('')
   const [newEmail, setNewEmail] = useState('')
@@ -33,6 +55,7 @@ export function ProfilePersonalPage() {
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
+  const [regionLabel, setRegionLabel] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [savingDob, setSavingDob] = useState(false)
   const [savingEmail, setSavingEmail] = useState(false)
@@ -40,12 +63,64 @@ export function ProfilePersonalPage() {
   const [resending, setResending] = useState(false)
   const [msg, setMsg] = useState<{ text: string; severity: 'success' | 'error' } | null>(null)
 
+  const uiLanguage = useMemo(() => formatUiLanguageDisplay(readUiLanguage()), [])
+
+  const loadRegion = useCallback(async () => {
+    if (!user) {
+      setRegionLabel(null)
+      return
+    }
+    try {
+      const res = await apiFetch('/api/addresses')
+      if (!res.ok) return
+      const data = (await res.json()) as { items?: AddressRow[] }
+      const items = data.items ?? []
+      const pick = items.find((a) => a.is_default) ?? items[0]
+      if (!pick) {
+        setRegionLabel(null)
+        return
+      }
+      const parts = [pick.country === 'NA' ? 'Namibia' : pick.country, pick.city]
+      if (pick.region?.trim()) parts.splice(1, 0, pick.region.trim())
+      setRegionLabel(parts.filter(Boolean).join(', '))
+    } catch {
+      setRegionLabel(null)
+    }
+  }, [user])
+
   useEffect(() => {
     if (user?.fullName != null) setFullName(user.fullName || '')
     else if (!user) setFullName('')
     if (user?.dateOfBirth) setDateOfBirth(user.dateOfBirth)
     else if (!user) setDateOfBirth('')
   }, [user])
+
+  useEffect(() => {
+    void loadRegion()
+  }, [loadRegion])
+
+  function openEdit(section: EditSection) {
+    if (!user) return
+    setEditSection(section)
+    setMsg(null)
+    if (section === 'name') setFullName(user.fullName || '')
+    if (section === 'dob') setDateOfBirth(user.dateOfBirth || '')
+    if (section === 'email') {
+      setNewEmail('')
+      setConfirmEmail('')
+      setEmailPassword('')
+    }
+    if (section === 'password') {
+      setCurrentPw('')
+      setNewPw('')
+      setConfirmPw('')
+    }
+  }
+
+  function cancelEdit() {
+    setEditSection(null)
+    setMsg(null)
+  }
 
   async function saveName() {
     if (!user) return
@@ -64,6 +139,7 @@ export function ProfilePersonalPage() {
         return
       }
       setMsg({ text: 'Display name saved.', severity: 'success' })
+      setEditSection(null)
       window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
@@ -88,7 +164,8 @@ export function ProfilePersonalPage() {
         setMsg({ text: data.error ?? 'Could not save', severity: 'error' })
         return
       }
-      setMsg({ text: 'Date of birth saved. Used for age-restricted purchases when enabled on this store.', severity: 'success' })
+      setMsg({ text: 'Date of birth saved.', severity: 'success' })
+      setEditSection(null)
       window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
@@ -125,14 +202,8 @@ export function ProfilePersonalPage() {
       setNewEmail('')
       setConfirmEmail('')
       setEmailPassword('')
-      const parts = ['Email updated.']
-      if (data.emailVerificationRequired) {
-        parts.push('Confirm the new address using the link sent to your email, or open the link from the dev token if enabled.')
-      }
-      if (data.devVerificationToken) {
-        parts.push(`Dev token: ${data.devVerificationToken}`)
-      }
-      setMsg({ text: parts.join(' '), severity: 'success' })
+      setMsg({ text: 'Email updated.', severity: 'success' })
+      setEditSection(null)
       window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
@@ -164,7 +235,8 @@ export function ProfilePersonalPage() {
       setCurrentPw('')
       setNewPw('')
       setConfirmPw('')
-      setMsg({ text: 'Password updated. You remain signed in on this device.', severity: 'success' })
+      setMsg({ text: 'Password updated.', severity: 'success' })
+      setEditSection(null)
       window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Save failed', severity: 'error' })
@@ -178,21 +250,16 @@ export function ProfilePersonalPage() {
     setResending(true)
     try {
       await fetchCsrfToken()
-      const res = await apiFetch('/api/auth/resend-verification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      const data = (await res.json()) as { ok?: boolean; error?: string; alreadyVerified?: boolean; devVerificationToken?: string }
+      const res = await apiFetch('/api/auth/resend-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
       if (!res.ok) {
-        setMsg({ text: data.error ?? 'Could not resend', severity: 'error' })
+        setMsg({ text: 'Could not resend', severity: 'error' })
         return
       }
-      if (data.alreadyVerified) {
-        setMsg({ text: 'Email is already verified.', severity: 'success' })
-        window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
-        return
-      }
-      const t = data.devVerificationToken
-        ? `Verification link uses token (dev): open ${confirmPath}?token=${encodeURIComponent(data.devVerificationToken)}`
-        : 'Use the link sent to your inbox, or open My account → Confirm email with the token from your email.'
-      setMsg({ text: `If your account is eligible, a new verification link was prepared. ${t}`, severity: 'success' })
+      setMsg({ text: 'Verification email sent.', severity: 'success' })
     } catch (e) {
       setMsg({ text: e instanceof Error ? e.message : 'Failed', severity: 'error' })
     } finally {
@@ -202,18 +269,16 @@ export function ProfilePersonalPage() {
 
   if (loading) {
     return (
-      <ProfilePageShell>
-        <Stack alignItems="center" py={6}>
-          <CircularProgress size={36} />
-        </Stack>
-      </ProfilePageShell>
+      <Stack alignItems="center" py={6}>
+        <CircularProgress size={36} />
+      </Stack>
     )
   }
 
   if (!user) {
     return (
-      <ProfilePageShell>
-        <WalletSubheader title="Personal" />
+      <>
+        <AccountSectionHeader title="Personal information" description="Sign in to manage your account." />
         <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
           <CardContent sx={{ py: 4, textAlign: 'center' }}>
             <Box sx={{ color: 'text.secondary', mb: 2 }}>
@@ -222,26 +287,26 @@ export function ProfilePersonalPage() {
             <Typography variant="h6" fontWeight={800} gutterBottom>
               Sign in required
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
-              Sign in to edit name, email, and password.
-            </Typography>
-            <Button component={RouterLink} to={profileHubPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
-              Account
+            <Button component={RouterLink} to={signInPath} variant="contained" color="secondary" size="large" sx={{ fontWeight: 700, mt: 1 }}>
+              Sign in
             </Button>
           </CardContent>
         </Card>
-      </ProfilePageShell>
+      </>
     )
   }
 
   const verified = user.emailVerified !== false
+  const nameDisplay = user.fullName?.trim() || 'Not set'
+  const dobDisplay = formatDobDisplay(user.dateOfBirth)
+  const regionDisplay = regionLabel ?? 'Add a delivery address'
 
   return (
-    <ProfilePageShell>
-      <WalletSubheader title="Personal" />
-      <Typography variant="body2" color="text.secondary">
-        Name, email, and password. Email and password changes need your current password.
-      </Typography>
+    <Stack spacing={3}>
+      <AccountSectionHeader
+        title="Personal information"
+        description="Manage your personal information, including phone numbers and email address where you can be contacted."
+      />
 
       {msg ? (
         <Alert severity={msg.severity} onClose={() => setMsg(null)}>
@@ -250,90 +315,178 @@ export function ProfilePersonalPage() {
       ) : null}
 
       {!verified ? (
-        <Alert severity="warning" action={
-          <Button color="inherit" size="small" disabled={resending} onClick={() => void resendVerification()}>
-            {resending ? 'Sending…' : 'Resend link'}
-          </Button>
-        }>
-          Email not verified. Open the link from your inbox, or{' '}
-          <RouterLink to={confirmPath}>confirm with a token</RouterLink>.
+        <Alert
+          severity="warning"
+          action={
+            <Button color="inherit" size="small" disabled={resending} onClick={() => void resendVerification()}>
+              {resending ? 'Sending…' : 'Resend link'}
+            </Button>
+          }
+        >
+          Email not verified.{' '}
+          <RouterLink to={confirmPath}>Confirm with a token</RouterLink>.
         </Alert>
       ) : null}
 
-      <Typography variant="subtitle2" fontWeight={700}>
-        Display name
-      </Typography>
-      <TextField label="Display name" value={fullName} onChange={(e) => setFullName(e.target.value)} fullWidth autoComplete="name" />
-      <Button variant="contained" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={saving} onClick={() => void saveName()}>
-        {saving ? 'Saving…' : 'Save name'}
-      </Button>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' },
+          gap: 2,
+        }}
+      >
+        <AccountInfoCard
+          title="Name"
+          value={nameDisplay}
+          icon={<PersonOutlineIcon fontSize="small" />}
+          editing={editSection === 'name'}
+          onEdit={() => openEdit('name')}
+          onCancel={cancelEdit}
+          onSave={() => void saveName()}
+          saving={saving}
+          saveLabel="Save name"
+          editContent={
+            <TextField
+              label="Display name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              fullWidth
+              size="small"
+              autoComplete="name"
+            />
+          }
+        />
 
-      <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 1 }}>
-        Date of birth
-      </Typography>
-      <Typography variant="caption" color="text.secondary" display="block">
-        Required for age-restricted products when the store enables liquor gating. Format YYYY-MM-DD. This is not ID verification.
-      </Typography>
-      <TextField
-        label="Date of birth (YYYY-MM-DD)"
-        value={dateOfBirth}
-        onChange={(e) => setDateOfBirth(e.target.value)}
-        fullWidth
-        placeholder="1990-05-15"
-        helperText={user.isAdult === false ? 'Recorded age is under 18 — alcohol catalogue and cart will stay blocked.' : undefined}
-      />
-      <Button variant="outlined" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={savingDob} onClick={() => void saveDob()}>
-        {savingDob ? 'Saving…' : 'Save date of birth'}
-      </Button>
+        <AccountInfoCard
+          title="Date of birth"
+          value={dobDisplay}
+          icon={<CalendarMonthOutlinedIcon fontSize="small" />}
+          editing={editSection === 'dob'}
+          onEdit={() => openEdit('dob')}
+          onCancel={cancelEdit}
+          onSave={() => void saveDob()}
+          saving={savingDob}
+          saveLabel="Save"
+          editContent={
+            <TextField
+              label="Date of birth"
+              type="date"
+              value={dateOfBirth}
+              onChange={(e) => setDateOfBirth(e.target.value)}
+              fullWidth
+              size="small"
+              InputLabelProps={{ shrink: true }}
+              helperText="Used for age-restricted products when enabled."
+            />
+          }
+        />
 
-      <Divider sx={{ my: 1 }} />
+        <AccountInfoCard
+          title="Country / region"
+          value={regionDisplay}
+          icon={<PublicOutlinedIcon fontSize="small" />}
+          onEdit={() => navigate(addressesPath)}
+          editLabel="Manage addresses"
+        />
 
-      <Typography variant="subtitle2" fontWeight={700}>
-        Email ({user.email})
-      </Typography>
-      <TextField
-        label="New email"
-        type="email"
-        value={newEmail}
-        onChange={(e) => setNewEmail(e.target.value)}
-        fullWidth
-        autoComplete="email"
-      />
-      <TextField
-        label="Confirm new email"
-        type="email"
-        value={confirmEmail}
-        onChange={(e) => setConfirmEmail(e.target.value)}
-        fullWidth
-        autoComplete="off"
-      />
-      <TextField
-        label="Current password"
-        type="password"
-        value={emailPassword}
-        onChange={(e) => setEmailPassword(e.target.value)}
-        fullWidth
-        autoComplete="current-password"
-      />
-      <Button variant="outlined" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={savingEmail} onClick={() => void saveEmail()}>
-        {savingEmail ? 'Updating…' : 'Update email'}
-      </Button>
+        <AccountInfoCard
+          title="Language"
+          value={uiLanguage}
+          icon={<TranslateOutlinedIcon fontSize="small" />}
+          onEdit={() => navigate(settingsPath)}
+          editLabel="Open settings"
+        />
 
-      <Divider sx={{ my: 1 }} />
+        <AccountInfoCard
+          title="Password"
+          value="••••••••"
+          icon={<LockOutlinedIcon fontSize="small" />}
+          editing={editSection === 'password'}
+          onEdit={() => openEdit('password')}
+          onCancel={cancelEdit}
+          onSave={() => void savePassword()}
+          saving={savingPw}
+          saveLabel="Update password"
+          editContent={
+            <Stack spacing={1.25}>
+              <TextField
+                label="Current password"
+                type="password"
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value)}
+                fullWidth
+                size="small"
+                autoComplete="current-password"
+              />
+              <TextField
+                label="New password"
+                type="password"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+                fullWidth
+                size="small"
+                autoComplete="new-password"
+              />
+              <TextField
+                label="Confirm new password"
+                type="password"
+                value={confirmPw}
+                onChange={(e) => setConfirmPw(e.target.value)}
+                fullWidth
+                size="small"
+                autoComplete="new-password"
+              />
+            </Stack>
+          }
+        />
 
-      <Typography variant="subtitle2" fontWeight={700}>
-        Password
-      </Typography>
-      <TextField label="Current password" type="password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} fullWidth autoComplete="current-password" />
-      <TextField label="New password" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} fullWidth autoComplete="new-password" />
-      <TextField label="Confirm new password" type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} fullWidth autoComplete="new-password" />
-      <Button variant="outlined" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} disabled={savingPw} onClick={() => void savePassword()}>
-        {savingPw ? 'Updating…' : 'Update password'}
-      </Button>
-
-      <Typography variant="caption" color="text.secondary" display="block" sx={{ pt: 1 }}>
-        Forgot password? Use the link on the sign-in screen, or ask your admin for SSO accounts.
-      </Typography>
-    </ProfilePageShell>
+        <Box sx={{ gridColumn: { sm: '1 / -1' } }}>
+          <AccountInfoCard
+            title="Contactable at"
+            value={user.email}
+            icon={<MailOutlineIcon fontSize="small" />}
+            editing={editSection === 'email'}
+            onEdit={() => openEdit('email')}
+            onCancel={cancelEdit}
+            onSave={() => void saveEmail()}
+            saving={savingEmail}
+            saveLabel="Update email"
+            editContent={
+              <Stack spacing={1.25}>
+                <Typography variant="caption" color="text.secondary">
+                  Current: {user.email}
+                </Typography>
+                <TextField
+                  label="New email"
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  fullWidth
+                  size="small"
+                  autoComplete="email"
+                />
+                <TextField
+                  label="Confirm new email"
+                  type="email"
+                  value={confirmEmail}
+                  onChange={(e) => setConfirmEmail(e.target.value)}
+                  fullWidth
+                  size="small"
+                />
+                <TextField
+                  label="Current password"
+                  type="password"
+                  value={emailPassword}
+                  onChange={(e) => setEmailPassword(e.target.value)}
+                  fullWidth
+                  size="small"
+                  autoComplete="current-password"
+                />
+              </Stack>
+            }
+          />
+        </Box>
+      </Box>
+    </Stack>
   )
 }

@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, Navigate, useLocation, useParams } from 'react-router-dom'
 import {
   Alert,
   Box,
   Button,
+  Card,
+  CardContent,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Paper,
+  Divider,
   Rating,
   Stack,
   Table,
@@ -20,11 +24,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { formatHomeDeliveryWindow } from '../../lib/formatHomeDeliveryWindow'
 import { formatPackageDimensionsMm } from '../../lib/formatPackageDims'
 import { formatMoney } from '../../lib/money'
+import { formatNad } from '../../data/walletMock'
 import {
   fetchOrderReviewFromApi,
   getOrderReview,
@@ -33,9 +39,65 @@ import {
   type StoredOrderReview,
 } from '../../lib/orderListCategory'
 import { formatOrderStatusLabel } from '../../lib/orderStatusDisplay'
-import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
+import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME, SURFACE_SHADOW } from '../../theme/branding'
+import { SHOP_V2 } from '../../theme/storeV2'
 
 const REFUND_FEE_BPS = 1000
+
+const orderCardSx = {
+  borderRadius: 2.5,
+  border: 1,
+  borderColor: 'divider',
+  boxShadow: SURFACE_SHADOW,
+  bgcolor: 'background.paper',
+} as const
+
+function formatDeliveryMethod(method: string): string {
+  const labels: Record<string, string> = {
+    home: 'Home delivery',
+    yango_delivery: 'Yango courier',
+    store_pickup: 'Store pickup',
+    deposit_box: 'Deposit locker',
+  }
+  return labels[method] ?? method.replace(/_/g, ' ')
+}
+
+function orderStatusChipColor(status: string): 'success' | 'info' | 'warning' | 'error' | 'default' {
+  if (status === 'delivered') return 'success'
+  if (status === 'shipped') return 'info'
+  if (status === 'paid' || status === 'processing') return 'success'
+  if (status === 'pending_payment' || status === 'draft') return 'warning'
+  if (status === 'cancelled' || status === 'refunded') return 'error'
+  return 'default'
+}
+
+function OrderSectionCard(props: { title: string; children: ReactNode; spacing?: number }) {
+  const { title, children, spacing = 1.25 } = props
+  return (
+    <Card elevation={0} sx={orderCardSx}>
+      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+        <Typography variant="subtitle2" fontWeight={800} sx={{ mb: spacing }}>
+          {title}
+        </Typography>
+        {children}
+      </CardContent>
+    </Card>
+  )
+}
+
+function SummaryRow(props: { label: string; value: string; emphasis?: boolean }) {
+  const { label, value, emphasis } = props
+  return (
+    <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2}>
+      <Typography variant={emphasis ? 'body1' : 'body2'} color={emphasis ? 'text.primary' : 'text.secondary'}>
+        {label}
+      </Typography>
+      <Typography variant={emphasis ? 'body1' : 'body2'} fontWeight={emphasis ? 800 : 600} sx={{ textAlign: 'right' }}>
+        {value}
+      </Typography>
+    </Stack>
+  )
+}
 
 type Detail = {
   order: {
@@ -127,6 +189,21 @@ export function OrderDetailPage() {
     status: string
     instalments: { id: string; instalment_number: number; amount_cents: number; status: string; due_date: string; paid_at: string | null }[]
   } | null>(null)
+  const [walletBalanceCents, setWalletBalanceCents] = useState<number | null>(null)
+  const [payingInstalmentId, setPayingInstalmentId] = useState<string | null>(null)
+  const [instalmentPayMsg, setInstalmentPayMsg] = useState<string | null>(null)
+
+  const reloadPaymentPlan = useCallback(async () => {
+    if (!orderId) return
+    try {
+      const res = await apiFetch(`/api/orders/${orderId}/payment-plan`)
+      if (!res.ok) return
+      const d = (await res.json()) as { plan: typeof paymentPlan }
+      setPaymentPlan(d.plan ?? null)
+    } catch {
+      /* ignore */
+    }
+  }, [orderId])
 
   useEffect(() => {
     setOrderReadyForReviewLocal(false)
@@ -134,16 +211,83 @@ export function OrderDetailPage() {
 
   useEffect(() => {
     if (!orderId) return
+    void reloadPaymentPlan()
+  }, [orderId, reloadPaymentPlan])
+
+  useEffect(() => {
+    if (!paymentPlan) return
     let cancelled = false
-    void fetch(apiUrl(`/api/orders/${orderId}/payment-plan`), { credentials: 'include' })
-      .then(async (res) => {
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/wallet/balance')
         if (!res.ok || cancelled) return
-        const d = (await res.json()) as { plan: typeof paymentPlan }
-        if (!cancelled) setPaymentPlan(d.plan ?? null)
-      })
-      .catch(() => { /* migration may not be run */ })
-    return () => { cancelled = true }
-  }, [orderId])
+        const data = (await res.json()) as { balanceCents?: number }
+        if (!cancelled && typeof data.balanceCents === 'number') setWalletBalanceCents(data.balanceCents)
+      } catch {
+        /* optional */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [paymentPlan])
+
+  const nextPayableInstalmentId = useMemo(() => {
+    if (!paymentPlan) return null
+    const sorted = [...paymentPlan.instalments].sort((a, b) => a.instalment_number - b.instalment_number)
+    for (const i of sorted) {
+      if (i.status === 'paid' || i.status === 'waived') continue
+      const priorUnpaid = sorted.some(
+        (p) => p.instalment_number < i.instalment_number && p.status !== 'paid' && p.status !== 'waived',
+      )
+      if (!priorUnpaid) return i.id
+    }
+    return null
+  }, [paymentPlan])
+
+  async function payInstalmentWithWallet(instalmentId: string) {
+    if (!orderId) return
+    setPayingInstalmentId(instalmentId)
+    setInstalmentPayMsg(null)
+    try {
+      await fetchCsrfToken()
+      const res = await apiFetch(
+        `/api/orders/${orderId}/payment-plan-instalments/${encodeURIComponent(instalmentId)}/pay-with-wallet`,
+        { method: 'POST' },
+      )
+      const data = (await res.json()) as {
+        error?: string
+        walletBalanceAfterCents?: number
+        orderPaid?: boolean
+        planCompleted?: boolean
+        instalmentNumber?: number
+      }
+      if (!res.ok) {
+        setInstalmentPayMsg(data.error ?? 'Could not pay instalment')
+        return
+      }
+      if (typeof data.walletBalanceAfterCents === 'number') {
+        setWalletBalanceCents(data.walletBalanceAfterCents)
+        window.dispatchEvent(new Event('pt-wallet-updated'))
+      }
+      await reloadPaymentPlan()
+      if (data.orderPaid) void loadDetail()
+      const n = data.instalmentNumber
+      if (data.orderPaid) {
+        setInstalmentPayMsg(
+          n != null
+            ? `Instalment ${n} paid from your wallet. All instalments complete — order is now paid.`
+            : 'All instalments paid — order is now paid.',
+        )
+      } else {
+        setInstalmentPayMsg(n != null ? `Instalment ${n} paid from your wallet.` : 'Instalment paid from your wallet.')
+      }
+    } catch (e) {
+      setInstalmentPayMsg(e instanceof Error ? e.message : 'Could not pay instalment')
+    } finally {
+      setPayingInstalmentId(null)
+    }
+  }
 
   useEffect(() => {
     if (!orderId) return
@@ -382,281 +526,450 @@ export function OrderDetailPage() {
   const volatileExpiredOnClient = Boolean(volatilePickup && volatileSecondsLeft <= 0)
   const canDispute = !['draft', 'cancelled', 'refunded'].includes(String(st).toLowerCase())
 
+  const shippingAddressBlock =
+    detail.shippingAddress && o.delivery_method === 'home'
+      ? [
+          detail.shippingAddress.label,
+          detail.shippingAddress.line1,
+          detail.shippingAddress.line2,
+          detail.shippingAddress.suburb,
+          `${detail.shippingAddress.city}${detail.shippingAddress.region ? `, ${detail.shippingAddress.region}` : ''} ${detail.shippingAddress.postal_code ?? ''}`.trim(),
+          detail.shippingAddress.country,
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : null
+
+  const hasDeliverySection =
+    Boolean(shippingAddressBlock) ||
+    Boolean(detail.fulfillment) ||
+    o.delivery_method === 'deposit_box' ||
+    (o.delivery_method === 'home' && o.home_delivery_window) ||
+    (o.contains_alcohol && o.delivery_scheduled_for)
+
+  const hasOrderActions =
+    (st === 'shipped' || st === 'delivered') ||
+    canDispute ||
+    canCancelUnpaid ||
+    canRefundPaid
+
   return (
-    <Stack spacing={2} sx={{ maxWidth: 560, mx: 'auto', py: 2 }}>
-      <Typography variant="h5" fontWeight={800}>
-        Order
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-        {o.orderId}
-      </Typography>
-      <Typography color="text.secondary">
-        {formatOrderStatusLabel(o.status)} · {o.delivery_method}
-      </Typography>
-      {o.contains_alcohol && o.delivery_scheduled_for ? (
-        <Alert severity="warning">
-          Alcohol fulfilment is scheduled for {new Date(o.delivery_scheduled_for).toLocaleString()}.
-        </Alert>
-      ) : null}
-      {o.delivery_method === 'home' && o.home_delivery_window ? (
-        <Typography variant="body2" color="text.secondary">
-          Preferred delivery:{' '}
-          {formatHomeDeliveryWindow(
-            o.home_delivery_window.start,
-            o.home_delivery_window.end,
-            o.home_delivery_window.label,
-          )}
-        </Typography>
-      ) : null}
-      <Typography>
-        Subtotal {formatMoney(o.subtotal_cents, o.currency)} · Shipping {formatMoney(o.shipping_cents, o.currency)} · Tax{' '}
-        {formatMoney(o.tax_cents, o.currency)}
-        {o.discount_cents != null && o.discount_cents > 0 ? ` · Discount -${formatMoney(o.discount_cents, o.currency)}` : ''}
-      </Typography>
-      <Typography variant="h6" fontWeight={800}>
-        Total {formatMoney(o.total_cents, o.currency)}
-      </Typography>
-      {paymentPlan && (
-        <Paper variant="outlined" sx={{ p: 1.5, mt: 1 }}>
-          <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>
-            Payment plan — {paymentPlan.plan_type} · {paymentPlan.total_instalments} instalments
-            <Chip label={paymentPlan.status} size="small" sx={{ ml: 1 }} color={paymentPlan.status === 'active' ? 'primary' : paymentPlan.status === 'completed' ? 'success' : 'default'} />
-          </Typography>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>#</TableCell>
-                <TableCell>Amount</TableCell>
-                <TableCell>Due</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Paid</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {paymentPlan.instalments.map((i) => (
-                <TableRow key={i.id}>
-                  <TableCell>{i.instalment_number}</TableCell>
-                  <TableCell>{formatMoney(i.amount_cents, paymentPlan.currency)}</TableCell>
-                  <TableCell>{i.due_date}</TableCell>
-                  <TableCell><Chip label={i.status} size="small" color={i.status === 'paid' ? 'success' : i.status === 'overdue' ? 'error' : 'default'} /></TableCell>
-                  <TableCell>{i.paid_at ? new Date(i.paid_at).toLocaleDateString() : '—'}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Paper>
-      )}
-
-      <Typography variant="subtitle1" fontWeight={700}>
-        Items
-      </Typography>
-      {detail.lines.map((l, idx) => {
-        const pkg = formatPackageDimensionsMm(l)
-        return (
-          <Typography key={`${l.sku}-${idx}`} variant="body2">
-            {l.productName}
-            {l.variantName ? ` · ${l.variantName}` : ''} × {l.quantity} @ {formatMoney(l.unitPriceCents, o.currency)}
-            {pkg ? (
-              <>
-                <br />
-                <Box component="span" color="text.secondary" sx={{ fontSize: '0.85rem' }}>
-                  Package: {pkg}
-                </Box>
-              </>
-            ) : null}
-          </Typography>
-        )
-      })}
-      {detail.shippingAddress && o.delivery_method === 'home' ? (
-        <Stack spacing={0.5} sx={{ pt: 1 }}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Delivery address
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-line' }}>
-            {detail.shippingAddress.label ? `${detail.shippingAddress.label}\n` : ''}
-            {detail.shippingAddress.line1}
-            {detail.shippingAddress.line2 ? `\n${detail.shippingAddress.line2}` : ''}
-            {detail.shippingAddress.suburb ? `\n${detail.shippingAddress.suburb}` : ''}
-            {`\n${detail.shippingAddress.city}${detail.shippingAddress.region ? `, ${detail.shippingAddress.region}` : ''} ${detail.shippingAddress.postal_code ?? ''}`.trim()}
-            {`\n${detail.shippingAddress.country}`}
-          </Typography>
-        </Stack>
-      ) : null}
-      {detail.fulfillment && (
-        <Typography variant="body2" color="text.secondary">
-          Shipment: {detail.fulfillment.stage}
-          {detail.fulfillment.carrier_name ? ` · ${detail.fulfillment.carrier_name}` : ''}
-          {detail.fulfillment.tracking_reference ? ` · Tracking: ${detail.fulfillment.tracking_reference}` : ''}
-          {detail.fulfillment.yango_delivery_id ? ` · Yango: ${detail.fulfillment.yango_delivery_id}` : ''}
-          {detail.fulfillment.yango_status ? ` (${detail.fulfillment.yango_status})` : ''}
-          {detail.fulfillment.yango_tracking_url ? (
-            <>
-              {' '}
-              <a href={detail.fulfillment.yango_tracking_url} target="_blank" rel="noreferrer">
-                Track delivery
-              </a>
-            </>
-          ) : null}
-        </Typography>
-      )}
-
-      {st === 'delivered' && !orderInReviewQueue ? (
-        <Alert severity="info">
-          <Stack spacing={1}>
-            <Typography variant="body2">
-              When you&apos;ve confirmed receipt, mark complete — the order moves to <strong>To review</strong> on My orders
-              so you can leave feedback.
-            </Typography>
-            <Button
-              variant="contained"
-              size="small"
-              sx={{ alignSelf: 'flex-start' }}
-              onClick={() => {
-                markOrderReadyForReview(o.orderId)
-                setOrderReadyForReviewLocal(true)
-                setActionMsg({ severity: 'success', text: 'Moved to To review.' })
-              }}
-            >
-              Mark complete
-            </Button>
-          </Stack>
-        </Alert>
-      ) : null}
-
-      {st === 'delivered' && orderInReviewQueue && !existingReview ? (
-        <Stack spacing={1}>
-          <Typography variant="body2" color="text.secondary">
-            Ready to rate this order? Open the dedicated review screen.
-          </Typography>
-          <Button component={RouterLink} to={`${pathPrefix}/orders/${o.orderId}/review`} variant="contained">
-            Leave your review
-          </Button>
-        </Stack>
-      ) : null}
-
-      {st === 'delivered' && existingReview ? (
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'action.hover' }}>
-          <Stack spacing={1}>
-            <Typography variant="subtitle2" fontWeight={700}>
-              Your review
-            </Typography>
-            <Rating value={existingReview.rating} readOnly size="small" sx={{ '& .MuiRating-iconFilled': { color: 'primary.main' } }} />
-            {existingReview.comment.trim() ? (
-              <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
-                {existingReview.comment.trim()}
-              </Typography>
-            ) : (
-              <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                No written feedback.
-              </Typography>
-            )}
-            <Typography variant="caption" color="text.secondary">
-              Submitted {new Date(existingReview.submittedAt).toLocaleString()}
-            </Typography>
-          </Stack>
-        </Paper>
-      ) : null}
-
-      {(st === 'shipped' || st === 'delivered') && (
-        <Button
-          component={RouterLink}
-          to={`${pathPrefix}/orders/${orderId}/return${guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''}`}
-          variant="outlined"
-        >
-          Request a return
-        </Button>
-      )}
-
-      {canDispute ? (
-        <Stack spacing={1} sx={{ pt: 0.5 }}>
-          {disputeHint === 'open' ? (
-            <Alert severity="info">You have an open dispute on this order. We will update you here and by email when it changes.</Alert>
-          ) : null}
+    <Box
+      sx={{
+        maxWidth: 560,
+        mx: 'auto',
+        py: 2,
+        px: { xs: 0.5, sm: 0 },
+        bgcolor: SHOP_V2.pageBackground,
+        borderRadius: { md: SHOP_V2.radius },
+      }}
+    >
+      <Stack spacing={2}>
+        <Stack direction="row" alignItems="center" spacing={1}>
           <Button
             component={RouterLink}
-            to={`${pathPrefix}/orders/${orderId}/dispute${guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''}`}
-            variant="outlined"
-            color="secondary"
+            to={`${pathPrefix}/orders`}
+            startIcon={<ArrowBackIcon />}
+            size="small"
+            sx={{ fontWeight: 700, minWidth: 0, px: 1 }}
           >
-            Dispute transaction
+            Orders
           </Button>
-          <Typography variant="caption" color="text.secondary">
-            For billing or delivery problems. Returns use &quot;Request a return&quot; when shipped.
+        </Stack>
+
+        <Stack spacing={1}>
+          <Typography variant="h5" fontWeight={800} sx={{ letterSpacing: -0.35 }}>
+            Order details
+          </Typography>
+          <Stack direction="row" flexWrap="wrap" gap={0.75} alignItems="center">
+            <Chip label={formatOrderStatusLabel(o.status)} size="small" color={orderStatusChipColor(st)} sx={{ fontWeight: 700 }} />
+            <Chip label={formatDeliveryMethod(o.delivery_method)} size="small" variant="outlined" sx={{ fontWeight: 600 }} />
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' }}>
+            {o.orderId}
           </Typography>
         </Stack>
-      ) : null}
 
-      {depositPickupEligible && (
-        <Stack spacing={1} sx={{ pt: 1 }}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Deposit box pickup
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {o.deposit_location_name
-              ? `Pickup location: ${o.deposit_location_name}.`
-              : o.deposit_location_id
-                ? 'Your order is assigned to a deposit location.'
-                : 'No deposit location is recorded on this order — contact support.'}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            When you are at the locker, generate a pickup code. Each code is only valid for a short time; generate a new one if
-            it expires before you open the box.
-          </Typography>
-          <Button
-            variant="contained"
-            disabled={pickupGenBusy || !o.deposit_location_id}
-            onClick={() => void generateVolatilePickupCode()}
-          >
-            {pickupGenBusy ? 'Generating…' : 'Generate pickup code'}
-          </Button>
-          {pickupGenErr && <Alert severity="warning">{pickupGenErr}</Alert>}
-          {volatilePickup && !volatileExpiredOnClient && (
-            <Stack spacing={0.5}>
-              <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 700, letterSpacing: 2 }}>
-                {volatilePickup.code}
+        {actionMsg ? <Alert severity={actionMsg.severity} onClose={() => setActionMsg(null)}>{actionMsg.text}</Alert> : null}
+
+        <OrderSectionCard title="Order summary">
+          <Stack spacing={1}>
+            <SummaryRow label="Subtotal" value={formatMoney(o.subtotal_cents, o.currency)} />
+            <SummaryRow label="Shipping" value={formatMoney(o.shipping_cents, o.currency)} />
+            <SummaryRow label="Tax" value={formatMoney(o.tax_cents, o.currency)} />
+            {o.discount_cents != null && o.discount_cents > 0 ? (
+              <SummaryRow label="Discount" value={`-${formatMoney(o.discount_cents, o.currency)}`} />
+            ) : null}
+            <Divider sx={{ my: 0.5 }} />
+            <SummaryRow label="Total" value={formatMoney(o.total_cents, o.currency)} emphasis />
+          </Stack>
+        </OrderSectionCard>
+
+        <OrderSectionCard title={`Items (${detail.lines.length})`} spacing={1}>
+          <Stack divider={<Divider flexItem />} spacing={1.25}>
+            {detail.lines.map((l, idx) => {
+              const pkg = formatPackageDimensionsMm(l)
+              const lineTotal = l.unitPriceCents * l.quantity
+              return (
+                <Box key={`${l.sku}-${idx}`}>
+                  <Typography variant="body2" fontWeight={700} sx={{ lineHeight: 1.35 }}>
+                    {l.productName}
+                    {l.variantName ? (
+                      <Typography component="span" variant="body2" color="text.secondary" fontWeight={500}>
+                        {' '}
+                        · {l.variantName}
+                      </Typography>
+                    ) : null}
+                  </Typography>
+                  <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.35 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      {l.quantity} × {formatMoney(l.unitPriceCents, o.currency)}
+                      {l.sku ? ` · ${l.sku}` : ''}
+                    </Typography>
+                    <Typography variant="caption" fontWeight={700}>
+                      {formatMoney(lineTotal, o.currency)}
+                    </Typography>
+                  </Stack>
+                  {pkg ? (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+                      Package: {pkg}
+                    </Typography>
+                  ) : null}
+                </Box>
+              )
+            })}
+          </Stack>
+        </OrderSectionCard>
+
+        {hasDeliverySection ? (
+          <OrderSectionCard title="Delivery & tracking">
+            <Stack spacing={1.25}>
+              {o.delivery_method === 'deposit_box' && o.deposit_location_name ? (
+                <Typography variant="body2" color="text.secondary">
+                  Locker: <strong>{o.deposit_location_name}</strong>
+                </Typography>
+              ) : null}
+              {o.contains_alcohol && o.delivery_scheduled_for ? (
+                <Alert severity="warning" sx={{ py: 0.5 }}>
+                  Alcohol fulfilment scheduled for {new Date(o.delivery_scheduled_for).toLocaleString()}.
+                </Alert>
+              ) : null}
+              {o.delivery_method === 'home' && o.home_delivery_window ? (
+                <Typography variant="body2" color="text.secondary">
+                  Preferred window:{' '}
+                  {formatHomeDeliveryWindow(
+                    o.home_delivery_window.start,
+                    o.home_delivery_window.end,
+                    o.home_delivery_window.label,
+                  )}
+                </Typography>
+              ) : null}
+              {shippingAddressBlock ? (
+                <Box>
+                  <Typography variant="caption" fontWeight={700} color="text.secondary" display="block" sx={{ mb: 0.35 }}>
+                    Delivery address
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-line', lineHeight: 1.45 }}>
+                    {shippingAddressBlock}
+                  </Typography>
+                </Box>
+              ) : null}
+              {detail.fulfillment ? (
+                <Box>
+                  <Typography variant="caption" fontWeight={700} color="text.secondary" display="block" sx={{ mb: 0.35 }}>
+                    Shipment
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {detail.fulfillment.stage}
+                    {detail.fulfillment.carrier_name ? ` · ${detail.fulfillment.carrier_name}` : ''}
+                    {detail.fulfillment.tracking_reference ? ` · ${detail.fulfillment.tracking_reference}` : ''}
+                    {detail.fulfillment.yango_delivery_id ? ` · Yango ${detail.fulfillment.yango_delivery_id}` : ''}
+                    {detail.fulfillment.yango_status ? ` (${detail.fulfillment.yango_status})` : ''}
+                  </Typography>
+                  {detail.fulfillment.yango_tracking_url ? (
+                    <Button
+                      href={detail.fulfillment.yango_tracking_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      size="small"
+                      sx={{ mt: 0.75, fontWeight: 700, px: 0 }}
+                    >
+                      Track delivery
+                    </Button>
+                  ) : null}
+                </Box>
+              ) : null}
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
+
+        {paymentPlan ? (
+          <OrderSectionCard title="Payment plan">
+            <Stack spacing={1.25}>
+              <Stack direction="row" flexWrap="wrap" gap={0.75} alignItems="center">
+                <Typography variant="body2" color="text.secondary">
+                  {paymentPlan.plan_type} · {paymentPlan.total_instalments} instalments
+                </Typography>
+                <Chip
+                  label={paymentPlan.status}
+                  size="small"
+                  color={paymentPlan.status === 'active' ? 'primary' : paymentPlan.status === 'completed' ? 'success' : 'default'}
+                />
+              </Stack>
+              {paymentPlan.status === 'active' && nextPayableInstalmentId ? (
+                <Alert severity="info" sx={{ borderRadius: 2 }}>
+                  Pay each instalment with {APP_WALLET_DISPLAY_NAME}
+                  {walletBalanceCents != null ? ` (available ${formatNad(walletBalanceCents)})` : ''}. Instalments are paid in order.
+                </Alert>
+              ) : null}
+              {instalmentPayMsg ? (
+                <Alert
+                  severity={instalmentPayMsg.includes('paid') ? 'success' : 'error'}
+                  sx={{ borderRadius: 2 }}
+                  onClose={() => setInstalmentPayMsg(null)}
+                >
+                  {instalmentPayMsg}
+                </Alert>
+              ) : null}
+              <Box sx={{ overflowX: 'auto', mx: -0.5, px: 0.5 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>#</TableCell>
+                      <TableCell>Amount</TableCell>
+                      <TableCell>Due</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell align="right">Pay</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {paymentPlan.instalments.map((i) => {
+                      const canPayWallet =
+                        paymentPlan.status === 'active' &&
+                        nextPayableInstalmentId === i.id &&
+                        (i.status === 'pending' || i.status === 'overdue')
+                      return (
+                        <TableRow key={i.id}>
+                          <TableCell>{i.instalment_number}</TableCell>
+                          <TableCell>{formatMoney(i.amount_cents, paymentPlan.currency)}</TableCell>
+                          <TableCell>{i.due_date}</TableCell>
+                          <TableCell>
+                            <Chip
+                              label={i.status}
+                              size="small"
+                              color={i.status === 'paid' ? 'success' : i.status === 'overdue' ? 'error' : 'default'}
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            {canPayWallet ? (
+                              <Button
+                                size="small"
+                                variant="contained"
+                                disabled={payingInstalmentId != null}
+                                onClick={() => void payInstalmentWithWallet(i.id)}
+                                startIcon={
+                                  payingInstalmentId === i.id ? (
+                                    <CircularProgress size={16} color="inherit" aria-hidden />
+                                  ) : undefined
+                                }
+                              >
+                                {payingInstalmentId === i.id ? 'Paying…' : APP_WALLET_DISPLAY_NAME}
+                              </Button>
+                            ) : (
+                              '—'
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </Box>
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
+
+        {st === 'delivered' && !orderInReviewQueue ? (
+          <OrderSectionCard title="Confirm receipt">
+            <Stack spacing={1.25}>
+              <Typography variant="body2" color="text.secondary">
+                When you&apos;ve collected or received your order, mark it complete. It moves to <strong>To review</strong> on My orders.
               </Typography>
+              <Button
+                variant="contained"
+                size="small"
+                sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+                onClick={() => {
+                  markOrderReadyForReview(o.orderId)
+                  setOrderReadyForReviewLocal(true)
+                  setActionMsg({ severity: 'success', text: 'Moved to To review.' })
+                }}
+              >
+                Mark complete
+              </Button>
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
+
+        {st === 'delivered' && orderInReviewQueue && !existingReview ? (
+          <OrderSectionCard title="Your feedback">
+            <Stack spacing={1.25}>
+              <Typography variant="body2" color="text.secondary">
+                Rate this order on the review screen.
+              </Typography>
+              <Button
+                component={RouterLink}
+                to={`${pathPrefix}/orders/${o.orderId}/review`}
+                variant="contained"
+                sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+              >
+                Leave your review
+              </Button>
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
+
+        {st === 'delivered' && existingReview ? (
+          <OrderSectionCard title="Your review">
+            <Stack spacing={1}>
+              <Rating value={existingReview.rating} readOnly size="small" sx={{ '& .MuiRating-iconFilled': { color: 'primary.main' } }} />
+              {existingReview.comment.trim() ? (
+                <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+                  {existingReview.comment.trim()}
+                </Typography>
+              ) : (
+                <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                  No written feedback.
+                </Typography>
+              )}
               <Typography variant="caption" color="text.secondary">
-                Valid for about {volatileSecondsLeft}s — use it at the box, then confirm pickup below.
+                Submitted {new Date(existingReview.submittedAt).toLocaleString()}
               </Typography>
             </Stack>
-          )}
-          {volatileExpiredOnClient && (
-            <Alert severity="info">That on-screen code has expired. Generate a new pickup code when you are ready.</Alert>
-          )}
-        </Stack>
-      )}
+          </OrderSectionCard>
+        ) : null}
 
-      {actionMsg && <Alert severity={actionMsg.severity}>{actionMsg.text}</Alert>}
+        {depositPickupEligible ? (
+          <OrderSectionCard title="Deposit locker pickup">
+            <Stack spacing={1.25}>
+              <Typography variant="body2" color="text.secondary">
+                {o.deposit_location_name
+                  ? `Pickup at ${o.deposit_location_name}.`
+                  : o.deposit_location_id
+                    ? 'Your order is assigned to a deposit location.'
+                    : 'No deposit location on this order — contact support.'}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Generate a short-lived code at the locker. If it expires, generate a new one.
+              </Typography>
+              <Button
+                variant="contained"
+                disabled={pickupGenBusy || !o.deposit_location_id}
+                onClick={() => void generateVolatilePickupCode()}
+                sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+              >
+                {pickupGenBusy ? 'Generating…' : 'Generate pickup code'}
+              </Button>
+              {pickupGenErr ? <Alert severity="warning">{pickupGenErr}</Alert> : null}
+              {volatilePickup && !volatileExpiredOnClient ? (
+                <Box sx={{ py: 1, px: 1.5, borderRadius: 2, bgcolor: 'action.hover', border: 1, borderColor: 'divider' }}>
+                  <Typography variant="h6" sx={{ fontFamily: 'monospace', fontWeight: 700, letterSpacing: 2 }}>
+                    {volatilePickup.code}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Valid ~{volatileSecondsLeft}s — use at the box, then confirm below.
+                  </Typography>
+                </Box>
+              ) : null}
+              {volatileExpiredOnClient ? (
+                <Alert severity="info">Code expired. Generate a new one when you are at the locker.</Alert>
+              ) : null}
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
 
-      {canCancelUnpaid && (
-        <Stack spacing={1}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Cancel order
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            You can cancel before payment is completed. Reserved items are returned to stock automatically.
-          </Typography>
-          <Button variant="outlined" color="warning" disabled={cancelBusy} onClick={() => void cancelOrder()}>
-            {cancelBusy ? 'Cancelling…' : 'Cancel order'}
-          </Button>
-        </Stack>
-      )}
+        {(depositPickupEligible || !detail.pickupMasked) ? (
+          <OrderSectionCard title="Confirm pickup">
+            <Stack spacing={1.25}>
+              <Typography variant="body2" color="text.secondary">
+                After collection, enter the pickup code you used.
+              </Typography>
+              <TextField
+                size="small"
+                label="Pickup code"
+                value={pickupCode}
+                onChange={(e) => setPickupCode(e.target.value)}
+                disabled={pickupVerifyBusy}
+                fullWidth
+              />
+              <Button
+                variant="outlined"
+                disabled={pickupVerifyBusy}
+                onClick={() => void verifyPickup()}
+                sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+              >
+                {pickupVerifyBusy ? 'Verifying…' : 'Verify code'}
+              </Button>
+              {pickupMsg ? <Alert severity="info">{pickupMsg}</Alert> : null}
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
 
-      {canRefundPaid && (
-        <Stack spacing={1}>
-          <Typography variant="subtitle2" fontWeight={700}>
-            Refund (before shipment)
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Available while the order is paid or processing (not shipped). A 10% handling fee is deducted from the order
-            total; the remainder is returned where your payment method allows ({APP_WALLET_DISPLAY_NAME} credits apply immediately
-            when you paid with the wallet).
-          </Typography>
-          <Button variant="outlined" disabled={refundBusy} onClick={() => setRefundOpen(true)}>
-            Request refund…
-          </Button>
-        </Stack>
-      )}
+        {hasOrderActions ? (
+          <OrderSectionCard title="Manage order">
+            <Stack spacing={1.5} divider={<Divider flexItem />}>
+              {canCancelUnpaid ? (
+                <Stack spacing={1}>
+                  <Typography variant="body2" color="text.secondary">
+                    Cancel before payment completes. Stock is released automatically.
+                  </Typography>
+                  <Button variant="outlined" color="warning" disabled={cancelBusy} onClick={() => void cancelOrder()} sx={{ alignSelf: 'flex-start', fontWeight: 700 }}>
+                    {cancelBusy ? 'Cancelling…' : 'Cancel order'}
+                  </Button>
+                </Stack>
+              ) : null}
+              {canRefundPaid ? (
+                <Stack spacing={1}>
+                  <Typography variant="body2" color="text.secondary">
+                    Refund before shipment. A 10% handling fee applies; the rest returns to your payment method ({APP_WALLET_DISPLAY_NAME} refunds are immediate).
+                  </Typography>
+                  <Button variant="outlined" disabled={refundBusy} onClick={() => setRefundOpen(true)} sx={{ alignSelf: 'flex-start', fontWeight: 700 }}>
+                    Request refund…
+                  </Button>
+                </Stack>
+              ) : null}
+              {(st === 'shipped' || st === 'delivered') ? (
+                <Button
+                  component={RouterLink}
+                  to={`${pathPrefix}/orders/${orderId}/return${guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''}`}
+                  variant="outlined"
+                  sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+                >
+                  Request a return
+                </Button>
+              ) : null}
+              {canDispute ? (
+                <Stack spacing={1}>
+                  {disputeHint === 'open' ? (
+                    <Alert severity="info">Open dispute on this order — we will update you here and by email.</Alert>
+                  ) : null}
+                  <Button
+                    component={RouterLink}
+                    to={`${pathPrefix}/orders/${orderId}/dispute${guestEmailForApi ? `?email=${encodeURIComponent(guestEmailForApi)}` : ''}`}
+                    variant="outlined"
+                    color="secondary"
+                    sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
+                  >
+                    Dispute transaction
+                  </Button>
+                  <Typography variant="caption" color="text.secondary">
+                    Billing or delivery issues. Use return request when the order has shipped.
+                  </Typography>
+                </Stack>
+              ) : null}
+            </Stack>
+          </OrderSectionCard>
+        ) : null}
 
       <Dialog open={refundOpen} onClose={() => !refundBusy && setRefundOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Confirm refund</DialogTitle>
@@ -687,28 +1000,7 @@ export function OrderDetailPage() {
         </DialogActions>
       </Dialog>
 
-      {(depositPickupEligible || !detail.pickupMasked) && (
-        <Stack spacing={1} sx={{ pt: 2 }}>
-          <Typography variant="subtitle2">Confirm pickup</Typography>
-          <Typography variant="body2" color="text.secondary">
-            After you have collected your order from the locker, enter the pickup code you used and confirm.
-          </Typography>
-          <TextField
-            size="small"
-            label="Pickup code"
-            value={pickupCode}
-            onChange={(e) => setPickupCode(e.target.value)}
-            disabled={pickupVerifyBusy}
-          />
-          <Button variant="outlined" disabled={pickupVerifyBusy} onClick={() => void verifyPickup()}>
-            {pickupVerifyBusy ? 'Verifying…' : 'Verify code'}
-          </Button>
-          {pickupMsg && <Alert severity="info">{pickupMsg}</Alert>}
-        </Stack>
-      )}
-      <Button component={RouterLink} to={`${pathPrefix}/orders`} variant="text">
-        All orders
-      </Button>
-    </Stack>
+      </Stack>
+    </Box>
   )
 }

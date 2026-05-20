@@ -12,6 +12,10 @@ export type StoreHoursStatus = {
   hoursSummary: string
   items: StoreHoursRow[]
   nextOpenLabel: string | null
+  liquorItems: StoreHoursRow[]
+  liquorConfigured: boolean
+  liquorOpenNow: boolean
+  liquorHoursSummary: string
 }
 
 export const CHECKOUT_SCHEDULE_PRESET_KEY = 'pt_checkout_schedule_preset'
@@ -99,4 +103,32 @@ export function buildStoreSchedulePresets(
 
 export function isoDayLabel(iso: number): string {
   return ISO_DAY_SHORT[iso] ?? `Day ${iso}`
+}
+
+function activeHoursByDay(rows: StoreHoursRow[]): Map<number, StoreHoursRow> {
+  return new Map(rows.filter((r) => r.is_active).map((r) => [r.day_of_week, r]))
+}
+
+/** True when store opening hours and liquor selling hours differ on any weekday. */
+export function sellingHoursSchedulesDiffer(
+  storeRows: StoreHoursRow[],
+  liquorRows: StoreHoursRow[],
+): boolean {
+  const storeByDay = activeHoursByDay(storeRows)
+  const liquorByDay = activeHoursByDay(liquorRows)
+  for (let iso = 1; iso <= 7; iso += 1) {
+    const store = storeByDay.get(iso)
+    const liquor = liquorByDay.get(iso)
+    const storeOpen = Boolean(store)
+    const liquorOpen = Boolean(liquor)
+    if (storeOpen !== liquorOpen) return true
+    if (!storeOpen) continue
+    if (
+      store!.start_minute !== liquor!.start_minute ||
+      store!.end_minute !== liquor!.end_minute
+    ) {
+      return true
+    }
+  }
+  return false
 }

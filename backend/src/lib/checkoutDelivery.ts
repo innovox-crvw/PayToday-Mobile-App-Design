@@ -9,6 +9,14 @@ export function isPickupDeliveryMethod(m: string): boolean {
   return PICKUP.has(String(m ?? '').trim().toLowerCase())
 }
 
+export function isStorePickupDeliveryMethod(m: string): boolean {
+  return String(m ?? '').trim().toLowerCase() === 'store_pickup'
+}
+
+export function isDepositBoxDeliveryMethod(m: string): boolean {
+  return String(m ?? '').trim().toLowerCase() === 'deposit_box'
+}
+
 export function isHomeDeliveryMethod(m: string): boolean {
   return HOME.has(String(m ?? '').trim().toLowerCase())
 }

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Alert, Box, CircularProgress, Divider, Stack, Typography } from '@mui/material'
-import { WalletSubheader } from './WalletSubheader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
+import { WalletDetailCard } from '../../components/wallet/WalletDetailCard'
 import { apiFetch } from '../../api/client'
 import { formatNad, MOCK_TRANSACTIONS, type WalletTransaction } from '../../data/walletMock'
 
@@ -90,21 +91,19 @@ export function WalletTransactionDetailPage() {
 
   if (isRemoteTxId && remoteLoading) {
     return (
-      <Stack spacing={2} sx={{ maxWidth: 480, mx: 'auto' }}>
-        <WalletSubheader title="Transaction" />
+      <WalletPageShell title="Transaction" showBack>
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
           <CircularProgress size={36} />
         </Box>
-      </Stack>
+      </WalletPageShell>
     )
   }
 
   if (isRemoteTxId && remoteError) {
     return (
-      <Stack spacing={2} sx={{ maxWidth: 480, mx: 'auto' }}>
-        <WalletSubheader title="Transaction" />
+      <WalletPageShell title="Transaction" showBack>
         <Alert severity="warning">{remoteError}</Alert>
-      </Stack>
+      </WalletPageShell>
     )
   }
 
@@ -117,9 +116,8 @@ export function WalletTransactionDetailPage() {
   }
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 480, mx: 'auto' }}>
-      <WalletSubheader title="Transaction" />
-      <Stack spacing={2}>
+    <WalletPageShell title="Transaction" showBack>
+      <WalletDetailCard>
         <Row label="Business" value={tx.business} />
         <Row label="Type" value={tx.type} />
         <Row label="Payment method" value={tx.paymentMethod} />
@@ -127,15 +125,15 @@ export function WalletTransactionDetailPage() {
         <Row label="Reference" value={tx.reference} />
         <Row label="Date & time" value={tx.datetime} />
         {tx.orderStatus ? <Row label="Order status" value={tx.orderStatus} /> : null}
-        {tx.contact && <Row label="Contact number" value={tx.contact} />}
+        {tx.contact ? <Row label="Contact number" value={tx.contact} /> : null}
         <Row label="Status" value={statusLabel(tx.status)} valueColor={statusColor(tx.status)} />
-        {tx.status === 'failed' && tx.reason && (
+        {tx.status === 'failed' && tx.reason ? (
           <>
             <Divider />
             <Row label="Reason" value={tx.reason} valueColor="error.main" />
           </>
-        )}
-      </Stack>
-    </Stack>
+        ) : null}
+      </WalletDetailCard>
+    </WalletPageShell>
   )
 }

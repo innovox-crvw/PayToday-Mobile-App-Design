@@ -26,6 +26,38 @@ function isMissingContainsAlcoholColumnError(e: unknown): boolean {
   return /contains_alcohol/i.test(msg)
 }
 
+function isMissingProductTabColumnError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /delivery_information|return_policy|warranty_info|whats_in_the_box|Invalid column name/i.test(msg)
+}
+
+let cachedProductTabColumns: boolean | undefined
+
+export async function hasProductTabColumns(pool: ConnectionPool): Promise<boolean> {
+  if (cachedProductTabColumns !== undefined) return cachedProductTabColumns
+  try {
+    const r = await pool.request().query<{ len: number | null }>(`
+      SELECT COL_LENGTH(N'dbo.products', N'delivery_information') AS len
+    `)
+    cachedProductTabColumns = r.recordset[0]?.len != null
+  } catch {
+    cachedProductTabColumns = false
+  }
+  return cachedProductTabColumns
+}
+
+function productTabSelectSql(includeTabColumns: boolean): string {
+  return includeTabColumns
+    ? `p.delivery_information,
+      p.return_policy,
+      p.warranty_info,
+      p.whats_in_the_box,`
+    : `CAST(NULL AS NVARCHAR(MAX)) AS delivery_information,
+      CAST(NULL AS NVARCHAR(MAX)) AS return_policy,
+      CAST(NULL AS NVARCHAR(MAX)) AS warranty_info,
+      CAST(NULL AS NVARCHAR(MAX)) AS whats_in_the_box,`
+}
+
 export function normalizeInventoryPolicy(raw: string | null | undefined): InventoryPolicy {
   const s = (raw ?? 'track').trim().toLowerCase()
   if (s === 'continue' || s === 'not_tracked') return s
@@ -37,6 +69,10 @@ interface ProductRow {
   slug: string
   name: string
   description: string | null
+  delivery_information?: string | null
+  return_policy?: string | null
+  warranty_info?: string | null
+  whats_in_the_box?: string | null
   categoryId: string | null
   categorySlug: string | null
   categoryName: string | null
@@ -69,6 +105,10 @@ function groupProducts(rows: ProductRow[]): ProductDto[] {
         slug: r.slug,
         name: r.name,
         description: r.description ?? '',
+        deliveryInformation: r.delivery_information ?? '',
+        returnPolicy: r.return_policy ?? '',
+        warrantyInfo: r.warranty_info ?? '',
+        whatsInTheBox: r.whats_in_the_box ?? '',
         categoryId: r.categoryId ?? '',
         categorySlug: r.categorySlug ?? '',
         categoryName: r.categoryName ?? '',
@@ -125,6 +165,7 @@ function buildListSql(
   useCategorySubtree: boolean,
   includeAlcoholColumn: boolean,
   productIdWhereSql: string,
+  includeTabColumns: boolean,
 ): string {
   const search = opts?.search
   const categorySlug = opts?.categorySlug?.trim()
@@ -176,6 +217,7 @@ function buildListSql(
       p.slug,
       p.name,
       p.description,
+      ${productTabSelectSql(includeTabColumns)}
       CAST(c.id AS NVARCHAR(36)) AS categoryId,
       c.slug AS categorySlug,
       c.name AS categoryName,
@@ -238,6 +280,7 @@ async function listProductsQuery(
   includeScopeColumns: boolean,
   useCategorySubtree = true,
   includeAlcoholColumn = true,
+  includeTabColumns = true,
 ): Promise<ProductDto[]> {
   const req = pool.request()
   const search = opts?.search
@@ -267,6 +310,7 @@ async function listProductsQuery(
     useCategorySubtree,
     includeAlcoholColumn,
     productIdWhereSql,
+    includeTabColumns,
   )
   if (search && search.trim()) {
     req.input('q', `%${search.trim()}%`)
@@ -289,6 +333,7 @@ function listProductAttempts(
   pool: ConnectionPool,
   opts: ListProductsOptions | undefined,
   adminCatalogue: boolean,
+  includeTabColumns: boolean,
 ): Array<() => Promise<ProductDto[]>> {
   const combos: Array<[boolean, boolean, boolean]> = [
     [true, true, true],
@@ -302,13 +347,17 @@ function listProductAttempts(
   ]
   const withAlcohol = combos.map(
     ([includeBrand, includeScope, subtree]) => () =>
-      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree, true),
+      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree, true, includeTabColumns),
   )
   const withoutAlcohol = combos.map(
     ([includeBrand, includeScope, subtree]) => () =>
-      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree, false),
+      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree, false, includeTabColumns),
   )
-  return [...withAlcohol, ...withoutAlcohol]
+  const attempts = [...withAlcohol, ...withoutAlcohol]
+  if (includeTabColumns) {
+    attempts.push(...listProductAttempts(pool, opts, adminCatalogue, false))
+  }
+  return attempts
 }
 
 async function runFirstSuccessful(attempts: Array<() => Promise<ProductDto[]>>): Promise<ProductDto[]> {
@@ -324,7 +373,8 @@ async function runFirstSuccessful(attempts: Array<() => Promise<ProductDto[]>>):
 }
 
 export async function listProducts(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
-  const list = await runFirstSuccessful(listProductAttempts(pool, opts, false))
+  const tabCols = await hasProductTabColumns(pool)
+  const list = await runFirstSuccessful(listProductAttempts(pool, opts, false, tabCols))
   const idOrder =
     opts?.productIds
       ?.map((id) => String(id ?? '').trim().toLowerCase())
@@ -344,12 +394,13 @@ export async function listProducts(pool: ConnectionPool, opts?: ListProductsOpti
 export async function listProductsAdmin(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
   const merchantIds = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
   const scopedOpts = merchantIds.length > 0 ? opts : { ...opts, payTodayMerchantIds: undefined }
+  const tabCols = await hasProductTabColumns(pool)
   let list: ProductDto[]
   try {
-    list = await runFirstSuccessful(listProductAttempts(pool, scopedOpts, true))
+    list = await runFirstSuccessful(listProductAttempts(pool, scopedOpts, true, tabCols))
   } catch (e) {
     if (merchantIds.length > 0 && isMissingPayTodayMerchantIdColumnError(e)) {
-      list = await runFirstSuccessful(listProductAttempts(pool, { ...opts, payTodayMerchantIds: undefined }, true))
+      list = await runFirstSuccessful(listProductAttempts(pool, { ...opts, payTodayMerchantIds: undefined }, true, tabCols))
     } else {
       throw e
     }
@@ -418,6 +469,7 @@ async function getProductBySlugQuery(
   includeBrandColumns: boolean,
   includeScopeColumns: boolean,
   includeAlcoholColumn: boolean,
+  includeTabColumns: boolean,
 ): Promise<ProductDto | null> {
   const req = pool.request()
   req.input('slug', slug)
@@ -453,6 +505,7 @@ async function getProductBySlugQuery(
       p.slug,
       p.name,
       p.description,
+      ${productTabSelectSql(includeTabColumns)}
       CAST(c.id AS NVARCHAR(36)) AS categoryId,
       c.slug AS categorySlug,
       c.name AS categoryName,
@@ -635,32 +688,36 @@ async function getProductBySlugWithFlags(
   slug: string,
   includeAlcoholColumn: boolean,
 ): Promise<ProductDto | null> {
-  try {
-    const p = await getProductBySlugQuery(pool, slug, true, true, includeAlcoholColumn)
+  let includeTabColumns = await hasProductTabColumns(pool)
+  const runQuery = async (brand: boolean, scope: boolean, tabs: boolean) => {
+    const p = await getProductBySlugQuery(pool, slug, brand, scope, includeAlcoholColumn, tabs)
     if (!p) return null
-    await enrichProductDetail(pool, p, true)
+    await enrichProductDetail(pool, p, scope)
     return p
+  }
+  try {
+    return await runQuery(true, true, includeTabColumns)
   } catch (e) {
+    if (isMissingProductTabColumnError(e) && includeTabColumns) {
+      cachedProductTabColumns = false
+      includeTabColumns = false
+      try {
+        return await runQuery(true, true, false)
+      } catch (eTab) {
+        e = eTab
+      }
+    }
     if (!isMissingBrandColumnError(e)) {
       if (isMissingCatalogueScopeColumnError(e)) {
-        const p = await getProductBySlugQuery(pool, slug, true, false, includeAlcoholColumn)
-        if (!p) return null
-        await enrichProductDetail(pool, p, false)
-        return p
+        return await runQuery(true, false, includeTabColumns)
       }
       throw e
     }
     try {
-      const p = await getProductBySlugQuery(pool, slug, false, true, includeAlcoholColumn)
-      if (!p) return null
-      await enrichProductDetail(pool, p, true)
-      return p
+      return await runQuery(false, true, includeTabColumns)
     } catch (e2) {
       if (isMissingCatalogueScopeColumnError(e2)) {
-        const p = await getProductBySlugQuery(pool, slug, false, false, includeAlcoholColumn)
-        if (!p) return null
-        await enrichProductDetail(pool, p, false)
-        return p
+        return await runQuery(false, false, includeTabColumns)
       }
       throw e2
     }
@@ -702,6 +759,41 @@ export async function replaceVariantOptions(
   }
 }
 
+export type ProductTabContentFields = {
+  deliveryInformation?: string | null
+  returnPolicy?: string | null
+  warrantyInfo?: string | null
+  whatsInTheBox?: string | null
+}
+
+async function applyProductTabContentPatch(
+  exec: SqlExecutor,
+  productId: string,
+  tabs: ProductTabContentFields,
+): Promise<void> {
+  const pairs: Array<[keyof ProductTabContentFields, string]> = [
+    ['deliveryInformation', 'delivery_information'],
+    ['returnPolicy', 'return_policy'],
+    ['warrantyInfo', 'warranty_info'],
+    ['whatsInTheBox', 'whats_in_the_box'],
+  ]
+  const hasAny = pairs.some(([k]) => tabs[k] !== undefined)
+  if (!hasAny) return
+  try {
+    for (const [key, col] of pairs) {
+      if (tabs[key] === undefined) continue
+      await exec
+        .request()
+        .input('id', productId)
+        .input('v', tabs[key])
+        .query(`UPDATE dbo.products SET ${col} = @v WHERE id = @id`)
+    }
+  } catch (e) {
+    if (isMissingProductTabColumnError(e)) return
+    throw e
+  }
+}
+
 export async function createProductSimple(
   exec: SqlExecutor,
   input: {
@@ -726,7 +818,7 @@ export async function createProductSimple(
     grossWeightG?: number | null
     /** When set and the column exists, stamps `dbo.products.pay_today_merchant_id` after insert. */
     payTodayMerchantId?: number | null
-  },
+  } & ProductTabContentFields,
 ): Promise<{ productId: string; variantId: string }> {
   const invPol = input.inventoryPolicy ?? 'track'
   const cmp = input.compareAtPriceCents
@@ -784,6 +876,13 @@ export async function createProductSimple(
       /* Column or FK missing on older schemas */
     }
   }
+
+  await applyProductTabContentPatch(exec, productId, {
+    deliveryInformation: input.deliveryInformation,
+    returnPolicy: input.returnPolicy,
+    warrantyInfo: input.warrantyInfo,
+    whatsInTheBox: input.whatsInTheBox,
+  })
 
   const r2 = exec.request()
   r2.input('productId', productId)
@@ -986,7 +1085,7 @@ export async function updateProductAdmin(
     isActive?: boolean
     categoryId?: string | null
     containsAlcohol?: boolean
-  },
+  } & ProductTabContentFields,
 ): Promise<void> {
   const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k)
   if (
@@ -995,7 +1094,11 @@ export async function updateProductAdmin(
     !has('description') &&
     !has('isActive') &&
     !has('categoryId') &&
-    !has('containsAlcohol')
+    !has('containsAlcohol') &&
+    !has('deliveryInformation') &&
+    !has('returnPolicy') &&
+    !has('warrantyInfo') &&
+    !has('whatsInTheBox')
   ) {
     throw new Error('No fields to update')
   }
@@ -1052,6 +1155,13 @@ export async function updateProductAdmin(
         .input('categoryId', patch.categoryId)
         .query(`UPDATE dbo.products SET category_id = @categoryId WHERE id = @id`)
     }
+    await applyProductTabContentPatch(tx, productId, {
+      deliveryInformation: patch.deliveryInformation,
+      returnPolicy: patch.returnPolicy,
+      warrantyInfo: patch.warrantyInfo,
+      whatsInTheBox: patch.whatsInTheBox,
+    })
+
     if (patch.containsAlcohol !== undefined) {
       try {
         await tx

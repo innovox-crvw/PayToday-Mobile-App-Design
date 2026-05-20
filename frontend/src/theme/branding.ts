@@ -11,7 +11,7 @@ export const APP_LOGO_MARK_FIRST = 'AVO'
 export const APP_LOGO_MARK_SECOND = 'TODAY'
 
 /** Wallet hub row / checkout — customer-facing wallet product name. */
-export const APP_WALLET_DISPLAY_NAME = `${APP_DISPLAY_NAME} Wallet`
+export const APP_WALLET_DISPLAY_NAME = 'PayToday Wallet'
 
 export const HEADER_APP_GRADIENT = 'linear-gradient(165deg, #8E2DE2 0%, #5B21D6 50%, #4A00E0 100%)'
 

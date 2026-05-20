@@ -1,5 +1,5 @@
 import type { MouseEvent } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   Badge,
@@ -261,6 +261,7 @@ export function StoreHomePage() {
   const [dealProducts, setDealProducts] = useState<ProductDto[]>([])
   const [dealsLoading, setDealsLoading] = useState(true)
   const [dealsReady, setDealsReady] = useState(false)
+  const dealsRailRef = useRef<HTMLDivElement | null>(null)
   const [airtimeItems, setAirtimeItems] = useState<HubPaymentCategoryItemDto[]>([])
   const [hubAirtimeLoading, setHubAirtimeLoading] = useState(true)
 
@@ -512,6 +513,13 @@ export function StoreHomePage() {
     const q = search.trim()
     if (q) navigate(`${shop}?q=${encodeURIComponent(q)}`)
     else navigate(shop)
+  }
+
+  function scrollDealsRail(dir: -1 | 1) {
+    const el = dealsRailRef.current
+    if (!el) return
+    const step = Math.min(el.clientWidth * 0.85, 340)
+    el.scrollBy({ left: step * dir, behavior: reduceMotion ? 'auto' : 'smooth' })
   }
 
   const searchForm = (
@@ -895,20 +903,55 @@ export function StoreHomePage() {
                   <CircularProgress size={28} aria-label="Loading deals" />
                 </Box>
               ) : dealProducts.length > 0 ? (
-                <Box
-                  role="region"
-                  aria-label="Deal products — swipe to scroll"
-                  sx={{ ...homeHorizontalStripSx, gap: 1.25, alignItems: 'stretch' }}
-                >
-                  {dealProducts.map((p) => (
-                    <StoreHomeProductRailCard
-                      key={p.id}
-                      product={p}
-                      pathPrefix={pathPrefix}
-                      priceLabel={railPriceLabel(p)}
-                    />
-                  ))}
-                </Box>
+                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ width: '100%', minWidth: 0 }}>
+                  {dealProducts.length > 1 ? (
+                    <IconButton
+                      type="button"
+                      aria-label="Previous deal"
+                      onClick={() => scrollDealsRail(-1)}
+                      size="small"
+                      sx={{
+                        flexShrink: 0,
+                        bgcolor: 'grey.900',
+                        color: 'common.white',
+                        '&:hover': { bgcolor: 'grey.800' },
+                      }}
+                    >
+                      <ChevronLeftIcon fontSize="small" />
+                    </IconButton>
+                  ) : null}
+                  <Box
+                    ref={dealsRailRef}
+                    role="region"
+                    aria-label="Super deals — use arrows or swipe to browse"
+                    sx={{ ...homeHorizontalStripSx, gap: 1.25, alignItems: 'stretch', flex: 1, minWidth: 0 }}
+                  >
+                    {dealProducts.map((p) => (
+                      <StoreHomeProductRailCard
+                        key={p.id}
+                        product={p}
+                        pathPrefix={pathPrefix}
+                        priceLabel={railPriceLabel(p)}
+                      />
+                    ))}
+                  </Box>
+                  {dealProducts.length > 1 ? (
+                    <IconButton
+                      type="button"
+                      aria-label="Next deal"
+                      onClick={() => scrollDealsRail(1)}
+                      size="small"
+                      sx={{
+                        flexShrink: 0,
+                        bgcolor: 'grey.900',
+                        color: 'common.white',
+                        '&:hover': { bgcolor: 'grey.800' },
+                      }}
+                    >
+                      <ChevronRightIcon fontSize="small" />
+                    </IconButton>
+                  ) : null}
+                </Stack>
               ) : (
                 <Typography variant="body2" color="text.secondary" sx={{ px: 0.5, py: 0.5 }}>
                   No sale items with compare-at pricing to show yet.{' '}

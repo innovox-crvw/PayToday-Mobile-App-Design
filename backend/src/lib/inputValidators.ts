@@ -165,6 +165,10 @@ export function parseProductDescriptionNullable(raw: unknown, field = 'descripti
   return { ok: true, value: t }
 }
 
+/** Product detail tab text (delivery, returns, warranty, box). */
+export const parseProductTabText = parseProductDescription
+export const parseProductTabTextNullable = parseProductDescriptionNullable
+
 const CURRENCY_RE = /^[A-Z]{3}$/
 
 export function parseCurrencyCode(raw: unknown, field = 'currency'): FieldParseResult<string> {

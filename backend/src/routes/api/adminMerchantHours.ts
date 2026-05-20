@@ -10,6 +10,13 @@ import {
   getStoreHoursStatus,
   type MerchantHoursKind,
 } from '../../services/merchantHoursService.js'
+import {
+  getLiquorSellingHoursWide,
+  getStoreSellingHoursWide,
+  upsertLiquorSellingHoursWide,
+  upsertStoreSellingHoursWide,
+  type SellingHoursWideRow,
+} from '../../services/sellingHoursWide.js'
 import { env } from '../../config/env.js'
 import { requireAuth, requireRole } from '../../middleware/auth.js'
 import { resolveAdminMerchantScopeFromRequest, isPayTodayMerchantIdAllowedForScope } from '../../lib/adminMerchantScope.js'
@@ -35,12 +42,15 @@ adminMerchantHoursRouter.get('/:merchantId/store-hours', async (req, res) => {
     return
   }
   try {
-    const rows = await getStoreSellingHours(pool, merchantId)
-    res.json({ items: rows })
+    const [items, wide] = await Promise.all([
+      getStoreSellingHours(pool, merchantId),
+      getStoreSellingHoursWide(pool, merchantId),
+    ])
+    res.json({ items, wide })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (/store_selling_hours|Invalid object name/i.test(msg)) {
-      res.status(503).json({ error: 'Run database migration 067_store_selling_hours.sql' })
+      res.status(503).json({ error: 'Run database migration 086_selling_hours_one_row_per_merchant.sql' })
       return
     }
     res.status(500).json({ error: msg })
@@ -63,30 +73,44 @@ adminMerchantHoursRouter.put('/:merchantId/store-hours', async (req, res) => {
     res.status(403).json({ error: 'Forbidden' })
     return
   }
+  const wideBody = req.body?.wide as Partial<SellingHoursWideRow> | undefined
   const rows = Array.isArray(req.body?.rows) ? (req.body.rows as unknown[]) : []
-  if (!rows.length) {
-    res.status(400).json({ error: 'rows[] is required' })
+  if (!wideBody && !rows.length) {
+    res.status(400).json({ error: 'wide or rows[] is required' })
     return
   }
   try {
-    await upsertStoreSellingHours(
-      pool,
-      merchantId,
-      rows.map((r) => {
-        const row = r as Record<string, unknown>
-        return {
-          dayOfWeek: Number(row.dayOfWeek ?? row.day_of_week),
-          startMinute: Number(row.startMinute ?? row.start_minute),
-          endMinute: Number(row.endMinute ?? row.end_minute),
-          isActive: Boolean(row.isActive ?? row.is_active ?? true),
-        }
-      }),
-    )
+    if (wideBody && typeof wideBody === 'object') {
+      await upsertStoreSellingHoursWide(pool, merchantId, {
+        monday: wideBody.monday ?? null,
+        tuesday: wideBody.tuesday ?? null,
+        wednesday: wideBody.wednesday ?? null,
+        thursday: wideBody.thursday ?? null,
+        friday: wideBody.friday ?? null,
+        saturday: wideBody.saturday ?? null,
+        sunday: wideBody.sunday ?? null,
+        is_active: Boolean(wideBody.is_active ?? (wideBody as { isActive?: boolean }).isActive ?? true),
+      })
+    } else {
+      await upsertStoreSellingHours(
+        pool,
+        merchantId,
+        rows.map((r) => {
+          const row = r as Record<string, unknown>
+          return {
+            dayOfWeek: Number(row.dayOfWeek ?? row.day_of_week),
+            startMinute: Number(row.startMinute ?? row.start_minute),
+            endMinute: Number(row.endMinute ?? row.end_minute),
+            isActive: Boolean(row.isActive ?? row.is_active ?? true),
+          }
+        }),
+      )
+    }
     res.json({ ok: true })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (/store_selling_hours|Invalid object name/i.test(msg)) {
-      res.status(503).json({ error: 'Run database migration 067_store_selling_hours.sql' })
+      res.status(503).json({ error: 'Run database migration 086_selling_hours_one_row_per_merchant.sql' })
       return
     }
     res.status(400).json({ error: msg })
@@ -110,8 +134,11 @@ adminMerchantHoursRouter.get('/:merchantId/liquor-hours', async (req, res) => {
     res.status(403).json({ error: 'Forbidden' })
     return
   }
-  const rows = await getLiquorSellingHours(pool, merchantId)
-  res.json({ items: rows })
+  const [items, wide] = await Promise.all([
+    getLiquorSellingHours(pool, merchantId),
+    getLiquorSellingHoursWide(pool, merchantId),
+  ])
+  res.json({ items, wide })
 })
 
 adminMerchantHoursRouter.put('/:merchantId/liquor-hours', async (req, res) => {
@@ -130,25 +157,39 @@ adminMerchantHoursRouter.put('/:merchantId/liquor-hours', async (req, res) => {
     res.status(403).json({ error: 'Forbidden' })
     return
   }
+  const wideBody = req.body?.wide as Partial<SellingHoursWideRow> | undefined
   const rows = Array.isArray(req.body?.rows) ? (req.body.rows as unknown[]) : []
-  if (!rows.length) {
-    res.status(400).json({ error: 'rows[] is required' })
+  if (!wideBody && !rows.length) {
+    res.status(400).json({ error: 'wide or rows[] is required' })
     return
   }
   try {
-    await upsertLiquorSellingHours(
-      pool,
-      merchantId,
-      rows.map((r) => {
-        const row = r as Record<string, unknown>
-        return {
-          dayOfWeek: Number(row.dayOfWeek ?? row.day_of_week),
-          startMinute: Number(row.startMinute ?? row.start_minute),
-          endMinute: Number(row.endMinute ?? row.end_minute),
-          isActive: Boolean(row.isActive ?? row.is_active ?? true),
-        }
-      }),
-    )
+    if (wideBody && typeof wideBody === 'object') {
+      await upsertLiquorSellingHoursWide(pool, merchantId, {
+        monday: wideBody.monday ?? null,
+        tuesday: wideBody.tuesday ?? null,
+        wednesday: wideBody.wednesday ?? null,
+        thursday: wideBody.thursday ?? null,
+        friday: wideBody.friday ?? null,
+        saturday: wideBody.saturday ?? null,
+        sunday: wideBody.sunday ?? null,
+        is_active: Boolean(wideBody.is_active ?? (wideBody as { isActive?: boolean }).isActive ?? true),
+      })
+    } else {
+      await upsertLiquorSellingHours(
+        pool,
+        merchantId,
+        rows.map((r) => {
+          const row = r as Record<string, unknown>
+          return {
+            dayOfWeek: Number(row.dayOfWeek ?? row.day_of_week),
+            startMinute: Number(row.startMinute ?? row.start_minute),
+            endMinute: Number(row.endMinute ?? row.end_minute),
+            isActive: Boolean(row.isActive ?? row.is_active ?? true),
+          }
+        }),
+      )
+    }
     res.json({ ok: true })
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
@@ -224,9 +265,11 @@ adminMerchantHoursRouter.patch('/:merchantId/:kind', putMerchantHoursKind)
 /** Public read-only hours for storefront (no auth). */
 export const storefrontMerchantHoursRouter = Router()
 
-storefrontMerchantHoursRouter.get('/status', async (_req, res) => {
+storefrontMerchantHoursRouter.get('/status', async (req, res) => {
   const pool = await getSqlPool({ eager: true })
-  const merchantId = env.defaultStoreMerchantId
+  const fromQuery = Number(req.query.merchantId)
+  const merchantId =
+    Number.isInteger(fromQuery) && fromQuery > 0 ? fromQuery : env.defaultStoreMerchantId
   const fallback = {
     payTodayMerchantId: merchantId,
     configured: false,
@@ -234,6 +277,10 @@ storefrontMerchantHoursRouter.get('/status', async (_req, res) => {
     hoursSummary: '',
     items: [],
     nextOpenLabel: null as string | null,
+    liquorItems: [],
+    liquorConfigured: false,
+    liquorOpenNow: true,
+    liquorHoursSummary: '',
   }
   if (!pool) {
     res.json(fallback)

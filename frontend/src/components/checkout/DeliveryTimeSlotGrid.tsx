@@ -12,6 +12,8 @@ import {
   Typography,
 } from '@mui/material'
 import { buildCheckoutWindowFromSlot, nextLocalDates, type YangoDemoSlot, type YangoDemoZone } from '../../lib/yangoDeliveryDemo'
+import { alcoholOutsideHoursMessage, availableTimeTitle } from '../../lib/checkoutScheduleCopy'
+import { slotInsideLiquorHoursForDate, type SellingHoursRow } from '../../lib/windhoekTime'
 import type { YangoDemoSchedulePayload } from './checkoutScheduleTypes'
 
 function shortDateLabel(ymd: string): string {
@@ -32,6 +34,8 @@ type Props = {
   cartContainsAlcohol?: boolean
   /** Server says cart has alcohol outside current selling window — emphasise choosing a slot. */
   outsideLiquorSellingWindow?: boolean
+  /** When set, only show slots that fall inside permitted liquor hours for the selected day. */
+  liquorHourRows?: SellingHoursRow[]
 }
 
 export function DeliveryTimeSlotGrid({
@@ -39,6 +43,7 @@ export function DeliveryTimeSlotGrid({
   onScheduleChange,
   cartContainsAlcohol,
   outsideLiquorSellingWindow,
+  liquorHourRows,
 }: Props) {
   const scheduleCbRef = useRef(onScheduleChange)
   useEffect(() => {
@@ -49,21 +54,31 @@ export function DeliveryTimeSlotGrid({
   const [dateYmd, setDateYmd] = useState(dates[0] ?? '')
   const [slotId, setSlotId] = useState<string | null>(null)
 
+  const visibleSlots = useMemo(() => {
+    if (!zone) return []
+    if (!liquorHourRows?.length || !outsideLiquorSellingWindow) return zone.slots
+    return zone.slots.filter((s) => {
+      const sm = s.startMinute ?? 0
+      const em = s.endMinute ?? 0
+      return slotInsideLiquorHoursForDate(liquorHourRows, dateYmd, s.startHour, sm, s.endHour, em)
+    })
+  }, [zone, liquorHourRows, outsideLiquorSellingWindow, dateYmd])
+
+  const slot: YangoDemoSlot | null = useMemo(() => {
+    if (!visibleSlots.length || !slotId) return null
+    return visibleSlots.find((s) => s.id === slotId) ?? null
+  }, [visibleSlots, slotId])
+
   useEffect(() => {
     if (!zone) {
       setSlotId(null)
       return
     }
     setSlotId((prev) => {
-      if (prev && zone.slots.some((s) => s.id === prev)) return prev
-      return zone.slots[0]?.id ?? null
+      if (prev && visibleSlots.some((s) => s.id === prev)) return prev
+      return visibleSlots[0]?.id ?? null
     })
-  }, [zone])
-
-  const slot: YangoDemoSlot | null = useMemo(() => {
-    if (!zone || !slotId) return null
-    return zone.slots.find((s) => s.id === slotId) ?? null
-  }, [zone, slotId])
+  }, [zone, visibleSlots])
 
   useEffect(() => {
     if (!zone || !slot) {
@@ -97,20 +112,22 @@ export function DeliveryTimeSlotGrid({
       <CardContent>
         <Stack spacing={2}>
           <Typography variant="subtitle1" fontWeight={900} component="h2">
-            Delivery time
+            {availableTimeTitle('delivery')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Slots follow the selected area&apos;s schedule{zone.serviceDaysLabel ? ` (${zone.serviceDaysLabel})` : ''}.
           </Typography>
-          {outsideLiquorSellingWindow ? (
+          {outsideLiquorSellingWindow && cartContainsAlcohol ? (
             <Alert severity="warning" sx={{ borderRadius: 2 }}>
-              You&apos;re outside liquor selling hours — select a slot inside the green permitted window for your area so the
-              order can be fulfilled legally.
+              {alcoholOutsideHoursMessage('delivery')}
             </Alert>
-          ) : null}
-          {cartContainsAlcohol ? (
+          ) : outsideLiquorSellingWindow ? (
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+              You&apos;re outside permitted selling hours — choose a slot below that falls within the store&apos;s allowed window.
+            </Alert>
+          ) : cartContainsAlcohol ? (
             <Alert severity="info" sx={{ borderRadius: 2 }}>
-              Your cart may include alcohol — prefer earlier slots; legal liquor windows apply at fulfilment.
+              Your cart may include alcohol — choose a slot within permitted alcohol sale times.
             </Alert>
           ) : null}
 
@@ -145,7 +162,13 @@ export function DeliveryTimeSlotGrid({
             role="radiogroup"
             aria-label="Delivery time slots"
           >
-            {zone.slots.map((s) => {
+            {visibleSlots.length === 0 ? (
+              <Alert severity="info" sx={{ gridColumn: '1 / -1', borderRadius: 2 }}>
+                No delivery slots on this day fall within permitted alcohol sale hours. Choose another day or use the
+                suggested times list if shown below.
+              </Alert>
+            ) : null}
+            {visibleSlots.map((s) => {
               const selected = slotId === s.id
               const dim = cartContainsAlcohol && slotLiquorHeuristicDim(s)
               const card = (

@@ -5,6 +5,13 @@ import type { HubNavigationTilesResponse } from '../types/hubNavigationTilesApi'
 
 export type HubNavigationKind = 'payments' | 'services'
 
+/** Hub tiles removed from the product UI (may still exist in SQL seed data). */
+const HIDDEN_HUB_SLUGS = new Set(['vouchers', 'cashout'])
+
+function visibleHubTiles(items: HubNavigationTileDto[]): HubNavigationTileDto[] {
+  return items.filter((t) => !HIDDEN_HUB_SLUGS.has(t.slug))
+}
+
 export type HubNavigationTilesState = {
   loading: boolean
   /** When true, `items` came from SQL and should be shown as-is (may be empty). */
@@ -32,7 +39,7 @@ export function useHubNavigationTiles(kind: HubNavigationKind): HubNavigationTil
         const res = await fetch(apiUrl(`/api/hub/navigation-tiles?kind=${encodeURIComponent(kind)}`))
         const data = (await res.json()) as HubNavigationTilesResponse
         if (cancelled) return
-        const items = Array.isArray(data.items) ? data.items : []
+        const items = visibleHubTiles(Array.isArray(data.items) ? data.items : [])
         const fromDatabase = data.source === 'database'
         setState({
           loading: false,

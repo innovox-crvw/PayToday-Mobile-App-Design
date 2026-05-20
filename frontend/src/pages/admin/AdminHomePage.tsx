@@ -98,6 +98,10 @@ export function AdminHomePage() {
 
       <AdminOverviewCharts data={overview} loading={overviewLoading} error={overviewError} />
 
+      <Button component={RouterLink} to="/admin/disputes" variant="outlined" size="small" sx={{ alignSelf: 'flex-start', fontWeight: 700 }}>
+        Open disputes queue
+      </Button>
+
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2 }}>
         <Typography variant="subtitle1" fontWeight={800}>

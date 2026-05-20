@@ -4,7 +4,6 @@ import crypto from 'node:crypto'
 import { env } from '../config/env.js'
 import { getVariantInventoryPolicy } from '../repos/productsRepo.js'
 import { findUserById } from '../repos/usersRepo.js'
-
 const CART_COOKIE = 'pt_cart_session'
 
 export { CART_COOKIE }
@@ -210,6 +209,8 @@ export type CartLineDto = {
   currency: string
   imageUrl: string | null
   compareAtPriceCents: number | null
+  /** Product category slug when `category_id` is set — used for payment-plan eligibility. */
+  categorySlug: string | null
 }
 
 function mapCartLineRow(row: {
@@ -224,6 +225,7 @@ function mapCartLineRow(row: {
   productName: string
   imageUrl?: string | null
   compareAtRaw?: number | null
+  categorySlug?: string | null
 }): CartLineDto {
   const cur = (row.line_curr ?? row.currency ?? 'NAD').trim().slice(0, 3).toUpperCase() || 'NAD'
   const unit = row.snap_cents
@@ -243,6 +245,7 @@ function mapCartLineRow(row: {
     currency: cur,
     imageUrl,
     compareAtPriceCents,
+    categorySlug: row.categorySlug?.trim() ? row.categorySlug.trim() : null,
   }
 }
 
@@ -261,6 +264,7 @@ export async function getCartLines(executor: SqlExecutor, cartId: string): Promi
       productName: string
       imageUrl: string | null
       compareAtRaw: number | null
+      categorySlug: string | null
     }>(`
       SELECT CAST(cl.variant_id AS NVARCHAR(36)) AS lineId,
              CAST(cl.variant_id AS NVARCHAR(36)) AS variantId,
@@ -273,10 +277,12 @@ export async function getCartLines(executor: SqlExecutor, cartId: string): Promi
              v.currency,
              p.name AS productName,
              imgs.image_url AS imageUrl,
-             v.compare_at_price_cents AS compareAtRaw
+             v.compare_at_price_cents AS compareAtRaw,
+             LTRIM(RTRIM(c.slug)) AS categorySlug
       FROM dbo.cart_lines cl
       INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
       INNER JOIN dbo.products p ON p.id = v.product_id
+      LEFT JOIN dbo.categories c ON c.id = p.category_id
       OUTER APPLY (
         SELECT TOP 1 pi.url AS image_url
         FROM dbo.product_images pi

@@ -75,6 +75,9 @@ adminCategoriesRouter.patch('/:categoryId', async (req, res) => {
   if (Object.prototype.hasOwnProperty.call(body, 'financeEligible')) {
     patch.financeEligible = Boolean(body.financeEligible)
   }
+  if (Object.prototype.hasOwnProperty.call(body, 'paymentPlanEligible')) {
+    patch.paymentPlanEligible = Boolean(body.paymentPlanEligible)
+  }
   try {
     await updateCategory(pool, categoryId, patch)
     res.json({ ok: true })

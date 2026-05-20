@@ -4,13 +4,13 @@ import { alpha } from '@mui/material/styles'
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner'
 import QrCode2Icon from '@mui/icons-material/QrCode2'
 import BadgeIcon from '@mui/icons-material/Badge'
-import { PageHeader } from '../../components/page/PageHeader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
+import { walletCardSx } from '../../theme/walletTheme'
 
 export function ScanPage() {
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
   const scanBase = `${pathPrefix}/wallet/scan`
-  const shopPath = `${pathPrefix}/shop`
   const walletPath = `${pathPrefix}/wallet`
 
   const items = [
@@ -35,28 +35,24 @@ export function ScanPage() {
   ] as const
 
   return (
-    <Stack spacing={2.5} sx={{ maxWidth: 560, mx: 'auto', py: { xs: 0.5, sm: 1 }, pb: 4 }}>
-      <PageHeader
-        overline="Wallet"
-        title="Scan & pay"
-        titleVariant="h4"
-        subtitle="Use your camera where supported (Chrome / Edge), or enter codes manually. Production PayToday scan APIs can plug in later."
-      />
-
-      <Stack spacing={1.5}>
+    <WalletPageShell
+      title="Scan & pay"
+      showBack
+      backTo={walletPath}
+      subtitle="Use your camera where supported (Chrome / Edge), or enter codes manually."
+    >
+      <Stack spacing={1.25}>
         {items.map((item) => (
           <Card
             key={item.to}
-            variant="outlined"
+            elevation={0}
             sx={{
-              borderRadius: 3,
-              borderColor: 'divider',
-              overflow: 'hidden',
+              ...walletCardSx,
               transition: 'transform 0.15s ease, box-shadow 0.15s ease',
               '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 12px 28px rgba(15, 23, 42, 0.08)' },
             }}
           >
-            <CardActionArea component={RouterLink} to={item.to} sx={{ alignItems: 'stretch', display: 'block' }}>
+            <CardActionArea component={RouterLink} to={item.to}>
               <CardContent sx={{ p: 2.25, '&:last-child': { pb: 2.25 } }}>
                 <Stack direction="row" spacing={2} alignItems="flex-start">
                   <Box
@@ -88,15 +84,9 @@ export function ScanPage() {
           </Card>
         ))}
       </Stack>
-
-      <Stack direction="row" spacing={1} justifyContent="center" flexWrap="wrap" sx={{ pt: 0.5 }}>
-        <Button component={RouterLink} to={walletPath} variant="text" sx={{ fontWeight: 700 }}>
-          Wallet overview
-        </Button>
-        <Button component={RouterLink} to={shopPath} variant="text" sx={{ fontWeight: 700 }}>
-          Browse store
-        </Button>
-      </Stack>
-    </Stack>
+      <Button component={RouterLink} to={walletPath} variant="text" sx={{ fontWeight: 700, alignSelf: 'center' }}>
+        Back to wallet
+      </Button>
+    </WalletPageShell>
   )
 }

@@ -37,6 +37,10 @@ export interface ProductDto {
   slug: string
   name: string
   description: string
+  deliveryInformation: string
+  returnPolicy: string
+  warrantyInfo: string
+  whatsInTheBox: string
   categoryId: string
   /** Lowercase slug from `categories.slug` (e.g. electronics, groceries). */
   categorySlug: string

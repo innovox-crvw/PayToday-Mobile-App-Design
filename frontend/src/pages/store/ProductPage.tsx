@@ -45,13 +45,14 @@ import { formatMoney } from '../../lib/money'
 import { addVariantToCart, LiquorRestrictedError } from '../../lib/cartClient'
 import { ProductImage } from '../../components/store/ProductImage'
 import { NedbankFinanceCallout } from '../../components/store/NedbankFinanceCallout'
+import { RecurringPaymentCallout } from '../../components/store/RecurringPaymentCallout'
 import { ScheduleOrderDialog } from '../../components/store/ScheduleOrderDialog'
 import { StoreClosedBanner } from '../../components/store/StoreClosedBanner'
 import { getDemoStoreForProduct, getDemoStoreSlugForProduct } from '../../data/demoStores'
 import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { SHOP_V2 } from '../../theme/storeV2'
 import { formatPackageDimensionsMm } from '../../lib/formatPackageDims'
-import { categorySlugEligibleForFinance } from '../../lib/categoryFinanceEligibility'
+import { categorySlugEligibleForFinance, categorySlugEligibleForPaymentPlan } from '../../lib/categoryFinanceEligibility'
 import { FINANCING_MIN_PRICE_CENTS } from '../../lib/financingEligibility'
 import { saveCheckoutSchedulePreset, type CheckoutSchedulePreset } from '../../lib/storeHours'
 import { useStoreHours } from '../../hooks/useStoreHours'
@@ -328,6 +329,17 @@ export function ProductPage() {
     return typeof cents === 'number' && Number.isFinite(cents) ? cents : null
   }, [product, selectedVariantId])
 
+  const lineSubtotalCents = useMemo(() => {
+    if (selectedVariantPriceCents == null) return null
+    return selectedVariantPriceCents * Math.max(1, qty)
+  }, [selectedVariantPriceCents, qty])
+
+  const showRecurringPaymentHint = useMemo(() => {
+    if (lineSubtotalCents == null || lineSubtotalCents < FINANCING_MIN_PRICE_CENTS) return false
+    if (!product?.categorySlug?.trim()) return false
+    return categorySlugEligibleForPaymentPlan(product.categorySlug, sortedStoreCategories)
+  }, [lineSubtotalCents, product?.categorySlug, sortedStoreCategories])
+
   const showNedbankFinanceOnProduct = useMemo(() => {
     if (!product?.categorySlug?.trim()) return false
     if (!categorySlugEligibleForFinance(product.categorySlug, sortedStoreCategories)) return false
@@ -451,7 +463,19 @@ export function ProductPage() {
   const selectedVariantPkgLine = variant ? variantPackageSummary(variant) : null
   const showSelectedVariantPkg = Boolean(variant && variantHasPackageDisplay(variant))
 
-  const rawDescription = product.description || 'No description provided for this item.'
+  const rawDescription = product.description?.trim() || 'No description provided for this item.'
+  const deliveryText =
+    product.deliveryInformation?.trim() ||
+    'Delivery times and fees depend on your address and chosen method. You will see options at checkout after you add this product to your cart.'
+  const returnsText =
+    product.returnPolicy?.trim() ||
+    "Returns follow the retailer's policy and local consumer rules. Contact support through your order details if you need a return or exchange."
+  const warrantyText =
+    product.warrantyInfo?.trim() ||
+    `Warranty coverage depends on the manufacturer and product category. Keep your ${APP_DISPLAY_NAME} receipt and order confirmation as proof of purchase.`
+  const inboxText =
+    product.whatsInTheBox?.trim() ||
+    'Contents are as listed on the product page and packaging. If something is missing, reach out with your order number.'
   const descriptionNeedsTruncate = rawDescription.length > DESCRIPTION_PREVIEW_CHARS
   const descriptionShown =
     descriptionNeedsTruncate && !descriptionExpanded
@@ -1058,6 +1082,9 @@ export function ProductPage() {
               mt: { xs: 0.75, md: 0.5 },
             }}
           >
+            {showRecurringPaymentHint ? (
+              <RecurringPaymentCallout subtotalCents={lineSubtotalCents} currency={variant?.currency} />
+            ) : null}
             {showNedbankFinanceOnProduct ? (
               <NedbankFinanceCallout applicationUrl={financingApplicationUrl} currency={variant?.currency} />
             ) : null}
@@ -1206,26 +1233,23 @@ export function ProductPage() {
             </Stack>
           )}
           {detailTab === 1 && (
-            <Typography color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              Delivery times and fees depend on your address and chosen method. You will see options at checkout after you add this
-              product to your cart.
+            <Typography color="text.secondary" sx={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {deliveryText}
             </Typography>
           )}
           {detailTab === 2 && (
-            <Typography color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              Returns follow the retailer&apos;s policy and local consumer rules. Contact support through your order details if you
-              need a return or exchange.
+            <Typography color="text.secondary" sx={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {returnsText}
             </Typography>
           )}
           {detailTab === 3 && (
-            <Typography color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              Warranty coverage depends on the manufacturer and product category. Keep your {APP_DISPLAY_NAME} receipt and order
-              confirmation as proof of purchase.
+            <Typography color="text.secondary" sx={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {warrantyText}
             </Typography>
           )}
           {detailTab === 4 && (
-            <Typography color="text.secondary" sx={{ lineHeight: 1.7 }}>
-              Contents are as listed on the product page and packaging. If something is missing, reach out with your order number.
+            <Typography color="text.secondary" sx={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {inboxText}
             </Typography>
           )}
         </Box>

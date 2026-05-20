@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Button, IconButton, MenuItem, Stack, TextField, Typography } from '@mui/material'
+import { Button, IconButton, MenuItem, TextField } from '@mui/material'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
-import { WalletSubheader } from './WalletSubheader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
+import { WalletDetailCard } from '../../components/wallet/WalletDetailCard'
 import { MOCK_BANK, NAMIBIAN_BANKS } from '../../data/walletMock'
 
 export function WalletBankPage() {
@@ -10,11 +11,8 @@ export function WalletBankPage() {
   const [accountNumber, setAccountNumber] = useState(MOCK_BANK.accountNumber)
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 480, mx: 'auto' }}>
-      <WalletSubheader title="My Bank Details" />
-      <Typography variant="body2" color="text.secondary">
-        Link a bank account for withdrawals and payouts.
-      </Typography>
+    <WalletPageShell title="My Bank Details" showBack subtitle="Link a bank account for withdrawals and payouts.">
+      <WalletDetailCard>
       <TextField
         label="Account Name"
         value={accountName}
@@ -51,9 +49,10 @@ export function WalletBankPage() {
           ),
         }}
       />
-      <Button variant="contained" size="large" sx={{ alignSelf: 'flex-start', mt: 1 }}>
+      <Button variant="contained" size="large" sx={{ alignSelf: 'flex-start', fontWeight: 800 }}>
         Save
       </Button>
-    </Stack>
+      </WalletDetailCard>
+    </WalletPageShell>
   )
 }

@@ -18,7 +18,8 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../api/client'
-import { servicesEssentialsHref } from '../../lib/servicesHubTabs'
+import { servicesInsuranceHref } from '../../lib/servicesHubTabs'
+import { ACCESS_FINANCE_LOGO_SRC, FINANCE_LOGO_SX } from '../../lib/financeBranding'
 
 type Step = 'provider' | 'form' | 'confirm' | 'pin' | 'processing' | 'result'
 
@@ -32,7 +33,7 @@ export function InsuranceFlowPage() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const pathPrefix = pathname.startsWith('/embed') ? '/embed' : ''
-  const backHref = servicesEssentialsHref(pathPrefix)
+  const backHref = servicesInsuranceHref(pathPrefix)
   const notificationsHref = pathPrefix ? `${pathPrefix}/notifications` : '/notifications'
 
   const [step, setStep] = useState<Step>('provider')
@@ -176,6 +177,7 @@ export function InsuranceFlowPage() {
             <Typography fontWeight={850} sx={{ fontSize: '1.05rem', letterSpacing: -0.2 }}>
               Insurance
             </Typography>
+            <Box component="img" src={ACCESS_FINANCE_LOGO_SRC} alt="ACCESS" sx={{ ...FINANCE_LOGO_SX, mb: 1 }} />
             <Paper
               variant="outlined"
               component={Button}

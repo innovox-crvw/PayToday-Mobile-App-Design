@@ -4,13 +4,20 @@ import crypto from 'node:crypto'
 import { env } from '../../config/env.js'
 import { getSqlPool } from '../../db/pool.js'
 import { optionalAuth, requireAuth } from '../../middleware/auth.js'
+import { evaluateCartPaymentPlanEligibility } from '../../lib/categoryPaymentPlanEligibility.js'
+import { listCategories } from '../../repos/categoriesRepo.js'
 import { CART_COOKIE, getCartLines, getOrCreateCartId } from '../../services/cartService.js'
 import {
   validateDepositLocationExists,
   validateShippingAddressComplete,
 } from '../../services/checkoutValidation.js'
-import { tryDebitWalletStoreCheckout } from '../../services/demoWalletService.js'
+import { checkoutWalletDebitWithExtras, getWalletSettings } from '../../services/walletExtrasService.js'
 import { cancelUnshippedOrderAdmin, createOrderFromCart } from '../../services/orderService.js'
+import {
+  assertPaymentPlanSchema,
+  createPaymentPlanInTransaction,
+  parseRecurringTermMonths,
+} from '../../services/paymentPlanService.js'
 import { confirmOrderPaid } from '../../services/paymentConfirmation.js'
 import { enqueueNotification } from '../../services/notifications.js'
 import { resolveOutboxChannel } from '../../services/notificationRouting.js'
@@ -22,14 +29,19 @@ import {
 import { getIntegrationSettingsMap } from '../../services/integrationSettingsCache.js'
 import { mergePayTodayRuntime } from '../../services/integrationRuntimeConfig.js'
 import { shippingCentsForDelivery, taxCentsForSubtotal } from '../../services/shipping.js'
-import { previewDiscountCode, redeemDiscountCode } from '../../services/discountService.js'
 import { getHomeDeliveryAreaById, shippingCentsForArea } from '../../repos/homeDeliveryRepo.js'
 import { findUserById } from '../../repos/usersRepo.js'
 import { setPaymentProcessing, updatePaymentReference } from '../../repos/paymentsRepo.js'
 import { parseEmailString, parseOptionalGuestPersonName, parseOptionalPhoneDigits } from '../../lib/inputValidators.js'
 import { assertCheckoutAllowedByMerchantHours } from '../../services/merchantHoursService.js'
 import { assertAdultForAlcoholCart } from '../../services/liquorAgeService.js'
-import { parseCheckoutDeliveryMethod, isPickupDeliveryMethod, isHomeDeliveryMethod } from '../../lib/checkoutDelivery.js'
+import {
+  parseCheckoutDeliveryMethod,
+  isHomeDeliveryMethod,
+  isDepositBoxDeliveryMethod,
+  isStorePickupDeliveryMethod,
+} from '../../lib/checkoutDelivery.js'
+import { getCartStorePickupStores } from '../../services/cartPickupStoresService.js'
 import type { NextFunction, Request, Response } from 'express'
 
 class CheckoutValidationError extends Error {
@@ -126,11 +138,21 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
 
   const pt = mergePayTodayRuntime(await getIntegrationSettingsMap(pool))
 
-  const paymentMethod = req.body?.paymentMethod === 'demo_wallet' ? 'demo_wallet' : 'paytoday'
-  if (paymentMethod === 'demo_wallet' && !req.user) {
-    res.status(401).json({ error: 'Sign in to pay with the demo wallet, or choose PayToday checkout.' })
+  const rawPm = typeof req.body?.paymentMethod === 'string' ? req.body.paymentMethod.trim() : ''
+  const paymentMethod =
+    rawPm === 'demo_wallet' ? 'demo_wallet' : rawPm === 'payment_plan' ? 'payment_plan' : 'paytoday'
+  if ((paymentMethod === 'demo_wallet' || paymentMethod === 'payment_plan') && !req.user) {
+    res.status(401).json({
+      error:
+        paymentMethod === 'payment_plan'
+          ? 'Sign in to check out with a payment plan.'
+          : 'Sign in to pay with PayToday Wallet, or choose hosted checkout.',
+    })
     return
   }
+  const recurringTermMonths = parseRecurringTermMonths(
+    (req.body as Record<string, unknown> | undefined)?.recurringTermMonths,
+  )
 
   const idemHeader = typeof req.get('idempotency-key') === 'string' ? req.get('idempotency-key')!.trim() : ''
   const idemBody = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : ''
@@ -272,8 +294,8 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     return
   }
 
-  if (isPickupDeliveryMethod(deliveryMethod) && !depositLocationId) {
-    res.status(400).json({ error: 'depositLocationId required for store pickup or deposit box delivery' })
+  if (isDepositBoxDeliveryMethod(deliveryMethod) && !depositLocationId?.trim()) {
+    res.status(400).json({ error: 'depositLocationId required for deposit locker delivery' })
     return
   }
   if (isHomeDeliveryMethod(deliveryMethod) && !req.user) {
@@ -306,7 +328,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
   }
 
-  if (isPickupDeliveryMethod(deliveryMethod) && depositLocationId) {
+  if (isDepositBoxDeliveryMethod(deliveryMethod) && depositLocationId) {
     try {
       await validateDepositLocationExists(pool, depositLocationId.trim())
     } catch (e) {
@@ -317,6 +339,16 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
 
   const sessionToken = req.cookies[CART_COOKIE] as string | undefined
   const { cartId } = await getOrCreateCartId(pool, sessionToken, checkoutSqlUserId ?? undefined)
+
+  if (isStorePickupDeliveryMethod(deliveryMethod)) {
+    const pickupStores = await getCartStorePickupStores(pool, cartId)
+    if (!pickupStores.length) {
+      res.status(400).json({
+        error: 'Could not determine pickup stores for your cart. Try home delivery or contact support.',
+      })
+      return
+    }
+  }
 
   const lines = await getCartLines(pool, cartId)
   if (lines.length === 0) {
@@ -359,6 +391,22 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     currency = l.currency
   }
 
+  if (paymentMethod === 'payment_plan') {
+    if (!recurringTermMonths) {
+      res.status(400).json({ error: 'Choose a payment plan term: 3, 6, or 12 months.', field: 'recurringTermMonths' })
+      return
+    }
+    const categories = await listCategories(pool, { includeInactive: true })
+    const planCheck = evaluateCartPaymentPlanEligibility(lines, categories, subtotalCents)
+    if (!planCheck.eligible) {
+      res.status(400).json({
+        error: planCheck.reason ?? 'Payment plan is not available for this cart.',
+        code: 'payment_plan_ineligible',
+      })
+      return
+    }
+  }
+
   let shippingCents = shippingCentsForDelivery(subtotalCents, deliveryMethod)
   if (isHomeDeliveryMethod(deliveryMethod)) {
     const rawAreaId = typeof bodyObj.homeDeliveryAreaId === 'string' ? bodyObj.homeDeliveryAreaId.trim() : ''
@@ -374,20 +422,6 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     }
   }
   const taxCents = taxCentsForSubtotal(subtotalCents)
-
-  /* Discount code (optional) */
-  let discountCents = 0
-  let discountCodeId: string | null = null
-  const rawDiscountCode = typeof req.body?.discountCode === 'string' ? req.body.discountCode.trim() : ''
-  if (rawDiscountCode) {
-    const disc = await previewDiscountCode(pool, rawDiscountCode, subtotalCents)
-    if ('error' in disc) {
-      res.status(400).json({ error: disc.error, field: 'discountCode', code: 'discount_invalid' })
-      return
-    }
-    discountCents = disc.discountCents
-    discountCodeId = disc.discountCodeId
-  }
 
   let orderId: string
   let totalCents: number
@@ -406,18 +440,14 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       subtotalCents,
       shippingCents,
       taxCents,
-      discountCents,
-      discountCodeId,
+      discountCents: 0,
+      discountCodeId: null,
       checkoutIdempotencyKey,
       scheduling,
     })
     orderId = o.orderId
     totalCents = o.totalCents
     currency = o.currency
-    if (discountCodeId) {
-      try { await redeemDiscountCode(pool, discountCodeId) } catch { /* best-effort */ }
-    }
-
     reference = `PTSTORE-${orderId}`
     const paymentIdemKey = crypto.randomUUID()
     await pool
@@ -440,14 +470,71 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     return
   }
 
+  if (paymentMethod === 'payment_plan') {
+    try {
+      await assertPaymentPlanSchema(pool)
+    } catch (e) {
+      res.status(503).json({ error: e instanceof Error ? e.message : 'Payment plan schema missing' })
+      return
+    }
+    const planTx = pool.transaction()
+    await planTx.begin()
+    let planId: string
+    try {
+      const firstDue = new Date()
+      firstDue.setMonth(firstDue.getMonth() + 1)
+      const created = await createPaymentPlanInTransaction(planTx, {
+        orderId,
+        planType: 'monthly',
+        totalInstalments: recurringTermMonths!,
+        totalCents,
+        currency,
+        firstDueDate: firstDue,
+      })
+      planId = created.planId
+      await planTx.commit()
+    } catch (e) {
+      await planTx.rollback()
+      try {
+        await cancelUnshippedOrderAdmin(pool, orderId)
+      } catch (err) {
+        console.error('[checkout] cancel order after payment plan failure', err)
+      }
+      res.status(400).json({ error: e instanceof Error ? e.message : 'Could not create payment plan' })
+      return
+    }
+    res.json({
+      orderId,
+      redirectUrl: null,
+      reference,
+      totalCents,
+      currency,
+      subtotalCents,
+      shippingCents,
+      taxCents,
+      paymentPlan: true,
+      planId,
+      recurringTermMonths,
+    })
+    return
+  }
+
   if (paymentMethod === 'demo_wallet') {
     const uid = checkoutSqlUserId!
-    const debit = await tryDebitWalletStoreCheckout(pool, uid, orderId, totalCents, reference)
+    const body = req.body as Record<string, unknown>
+    const splitBillId = typeof body.splitBillId === 'string' ? body.splitBillId.trim() : null
+    const applyRoundUp = body.applyRoundUp === true || body.applyRoundUp === 'true'
+    const settings = await getWalletSettings(pool, uid)
+    const debit = await checkoutWalletDebitWithExtras(pool, uid, orderId, totalCents, reference, {
+      splitBillId: splitBillId || null,
+      applyRoundUp: applyRoundUp && settings.roundUpEnabled,
+      roundUpIncrementCents: settings.roundUpIncrementCents,
+    })
     if (!debit.ok) {
       try {
         await cancelUnshippedOrderAdmin(pool, orderId)
       } catch (err) {
-        console.error('[checkout] cancel order after demo wallet failure', err)
+        console.error('[checkout] cancel order after PayToday Wallet failure', err)
       }
       if (debit.code === 'insufficient_funds') {
         res.status(400).json({ error: debit.error, code: 'insufficient_wallet', orderId })
@@ -457,6 +544,10 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
         res.status(503).json({ error: debit.error, code: 'wallet_demo_unavailable', orderId })
         return
       }
+      if (debit.code === 'split_invalid') {
+        res.status(400).json({ error: debit.error, code: 'split_invalid', orderId })
+        return
+      }
       res.status(500).json({ error: debit.error, orderId })
       return
     }
@@ -464,7 +555,7 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
     try {
       await confirmOrderPaid(pool, orderId)
     } catch (err) {
-      console.error('[checkout] confirmOrderPaid after demo wallet debit', err)
+      console.error('[checkout] confirmOrderPaid after PayToday Wallet debit', err)
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Payment capture failed after wallet debit',
         orderId,
@@ -485,6 +576,8 @@ checkoutRouter.post('/', checkoutSignInGate, async (req, res) => {
       discountCents: 0,
       paidWithDemoWallet: true,
       walletBalanceAfterCents: debit.balanceAfter,
+      walletChargedCents: debit.chargedCents,
+      roundUpSpareCents: debit.roundUpSpareCents,
     })
     return
   }

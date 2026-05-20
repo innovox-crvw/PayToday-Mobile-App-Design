@@ -5,7 +5,6 @@ import {
   Box,
   Button,
   Chip,
-  CircularProgress,
   FormControl,
   FormControlLabel,
   IconButton,
@@ -14,7 +13,6 @@ import {
   RadioGroup,
   Skeleton,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material'
 import Grid from '@mui/material/Grid2'
@@ -35,6 +33,13 @@ import { apiUrl } from '../../lib/apiOrigin'
 import { formatMoney } from '../../lib/money'
 import { setCartLineQuantity } from '../../lib/cartClient'
 import type { CartTotalsPreview } from '../../types/storefront'
+
+const headerUnderline = {
+  pb: 0.75,
+  borderBottom: 2,
+  borderColor: 'primary.main',
+  display: 'inline-block',
+} as const
 
 interface CartLine {
   lineId: string
@@ -69,8 +74,7 @@ function shippingCentsForChoice(preview: CartTotalsPreview, choice: CartShipping
 
 function estimatedHomeTotalCents(preview: CartTotalsPreview, choice: CartShippingChoice): number {
   const ship = shippingCentsForChoice(preview, choice)
-  const d = preview.discountCents ?? 0
-  return Math.max(0, preview.subtotalCents + ship + preview.taxCents - d)
+  return Math.max(0, preview.subtotalCents + ship + preview.taxCents)
 }
 
 export function CartPage() {
@@ -85,11 +89,6 @@ export function CartPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [shippingChoice, setShippingChoice] = useState<CartShippingChoice>('standard')
-  const [promoInput, setPromoInput] = useState('')
-  const [promoApplied, setPromoApplied] = useState<{ code: string; discountCents: number } | null>(null)
-  const [promoErr, setPromoErr] = useState<string | null>(null)
-  const [promoLoading, setPromoLoading] = useState(false)
-
   const refresh = useCallback(async (opts?: { silent?: boolean }) => {
     setError(null)
     if (!opts?.silent) setLoading(true)
@@ -112,9 +111,7 @@ export function CartPage() {
     setPreviewError(null)
     setPreviewLoading(true)
     try {
-      const params = new URLSearchParams({ preview: '1' })
-      if (promoApplied?.code) params.set('discountCode', promoApplied.code)
-      const res = await fetch(apiUrl(`/api/cart?${params.toString()}`), { credentials: 'include' })
+      const res = await fetch(apiUrl('/api/cart?preview=1'), { credentials: 'include' })
       const data = await readResponseJson<{ totalsPreview?: CartTotalsPreview; error?: string }>(res)
       if (!res.ok) {
         setTotalsPreview(null)
@@ -127,7 +124,7 @@ export function CartPage() {
     } finally {
       setPreviewLoading(false)
     }
-  }, [promoApplied?.code])
+  }, [])
 
   useEffect(() => {
     void refresh()
@@ -175,8 +172,6 @@ export function CartPage() {
       await fetchCsrfToken()
       const res = await apiFetch('/api/cart', { method: 'DELETE' })
       if (!res.ok) throw new Error(await res.text())
-      setPromoApplied(null)
-      setPromoInput('')
       window.dispatchEvent(new Event('pt-cart-updated'))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not clear cart')
@@ -210,41 +205,7 @@ export function CartPage() {
     }
   }
 
-  async function applyPromo() {
-    const code = promoInput.trim()
-    if (!code) return
-    setPromoLoading(true)
-    setPromoErr(null)
-    try {
-      const params = new URLSearchParams({ preview: '1', discountCode: code })
-      const res = await fetch(apiUrl(`/api/cart?${params.toString()}`), { credentials: 'include' })
-      const body = await readResponseJson<{
-        discountCents?: number
-        totalsPreview?: CartTotalsPreview
-        error?: string
-      }>(res)
-      if (!res.ok) throw new Error(body.error ?? 'Invalid code')
-      if (body.totalsPreview) setTotalsPreview(body.totalsPreview)
-      setPromoApplied({
-        code: code.toUpperCase(),
-        discountCents: body.discountCents ?? body.totalsPreview?.discountCents ?? 0,
-      })
-      setPromoInput(code.toUpperCase())
-    } catch (e) {
-      setPromoErr(e instanceof Error ? e.message : 'Invalid code')
-    } finally {
-      setPromoLoading(false)
-    }
-  }
-
-  function removePromo() {
-    setPromoApplied(null)
-    setPromoInput('')
-    setPromoErr(null)
-  }
-
   const currency = items[0]?.currency ?? totalsPreview?.currency ?? 'NAD'
-  const headerUnderline = { borderBottom: (t: { palette: { primary: { main: string } } }) => `3px solid ${t.palette.primary.main}`, width: 'fit-content', pb: 0.25 }
 
   return (
     <Box sx={{ bgcolor: (t) => alpha(t.palette.grey[100], 0.6), minHeight: '100%', py: { xs: 2, md: 3 }, px: { xs: 1.5, sm: 2 } }}>
@@ -450,66 +411,29 @@ export function CartPage() {
                 </Stack>
 
                 <Paper variant="outlined" sx={{ borderRadius: 2, p: 2, bgcolor: 'background.paper' }}>
-                  <Stack
-                    direction={{ xs: 'column', sm: 'row' }}
-                    spacing={2}
-                    alignItems={{ xs: 'stretch', sm: 'center' }}
-                    justifyContent="space-between"
-                  >
-                    <Stack direction="row" spacing={1} sx={{ flex: 1, maxWidth: { sm: 420 } }}>
-                      <TextField
-                        size="small"
-                        fullWidth
-                        placeholder="Coupon code"
-                        value={promoInput}
-                        disabled={!!promoApplied}
-                        onChange={(e) => {
-                          setPromoInput(e.target.value.toUpperCase())
-                          setPromoErr(null)
-                        }}
-                        error={!!promoErr}
-                        helperText={promoErr ?? ' '}
-                        sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
-                      />
-                      {promoApplied ? (
-                        <Button variant="outlined" color="error" onClick={removePromo} sx={{ flexShrink: 0, borderRadius: 2 }}>
-                          Remove
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="contained"
-                          disabled={!promoInput.trim() || promoLoading}
-                          onClick={() => void applyPromo()}
-                          sx={{ flexShrink: 0, borderRadius: 2, px: 2.5 }}
-                        >
-                          {promoLoading ? <CircularProgress size={20} color="inherit" /> : 'Apply'}
-                        </Button>
-                      )}
-                    </Stack>
-                    <Stack direction="row" spacing={1} justifyContent="flex-end">
-                      <Button
-                        variant="outlined"
-                        color="primary"
-                        startIcon={<RefreshIcon />}
-                        onClick={() => {
-                          void refresh({ silent: true })
-                          void loadPreview()
-                        }}
-                        sx={{ borderRadius: 2 }}
-                      >
-                        Update
-                      </Button>
-                      <Button
-                        variant="outlined"
-                        color="error"
-                        startIcon={<DeleteOutlineIcon />}
-                        disabled={clearBusy}
-                        onClick={() => void clearEntireCart()}
-                        sx={{ borderRadius: 2 }}
-                      >
-                        {clearBusy ? 'Clearing…' : 'Clear'}
-                      </Button>
-                    </Stack>
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      startIcon={<RefreshIcon />}
+                      onClick={() => {
+                        void refresh({ silent: true })
+                        void loadPreview()
+                      }}
+                      sx={{ borderRadius: 2 }}
+                    >
+                      Update
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      startIcon={<DeleteOutlineIcon />}
+                      disabled={clearBusy}
+                      onClick={() => void clearEntireCart()}
+                      sx={{ borderRadius: 2 }}
+                    >
+                      {clearBusy ? 'Clearing…' : 'Clear'}
+                    </Button>
                   </Stack>
                 </Paper>
               </Stack>
@@ -616,21 +540,6 @@ export function CartPage() {
                       </Typography>
                       <Typography fontWeight={800}>{formatMoney(totalsPreview.taxCents, totalsPreview.currency)}</Typography>
                     </Stack>
-
-                    {(totalsPreview.discountCents ?? 0) > 0 ? (
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography color="text.secondary" fontWeight={700}>
-                          Discount
-                        </Typography>
-                        <Chip
-                          size="small"
-                          label={`-${formatMoney(totalsPreview.discountCents ?? 0, totalsPreview.currency)}`}
-                          color="success"
-                          variant="outlined"
-                          sx={{ fontWeight: 800 }}
-                        />
-                      </Stack>
-                    ) : null}
 
                     <Box
                       sx={{

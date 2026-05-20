@@ -3,8 +3,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { Alert, Box, Button, Card, CardContent, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Skeleton, Stack, TextField, Typography } from '@mui/material'
 import LocationOnOutlinedIcon from '@mui/icons-material/LocationOnOutlined'
 import PersonOffOutlinedIcon from '@mui/icons-material/PersonOffOutlined'
-import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
-import { WalletSubheader } from '../wallet/WalletSubheader'
+import { AccountSectionHeader } from '../../components/profile/AccountSectionHeader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { apiFetch, fetchCsrfToken } from '../../api/client'
@@ -42,7 +41,7 @@ const emptyForm = {
 
 export function ProfileAddressesPage() {
   const prefix = useStorePathPrefix()
-  const profileHubPath = prefix ? `${prefix}/profile` : '/profile'
+  const signInPath = `${prefix}/onboarding/login?returnTo=${encodeURIComponent(`${prefix}/profile/addresses`)}`
 
   const { user, loading } = useAuthMe()
   const [items, setItems] = useState<AddressRow[]>([])
@@ -212,19 +211,20 @@ export function ProfileAddressesPage() {
 
   if (loading) {
     return (
-      <ProfilePageShell>
-        <Stack alignItems="center" py={6}>
-          <CircularProgress size={36} />
-        </Stack>
-      </ProfilePageShell>
+      <Stack alignItems="center" py={6}>
+        <CircularProgress size={36} />
+      </Stack>
     )
   }
 
   if (!user) {
     return (
-      <ProfilePageShell>
-        <WalletSubheader title="Addresses" />
-        <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
+      <>
+        <AccountSectionHeader
+          title="Addresses"
+          description="Sign in to save delivery addresses for faster checkout."
+        />
+        <Card variant="outlined" sx={{ borderRadius: 2.5, borderColor: 'divider' }}>
           <CardContent sx={{ py: 4, textAlign: 'center' }}>
             <Box sx={{ color: 'text.secondary', mb: 2 }}>
               <PersonOffOutlinedIcon sx={{ fontSize: 56 }} />
@@ -232,24 +232,21 @@ export function ProfileAddressesPage() {
             <Typography variant="h6" fontWeight={800} gutterBottom>
               Sign in required
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3, lineHeight: 1.6 }}>
-              Sign in to save addresses for checkout.
-            </Typography>
-            <Button component={RouterLink} to={profileHubPath} variant="contained" size="large" sx={{ fontWeight: 700 }}>
-              Account
+            <Button component={RouterLink} to={signInPath} variant="contained" color="secondary" size="large" sx={{ fontWeight: 700, mt: 1 }}>
+              Sign in
             </Button>
           </CardContent>
         </Card>
-      </ProfilePageShell>
+      </>
     )
   }
 
   return (
-    <ProfilePageShell>
-      <WalletSubheader title="Addresses" />
-      <Typography variant="body2" color="text.secondary">
-        Add or edit saved addresses. Default is used first at checkout.
-      </Typography>
+    <Stack spacing={2.5}>
+      <AccountSectionHeader
+        title="Addresses"
+        description="Add or edit saved addresses. Your default address is used first at checkout."
+      />
 
       {msg ? (
         <Alert severity={msg.severity} onClose={() => setMsg(null)}>
@@ -400,6 +397,6 @@ export function ProfileAddressesPage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </ProfilePageShell>
+    </Stack>
   )
 }

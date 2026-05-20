@@ -170,6 +170,8 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
       unitsByCategory,
       topProducts,
       returnCasesByStatus,
+      disputesByStatus,
+      disputesOpenedByDay,
     ] = await Promise.all([
       ordersReq.query<{ status: string; count: number }>(ordersSql),
       salesReq.query<{ day: Date; orderCount: number; revenueCents: number }>(salesSql),
@@ -192,6 +194,31 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
           `)
         } catch {
           return { recordset: [] as { status: string; count: number }[] }
+        }
+      })(),
+      (async () => {
+        try {
+          return await pool.request().query<{ status: string; count: number }>(`
+            SELECT status AS status, COUNT(*) AS [count]
+            FROM dbo.order_disputes
+            GROUP BY status
+            ORDER BY [count] DESC
+          `)
+        } catch {
+          return { recordset: [] as { status: string; count: number }[] }
+        }
+      })(),
+      (async () => {
+        try {
+          return await pool.request().query<{ day: Date; count: number }>(`
+            SELECT CAST(created_at AS DATE) AS day, COUNT(*) AS [count]
+            FROM dbo.order_disputes
+            WHERE created_at >= DATEADD(DAY, -13, CAST(SYSUTCDATETIME() AS DATE))
+            GROUP BY CAST(created_at AS DATE)
+            ORDER BY day ASC
+          `)
+        } catch {
+          return { recordset: [] as { day: Date; count: number }[] }
         }
       })(),
     ])
@@ -225,6 +252,14 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
       returnCasesByStatus: returnCasesByStatus.recordset.map((r) => ({
         status: r.status,
         count: Number(r.count),
+      })),
+      disputesByStatus: disputesByStatus.recordset.map((r) => ({
+        status: r.status,
+        count: Number(r.count),
+      })),
+      disputesOpenedByDay: disputesOpenedByDay.recordset.map((r) => ({
+        day: r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day).slice(0, 10),
+        count: Number(r.count) || 0,
       })),
     })
   } catch (e) {

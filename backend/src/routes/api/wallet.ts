@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { getSqlPool } from '../../db/pool.js'
 import { requireAuth } from '../../middleware/auth.js'
 import { creditDemoWalletFund, getDemoWalletBalanceCents } from '../../services/demoWalletService.js'
+import { listDueInstalmentsForUser } from '../../services/paymentPlanService.js'
 
 export const walletRouter = Router()
 
@@ -82,7 +83,9 @@ function ledgerRowToDto(row: {
       ? 'Top-up'
       : et === 'store_checkout_spend'
         ? 'Store purchase'
-        : et === 'store_refund_credit'
+        : et === 'payment_plan_instalment_spend'
+          ? 'Payment plan instalment'
+          : et === 'store_refund_credit'
           ? 'Store refund (after fee)'
           : et === 'finance_approve_credit'
             ? 'Financing payout (demo)'
@@ -118,6 +121,20 @@ walletRouter.get('/balance', requireAuth, async (req, res) => {
     return
   }
   res.json({ balanceCents: b, walletDemoAvailable: true })
+})
+
+walletRouter.get('/payment-plan-instalments-due', requireAuth, async (req, res) => {
+  const pool = await getSqlPool({ eager: true })
+  if (!pool || !req.user) {
+    res.status(503).json({ error: 'Database unavailable' })
+    return
+  }
+  try {
+    const items = await listDueInstalmentsForUser(pool, req.user.sub)
+    res.json({ items })
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'Failed' })
+  }
 })
 
 walletRouter.post('/demo/fund', requireAuth, async (req, res) => {

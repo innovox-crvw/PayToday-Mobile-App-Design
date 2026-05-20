@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link as RouterLink, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -8,8 +8,6 @@ import {
   IconButton,
   InputAdornment,
   List,
-  ListItemButton,
-  ListItemText,
   Menu,
   MenuItem,
   Stack,
@@ -21,9 +19,11 @@ import {
 import SearchIcon from '@mui/icons-material/Search'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import IosShareIcon from '@mui/icons-material/IosShare'
-import { WalletSubheader } from './WalletSubheader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
+import { WalletTransactionRow } from '../../components/wallet/WalletTransactionRow'
+import { walletCardSx } from '../../theme/walletTheme'
 import { apiFetch } from '../../api/client'
-import { formatNad, MOCK_TRANSACTIONS, type TxSource, type WalletTransaction } from '../../data/walletMock'
+import { MOCK_TRANSACTIONS, type TxSource, type WalletTransaction } from '../../data/walletMock'
 import { useAuthMe } from '../../hooks/useAuthMe'
 import { readApiError } from '../../lib/apiOrigin'
 
@@ -91,20 +91,20 @@ export function WalletTransactionsPage() {
   }, [tab, q, sourceRows])
 
   return (
-    <Stack spacing={{ xs: 2, md: 2.5 }} sx={{ maxWidth: { xs: 560, md: 720 }, mx: 'auto', pb: { md: 2 } }}>
-      <WalletSubheader
-        title="My Transactions"
-        rightSlot={
-          <Stack direction="row" spacing={0.5}>
-            <IconButton size="small" aria-label="Filter" onClick={(e) => setFilterAnchor(e.currentTarget)}>
-              <FilterListIcon fontSize="small" />
-            </IconButton>
-            <IconButton size="small" aria-label="Export" onClick={(e) => setExportAnchor(e.currentTarget)}>
-              <IosShareIcon fontSize="small" />
-            </IconButton>
-          </Stack>
-        }
-      />
+    <WalletPageShell
+      title="My Transactions"
+      showBack
+      rightSlot={
+        <Stack direction="row" spacing={0.5}>
+          <IconButton size="small" aria-label="Filter" onClick={(e) => setFilterAnchor(e.currentTarget)}>
+            <FilterListIcon fontSize="small" />
+          </IconButton>
+          <IconButton size="small" aria-label="Export" onClick={(e) => setExportAnchor(e.currentTarget)}>
+            <IosShareIcon fontSize="small" />
+          </IconButton>
+        </Stack>
+      }
+    >
 
       <Menu anchorEl={filterAnchor} open={Boolean(filterAnchor)} onClose={() => setFilterAnchor(null)}>
         <MenuItem disabled sx={{ fontWeight: 800, opacity: 1 }}>
@@ -178,7 +178,7 @@ export function WalletTransactionsPage() {
       ) : null}
 
       {!authLoading && !(user && remoteLoading) ? (
-        <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
+        <Card elevation={0} sx={walletCardSx}>
           <List disablePadding>
             {filtered.length === 0 ? (
               <Box sx={{ px: 2, py: 4 }}>
@@ -190,50 +190,14 @@ export function WalletTransactionsPage() {
                       : 'No transactions match your search.'}
                 </Typography>
               </Box>
-            ) : null}
-            {filtered.map((t, i) => (
-              <ListItemButton
-                key={t.id}
-                component={RouterLink}
-                to={`${prefix}/transactions/${t.id}`}
-                sx={{
-                  alignItems: 'flex-start',
-                  py: 2,
-                  borderBottom: i < filtered.length - 1 ? 1 : 0,
-                  borderColor: 'divider',
-                }}
-              >
-                <ListItemText
-                  primary={
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-                      <Typography fontWeight={700}>{t.business}</Typography>
-                      <Typography fontWeight={800}>{formatNad(t.amountCents)}</Typography>
-                    </Stack>
-                  }
-                  secondary={
-                    <Box component="span" sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mt: 0.5 }}>
-                      <Typography
-                        component="span"
-                        variant="caption"
-                        sx={{
-                          color:
-                            t.status === 'successful' ? 'success.main' : t.status === 'pending' ? 'warning.main' : 'error.main',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {t.status === 'successful' ? 'Successful' : t.status === 'pending' ? 'Pending' : 'Failed'}
-                      </Typography>
-                      <Typography component="span" variant="caption" color="text.secondary">
-                        {t.paymentMethod} · {t.reference} · {t.date}
-                      </Typography>
-                    </Box>
-                  }
-                />
-              </ListItemButton>
-            ))}
+            ) : (
+              filtered.map((t) => (
+                <WalletTransactionRow key={t.id} tx={t} to={`${prefix}/transactions/${t.id}`} />
+              ))
+            )}
           </List>
         </Card>
       ) : null}
-    </Stack>
+    </WalletPageShell>
   )
 }

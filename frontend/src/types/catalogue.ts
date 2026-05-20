@@ -34,6 +34,10 @@ export interface ProductDto {
   slug: string
   name: string
   description: string
+  deliveryInformation: string
+  returnPolicy: string
+  warrantyInfo: string
+  whatsInTheBox: string
   categoryId: string
   categorySlug: string
   categoryName: string

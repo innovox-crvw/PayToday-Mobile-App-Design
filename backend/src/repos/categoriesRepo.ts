@@ -19,6 +19,8 @@ export type CategoryRow = {
   iconKey: string | null
   /** Admin: category (or its descendants when parent is flagged) may show NedAccess financing on product pages when price ≥ N$5,000. */
   financeEligible: boolean
+  /** Admin: category (or descendants) may use in-app payment plans at checkout when cart subtotal ≥ N$5,000. */
+  paymentPlanEligible: boolean
 }
 
 function mapRow(row: {
@@ -30,9 +32,12 @@ function mapRow(row: {
   is_active: number | boolean
   icon_key?: string | null
   finance_eligible?: number | boolean | null
+  payment_plan_eligible?: number | boolean | null
 }): CategoryRow {
   const fe = row.finance_eligible
   const financeEligible = fe === true || fe === 1 || Number(fe) === 1
+  const pe = row.payment_plan_eligible
+  const paymentPlanEligible = pe === true || pe === 1 || Number(pe) === 1
   return {
     id: row.id,
     slug: row.slug,
@@ -42,6 +47,7 @@ function mapRow(row: {
     isActive: Boolean(row.is_active),
     iconKey: row.icon_key?.trim() ? normalizeCategoryIconKey(row.icon_key.trim()) : null,
     financeEligible,
+    paymentPlanEligible,
   }
 }
 
@@ -59,12 +65,14 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       is_active: number | boolean
       icon_key: string | null
       finance_eligible: number | boolean
+      payment_plan_eligible: number | boolean
     }>(`
       SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
              CAST(parent_id AS NVARCHAR(36)) AS parent_id,
              sort_order, is_active,
              LTRIM(RTRIM(icon_key)) AS icon_key,
-             CONVERT(BIT, ISNULL(finance_eligible, 0)) AS finance_eligible
+             CONVERT(BIT, ISNULL(finance_eligible, 0)) AS finance_eligible,
+             CONVERT(BIT, ISNULL(payment_plan_eligible, 0)) AS payment_plan_eligible
       FROM dbo.categories
       ${where}
       ORDER BY sort_order, name
@@ -72,6 +80,32 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
     return r.recordset.map((row) => mapRow(row))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    if (/payment_plan_eligible/i.test(msg)) {
+      try {
+        const r = await pool.request().query<{
+          id: string
+          slug: string
+          name: string
+          parent_id: string | null
+          sort_order: number
+          is_active: number | boolean
+          icon_key: string | null
+          finance_eligible: number | boolean
+        }>(`
+          SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
+                 CAST(parent_id AS NVARCHAR(36)) AS parent_id,
+                 sort_order, is_active,
+                 LTRIM(RTRIM(icon_key)) AS icon_key,
+                 CONVERT(BIT, ISNULL(finance_eligible, 0)) AS finance_eligible
+          FROM dbo.categories
+          ${where}
+          ORDER BY sort_order, name
+        `)
+        return r.recordset.map((row) => mapRow({ ...row, payment_plan_eligible: 0 }))
+      } catch {
+        /* fall through */
+      }
+    }
     if (/finance_eligible/i.test(msg)) {
       try {
         const r = await pool.request().query<{
@@ -91,7 +125,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
           ${where}
           ORDER BY sort_order, name
         `)
-        return r.recordset.map((row) => mapRow({ ...row, finance_eligible: 0 }))
+        return r.recordset.map((row) => mapRow({ ...row, finance_eligible: 0, payment_plan_eligible: 0 }))
       } catch {
         /* fall through */
       }
@@ -115,7 +149,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
           ${where}
           ORDER BY sort_order, name
         `)
-        return r.recordset.map((row) => mapRow({ ...row, icon_key: null, finance_eligible: 0 }))
+        return r.recordset.map((row) => mapRow({ ...row, icon_key: null, finance_eligible: 0, payment_plan_eligible: 0 }))
       } catch {
         /* fall through */
       }
@@ -138,7 +172,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       ${where}
       ORDER BY sort_order, name
     `)
-    return r.recordset.map((row) => mapRow({ ...row, icon_key: null, finance_eligible: 0 }))
+    return r.recordset.map((row) => mapRow({ ...row, icon_key: null, finance_eligible: 0, payment_plan_eligible: 0 }))
   } catch {
     const r = await pool.request().query<{ id: string; slug: string; name: string }>(`
       SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name
@@ -154,6 +188,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       isActive: true,
       iconKey: null,
       financeEligible: false,
+      paymentPlanEligible: false,
     }))
   }
 }
@@ -379,6 +414,7 @@ export async function updateCategory(
     isActive?: boolean
     iconKey?: string | null
     financeEligible?: boolean
+    paymentPlanEligible?: boolean
   },
 ): Promise<void> {
   const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k)
@@ -389,7 +425,8 @@ export async function updateCategory(
     !has('sortOrder') &&
     !has('isActive') &&
     !has('iconKey') &&
-    !has('financeEligible')
+    !has('financeEligible') &&
+    !has('paymentPlanEligible')
   ) {
     throw new Error('No fields to update')
   }
@@ -460,6 +497,19 @@ export async function updateCategory(
         const msg = e instanceof Error ? e.message : String(e)
         if (!/finance_eligible|Invalid column name/i.test(msg)) throw e
         throw new Error('Run database migration 066_categories_finance_eligible.sql to enable financing flags on categories.')
+      }
+    }
+    if (patch.paymentPlanEligible !== undefined) {
+      try {
+        await tx
+          .request()
+          .input('id', categoryId)
+          .input('pe', patch.paymentPlanEligible ? 1 : 0)
+          .query(`UPDATE dbo.categories SET payment_plan_eligible = @pe WHERE id = @id`)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (!/payment_plan_eligible|Invalid column name/i.test(msg)) throw e
+        throw new Error('Run database migration 082_categories_payment_plan_eligible.sql to enable payment plan flags on categories.')
       }
     }
     await tx.commit()

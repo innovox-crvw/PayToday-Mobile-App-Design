@@ -12,8 +12,7 @@ import {
   Typography,
 } from '@mui/material'
 import DeleteForeverOutlinedIcon from '@mui/icons-material/DeleteForeverOutlined'
-import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
-import { WalletSubheader } from '../wallet/WalletSubheader'
+import { AccountSectionHeader } from '../../components/profile/AccountSectionHeader'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
 import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
@@ -22,7 +21,7 @@ import { APP_DISPLAY_NAME } from '../../theme/branding'
 export function ProfileDeleteAccountPage() {
   const prefix = useStorePathPrefix()
   const navigate = useNavigate()
-  const profileHubPath = prefix ? `${prefix}/profile` : '/profile'
+  const personalPath = prefix ? `${prefix}/profile/personal` : '/profile/personal'
   const signInPath = `${prefix}/onboarding/login?returnTo=${encodeURIComponent(`${prefix}/profile`)}`
   const shopPath = prefix ? `${prefix}/shop` : '/shop'
 
@@ -75,12 +74,11 @@ export function ProfileDeleteAccountPage() {
   }
 
   return (
-    <ProfilePageShell>
-      <WalletSubheader title="Delete account" />
-      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-        Permanently remove your storefront profile, saved addresses, notifications, and linked wallet activity in this
-        app. Past orders stay in the store as guest history without your account link.
-      </Typography>
+    <Stack spacing={2.5}>
+      <AccountSectionHeader
+        title="Delete account"
+        description="Permanently remove your storefront profile, saved addresses, notifications, and linked wallet activity in this app. Past orders stay in the store as guest history without your account link."
+      />
 
       {loading ? (
         <Typography variant="body2" color="text.secondary">
@@ -153,7 +151,7 @@ export function ProfileDeleteAccountPage() {
           <Divider />
 
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }}>
-            <Button component={RouterLink} to={profileHubPath} variant="outlined" color="inherit" disabled={busy}>
+            <Button component={RouterLink} to={personalPath} variant="outlined" color="inherit" disabled={busy}>
               Cancel
             </Button>
             <Box sx={{ flex: 1 }} />
@@ -169,6 +167,6 @@ export function ProfileDeleteAccountPage() {
           </Stack>
         </>
       )}
-    </ProfilePageShell>
+    </Stack>
   )
 }

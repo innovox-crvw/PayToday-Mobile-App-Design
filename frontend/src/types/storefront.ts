@@ -9,6 +9,8 @@ export interface StoreCategoryDto {
   iconKey?: string | null
   /** When true (or an ancestor is true), product pages may show financing for variants at or above the store minimum (N$5,000). */
   financeEligible?: boolean
+  /** When true (or an ancestor is true), products may offer 3/6/12-month payment plans at checkout when price ≥ N$5,000. */
+  paymentPlanEligible?: boolean
 }
 
 export interface StorePromotionDto {
@@ -50,12 +52,27 @@ export interface StoreCheckoutPreview {
   requiresScheduledTime: boolean
 }
 
+/** `GET /api/cart?preview=1` — where to collect when using store pickup (one row per merchant). */
+export interface StorePickupStoreDto {
+  merchantId: number
+  storeName: string
+  addressSummary: string
+  lines: { productName: string; sku: string; quantity: number }[]
+}
+
 /** Populated on `GET /api/cart?preview=1` when the database cart is used. */
 export interface LiquorCheckoutPreview {
   hasAlcohol: boolean
   outsideLiquorSellingWindow: boolean
   /** When true, checkout must include a scheduled window (home or pickup) until liquor hours allow immediate fulfilment. */
   requiresDeliveryTime: boolean
+}
+
+/** `GET /api/cart?preview=1` — whether payment plan checkout is allowed for current lines + subtotal. */
+export interface CartPaymentPlanPreview {
+  eligible: boolean
+  minSubtotalCents: number
+  reason?: string
 }
 
 export interface CartTotalsPreview {

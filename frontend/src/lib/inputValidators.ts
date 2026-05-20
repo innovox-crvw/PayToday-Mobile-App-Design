@@ -120,8 +120,37 @@ export function parseNonNegativeInt(raw: unknown, field: string): FieldParseResu
   return { ok: true, value: n }
 }
 
+/** Parse a rand amount from admin UI (e.g. "199" or "199.50") to integer cents. */
+export function parseNadInputToCents(raw: unknown, field: string): FieldParseResult<number> {
+  const t =
+    typeof raw === 'string'
+      ? raw.trim()
+      : typeof raw === 'number' && Number.isFinite(raw)
+        ? String(raw)
+        : ''
+  if (!t) return { ok: false, message: 'Enter an amount in rand (e.g. 199.00)', field }
+  const n = Number(t.replace(',', '.'))
+  if (!Number.isFinite(n) || n < 0) {
+    return { ok: false, message: 'Enter a valid amount in rand (e.g. 199.00)', field }
+  }
+  const cents = Math.round(n * 100)
+  if (!Number.isInteger(cents) || cents < 0) {
+    return { ok: false, message: 'Enter a valid amount in rand (e.g. 199.00)', field }
+  }
+  return { ok: true, value: cents }
+}
+
+export function parseOptionalNadInputToCents(raw: unknown, field: string): FieldParseResult<number | null> {
+  const t = typeof raw === 'string' ? raw.trim() : ''
+  if (!t) return { ok: true, value: null }
+  const r = parseNadInputToCents(t, field)
+  if (!r.ok) return r
+  return { ok: true, value: r.value }
+}
+
+/** @deprecated Prefer parseNadInputToCents — admin price fields use rand, not cents. */
 export function parseNonNegativeIntCents(raw: unknown, field: string): FieldParseResult<number> {
-  return parseNonNegativeInt(raw, field)
+  return parseNadInputToCents(raw, field)
 }
 
 const DISPLAY_NAME_MAX = 200

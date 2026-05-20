@@ -14,6 +14,7 @@ import { shippingCentsForDelivery, taxCentsForSubtotal } from '../../services/sh
 import { sessionIsAdultForLiquor } from '../../services/liquorAgeService.js'
 import { variantIsAgeRestrictedForLiquorGate } from '../../services/ageRestrictedCategoryService.js'
 import { getLiquorCheckoutPreview, getStoreCheckoutPreview } from '../../services/merchantHoursService.js'
+import { getCartStorePickupStores } from '../../services/cartPickupStoresService.js'
 import {
   getHomeDeliveryAreaById,
   homeDeliveryFlatFeeCents,
@@ -21,8 +22,9 @@ import {
   shippingCentsForArea,
   syntheticDemoHomeAreaFromRef,
 } from '../../repos/homeDeliveryRepo.js'
+import { evaluateCartPaymentPlanEligibility } from '../../lib/categoryPaymentPlanEligibility.js'
+import { listCategories } from '../../repos/categoriesRepo.js'
 
-import { previewDiscountCode } from '../../services/discountService.js'
 
 export const cartRouter = Router()
 cartRouter.use(optionalAuth)
@@ -187,13 +189,7 @@ cartRouter.get('/', async (req, res) => {
   const wantPreview = req.query.preview === '1' || req.query.preview === 'true'
   const homeDeliveryAreaId =
     typeof req.query.homeDeliveryAreaId === 'string' ? req.query.homeDeliveryAreaId : undefined
-  const rawDiscountCode = typeof req.query.discountCode === 'string' ? req.query.discountCode.trim() : ''
-
   if (!pool) {
-    if (wantPreview && rawDiscountCode) {
-      res.status(400).json({ error: 'Promo preview requires an active cart database.' })
-      return
-    }
     const { sessionToken: st, cartId } = ensureMemoryCartSession(sessionToken)
     res.cookie(CART_COOKIE, st, cookieOpts())
     const items = getMemoryCartLines(st)
@@ -215,22 +211,6 @@ cartRouter.get('/', async (req, res) => {
   res.cookie(CART_COOKIE, newToken, cookieOpts())
   const items = await getCartLines(pool, cartId)
 
-  let discountCents = 0
-  let discountCodeApplied: string | undefined
-  if (wantPreview && rawDiscountCode) {
-    let subtotalCents = 0
-    for (const l of items) {
-      subtotalCents += l.unitPriceCents * l.quantity
-    }
-    const disc = await previewDiscountCode(pool, rawDiscountCode, subtotalCents)
-    if ('error' in disc) {
-      res.status(400).json({ error: disc.error })
-      return
-    }
-    discountCents = disc.discountCents
-    discountCodeApplied = disc.code
-  }
-
   let liquorExtra: {
     liquorCheckout: Awaited<ReturnType<typeof getLiquorCheckoutPreview>>
     storeCheckout: Awaited<ReturnType<typeof getStoreCheckoutPreview>>
@@ -249,15 +229,29 @@ cartRouter.get('/', async (req, res) => {
     }
   }
   const previewCore = wantPreview ? await buildTotalsPreviewCoreAsync(pool, items, homeDeliveryAreaId) : undefined
-  const totalsPreview = previewCore ? finalizePreview(previewCore, discountCents) : undefined
+  const totalsPreview = previewCore ? finalizePreview(previewCore, 0) : undefined
+  let paymentPlanPreview: ReturnType<typeof evaluateCartPaymentPlanEligibility> | undefined
+  if (wantPreview && previewCore) {
+    const categories = await listCategories(pool, { includeInactive: true })
+    paymentPlanPreview = evaluateCartPaymentPlanEligibility(items, categories, previewCore.subtotalCents)
+  }
+  let storePickupStores: Awaited<ReturnType<typeof getCartStorePickupStores>> | undefined
+  if (wantPreview && items.length > 0) {
+    try {
+      storePickupStores = await getCartStorePickupStores(pool, cartId)
+    } catch {
+      storePickupStores = []
+    }
+  }
   res.json({
     cartId,
     items,
     ...(wantPreview
       ? {
           totalsPreview,
-          discountCents: totalsPreview?.discountCents ?? 0,
-          ...(discountCodeApplied ? { discountCode: discountCodeApplied } : {}),
+          discountCents: 0,
+          paymentPlanPreview,
+          storePickupStores,
           ...liquorExtra,
         }
       : {}),

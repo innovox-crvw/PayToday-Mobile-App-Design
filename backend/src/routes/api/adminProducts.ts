@@ -24,6 +24,7 @@ import {
   lookupProductPayTodayMerchantId,
   normalizeInventoryPolicy,
   reorderProductImages,
+  type ProductTabContentFields,
   updateProductAdmin,
   updateProductImage,
   updateVariantAdmin,
@@ -45,6 +46,8 @@ import {
   parseOptionalCompareAtPriceCents,
   parseProductDescription,
   parseProductDescriptionNullable,
+  parseProductTabText,
+  parseProductTabTextNullable,
   parseProductName,
   parseProductSlug,
   parseSku,
@@ -52,6 +55,37 @@ import {
   parseVariantNameRequired,
   parseVariantOptionsArray,
 } from '../../lib/inputValidators.js'
+
+const TAB_FIELD_KEYS = [
+  'deliveryInformation',
+  'returnPolicy',
+  'warrantyInfo',
+  'whatsInTheBox',
+] as const
+
+function parseProductTabFieldsFromBody(
+  body: Record<string, unknown>,
+  mode: 'create' | 'patch',
+): { ok: true; fields: ProductTabContentFields } | { ok: false; error: string; field: string } {
+  const fields: ProductTabContentFields = {}
+  for (const key of TAB_FIELD_KEYS) {
+    if (mode === 'patch' && !Object.prototype.hasOwnProperty.call(body, key)) continue
+    if (mode === 'create' && !Object.prototype.hasOwnProperty.call(body, key)) continue
+    const parsed =
+      mode === 'patch'
+        ? parseProductTabTextNullable(body[key], key)
+        : parseProductTabText(body[key], key)
+    if (!parsed.ok) {
+      return { ok: false, error: parsed.message, field: parsed.field }
+    }
+    if (mode === 'patch') {
+      fields[key] = parsed.value
+    } else {
+      fields[key] = parsed.value
+    }
+  }
+  return { ok: true, fields }
+}
 
 const ZIP_DRY_RUN_SKU_IN_CHUNK = 120
 
@@ -342,6 +376,11 @@ adminProductsRouter.post('/', async (req, res) => {
   const slug = slugR.value
   const name = nameR.value
   const description = descR.value
+  const tabR = parseProductTabFieldsFromBody(req.body as Record<string, unknown>, 'create')
+  if (!tabR.ok) {
+    res.status(400).json({ error: tabR.error, field: tabR.field, code: 'validation_error' })
+    return
+  }
   const sku = skuR.value
   const variantName = variantR.value
   const priceCents = priceR.value
@@ -439,6 +478,7 @@ adminProductsRouter.post('/', async (req, res) => {
       packageHeightMm,
       grossWeightG,
       ...(payTodayMerchantId !== undefined ? { payTodayMerchantId } : {}),
+      ...tabR.fields,
     })
     res.status(201).json(ids)
   } catch (e) {
@@ -625,6 +665,12 @@ adminProductsRouter.patch('/:productId', async (req, res) => {
   if (Object.prototype.hasOwnProperty.call(body, 'containsAlcohol')) {
     patch.containsAlcohol = Boolean(body.containsAlcohol)
   }
+  const tabR = parseProductTabFieldsFromBody(body, 'patch')
+  if (!tabR.ok) {
+    res.status(400).json({ error: tabR.error, field: tabR.field, code: 'validation_error' })
+    return
+  }
+  Object.assign(patch, tabR.fields)
   try {
     await updateProductAdmin(pool, productId, patch)
     res.json({ ok: true })

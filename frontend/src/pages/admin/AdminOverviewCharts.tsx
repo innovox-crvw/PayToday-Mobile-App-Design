@@ -41,6 +41,8 @@ export type AdminOverviewDto = {
   unitsByCategory: { categoryName: string; units: number }[]
   topProductsByRevenue: { productName: string; revenueCents: number }[]
   returnCasesByStatus: { status: string; count: number }[]
+  disputesByStatus?: { status: string; count: number }[]
+  disputesOpenedByDay?: { day: string; count: number }[]
 }
 
 function pastDaysIso(n: number): string[] {
@@ -163,6 +165,21 @@ export function AdminOverviewCharts({ data, loading, error }: Props) {
     name: r.status.replace(/_/g, ' '),
     count: r.count,
   }))
+
+  const disputesPie = (data.disputesByStatus ?? []).map((r) => ({
+    name: r.status.replace(/_/g, ' '),
+    value: r.count,
+  }))
+  const disputesDayMap = new Map((data.disputesOpenedByDay ?? []).map((r) => [r.day.slice(0, 10), r.count]))
+  const disputesSeries = pastDaysIso(14).map((day) => ({
+    day,
+    label: day.slice(5),
+    count: disputesDayMap.get(day) ?? 0,
+  }))
+  const openDisputeCount = (data.disputesByStatus ?? [])
+    .filter((r) => r.status === 'open' || r.status === 'in_review')
+    .reduce((s, r) => s + r.count, 0)
+  const disputes14d = disputesSeries.reduce((s, r) => s + r.count, 0)
 
   return (
     <Stack spacing={3} sx={{ maxWidth: 1200 }}>
@@ -326,6 +343,65 @@ export function AdminOverviewCharts({ data, loading, error }: Props) {
           </Grid>
         ) : null}
       </Grid>
+
+      {(data.disputesByStatus?.length ?? 0) > 0 ? (
+        <>
+          <Typography variant="subtitle1" fontWeight={800} sx={{ pt: 1 }}>
+            Order disputes
+          </Typography>
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2,
+              gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))' },
+            }}
+          >
+            <KpiCard label="Open + in review" value={String(openDisputeCount)} sub="Needs staff attention" />
+            <KpiCard label="Opened (14 days)" value={String(disputes14d)} sub="New dispute cases" />
+            <KpiCard
+              label="Total tracked"
+              value={String(disputesPie.reduce((s, r) => s + r.value, 0))}
+              sub="All statuses in database"
+            />
+          </Box>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12, md: 5 }}>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, height: 320 }}>
+                <Typography variant="subtitle2" fontWeight={800} gutterBottom>
+                  Disputes by status
+                </Typography>
+                <ResponsiveContainer width="100%" height="85%">
+                  <PieChart>
+                    <Pie data={disputesPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
+                      {disputesPie.map((_, i) => (
+                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </Paper>
+            </Grid>
+            <Grid size={{ xs: 12, md: 7 }}>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, height: 320 }}>
+                <Typography variant="subtitle2" fontWeight={800} gutterBottom>
+                  Disputes opened (14 days)
+                </Typography>
+                <ResponsiveContainer width="100%" height="85%">
+                  <BarChart data={disputesSeries} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={36} />
+                    <Tooltip formatter={(v: number) => [v, 'Opened']} labelFormatter={(_, p) => (p?.[0]?.payload?.day as string) ?? ''} />
+                    <Bar dataKey="count" name="Opened" fill="#D97706" barSize={14} radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Paper>
+            </Grid>
+          </Grid>
+        </>
+      ) : null}
     </Stack>
   )
 }

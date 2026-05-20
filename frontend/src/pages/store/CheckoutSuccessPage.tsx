@@ -16,6 +16,7 @@ export function CheckoutSuccessPage() {
   const [sp] = useSearchParams()
   const { pathname } = useLocation()
   const orderId = sp.get('orderId') ?? ''
+  const onPaymentPlan = sp.get('paymentPlan') === '1'
   const awaitingWebhook = sp.get('awaitingWebhook') === '1'
   const uncertain = sp.get('uncertain') === '1'
   const guestEmail = sp.get('email') ?? ''
@@ -65,8 +66,18 @@ export function CheckoutSuccessPage() {
   return (
     <Stack spacing={2} alignItems="center" sx={{ py: 4, textAlign: 'center', maxWidth: 480, mx: 'auto', px: 2 }}>
       <Typography variant="h5" fontWeight={800}>
-        {paid ? 'Payment confirmed' : `Thanks — we received your return from ${APP_DISPLAY_NAME}`}
+        {onPaymentPlan
+          ? 'Order placed on a payment plan'
+          : paid
+            ? 'Payment confirmed'
+            : `Thanks — we received your return from ${APP_DISPLAY_NAME}`}
       </Typography>
+      {onPaymentPlan ? (
+        <Typography variant="body2" color="text.secondary">
+          No payment was taken at checkout. Open your order to pay each instalment with your PayToday Wallet when you are ready.
+          When all instalments are paid, the order is marked paid.
+        </Typography>
+      ) : null}
       {uncertain ? (
         <Typography variant="body2" color="text.secondary">
           The payment result was unclear from the redirect. We are confirming with {APP_DISPLAY_NAME} in the background — stay on

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Alert,
   Box,
-  Button,
   Card,
   CardContent,
   FormControl,
@@ -19,13 +18,11 @@ import {
 } from '@mui/material'
 import NotificationsActiveOutlinedIcon from '@mui/icons-material/NotificationsActiveOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
-import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
-import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
-import { WalletSubheader } from '../wallet/WalletSubheader'
+import { AccountSectionHeader } from '../../components/profile/AccountSectionHeader'
 import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
@@ -180,24 +177,12 @@ export function ProfileSettingsPage() {
     window.setTimeout(() => setPrefsMsg(null), 2500)
   }
 
-  async function signOut() {
-    try {
-      await fetchCsrfToken()
-      await apiFetch('/api/auth/logout', { method: 'POST' })
-      window.dispatchEvent(new Event('pt-cart-updated'))
-      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
-      await refreshAuth()
-    } catch {
-      await refreshAuth()
-    }
-  }
-
   return (
-    <ProfilePageShell>
-      <WalletSubheader title="Settings" />
-      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-        Control how we reach you, how the app feels on this device, and quick links when something looks wrong.
-      </Typography>
+    <Stack spacing={2.5}>
+      <AccountSectionHeader
+        title="Settings"
+        description="Control how we reach you, how the app feels on this device, and quick links when something looks wrong."
+      />
 
       {!authLoading && !user ? (
         <Alert severity="info" sx={{ borderRadius: 2 }}>
@@ -342,31 +327,6 @@ export function ProfileSettingsPage() {
         <CardContent>
           <Stack spacing={2}>
             <Stack direction="row" alignItems="center" spacing={1}>
-              <LogoutOutlinedIcon color="primary" />
-              <Typography variant="subtitle1" fontWeight={800}>
-                Session
-              </Typography>
-            </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Sign out here. Device settings stay until you clear site data.
-            </Typography>
-            <Button
-              variant="outlined"
-              color="inherit"
-              disabled={!user}
-              onClick={() => void signOut()}
-              sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
-            >
-              Sign out
-            </Button>
-          </Stack>
-        </CardContent>
-      </Card>
-
-      <Card variant="outlined" sx={{ borderRadius: 3 }}>
-        <CardContent>
-          <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
               <InfoOutlinedIcon color="primary" />
               <Typography variant="subtitle1" fontWeight={800}>
                 About & links
@@ -405,6 +365,6 @@ export function ProfileSettingsPage() {
           </Stack>
         </CardContent>
       </Card>
-    </ProfilePageShell>
+    </Stack>
   )
 }

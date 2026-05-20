@@ -24,13 +24,11 @@ import {
   FormControlLabel,
   FormLabel,
   IconButton,
-  InputLabel,
   LinearProgress,
   MenuItem,
   Paper,
   Radio,
   RadioGroup,
-  Select,
   Skeleton,
   Stack,
   Step,
@@ -49,17 +47,40 @@ import {
   clearCheckoutIdempotencyKey,
 } from '../../lib/checkoutIdempotency'
 import { CHECKOUT_DEMO_ADDRESS_PRESETS } from '../../lib/checkoutDemoAddressPresets'
-import { buildLiquorSchedulePresets, buildLiquorSchedulePresetsFromAreaSlots } from '../../lib/checkoutLiquorTimePresets'
+import {
+  buildLiquorSchedulePresetsFromAreaSlots,
+  buildLiquorSchedulePresetsFromLiquorHours,
+} from '../../lib/checkoutLiquorTimePresets'
+import { isWindowInsideLiquorHours, windhoekLocalInputToIso } from '../../lib/windhoekTime'
 import { notifyCatalogInventoryMaybeChanged } from '../../lib/catalogEvents'
 import { apiUrl } from '../../lib/apiOrigin'
 import { formatMoney } from '../../lib/money'
+import { CheckoutWalletExtras } from '../../components/wallet/CheckoutWalletExtras'
+import { RecurringPaymentCallout, type RecurringTermMonths } from '../../components/store/RecurringPaymentCallout'
+import { splitTotalIntoInstalmentAmounts } from '../../lib/paymentPlanPreview'
 import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
-import type { StorefrontConfig, CartTotalsPreview, LiquorCheckoutPreview, StoreCheckoutPreview } from '../../types/storefront'
-import { buildStoreSchedulePresets, clearCheckoutSchedulePreset, readCheckoutSchedulePreset } from '../../lib/storeHours'
+import type {
+  StorefrontConfig,
+  CartTotalsPreview,
+  CartPaymentPlanPreview,
+  LiquorCheckoutPreview,
+  StoreCheckoutPreview,
+  StorePickupStoreDto,
+} from '../../types/storefront'
+import { StorePickupStoresPanel } from '../../components/checkout/StorePickupStoresPanel'
+import { resolveCheckoutSellingHoursMerchantId } from '../../lib/checkoutSellingHoursMerchant'
+import {
+  buildStoreSchedulePresets,
+  clearCheckoutSchedulePreset,
+  readCheckoutSchedulePreset,
+} from '../../lib/storeHours'
 import { useStoreHours } from '../../hooks/useStoreHours'
 import { parseEmailString } from '../../lib/inputValidators'
 import { AddressMapPicker, type MapZoneMeta } from '../../components/checkout/AddressMapPicker'
+import { AvailableTimeWindowPicker } from '../../components/checkout/AvailableTimeWindowPicker'
+import { CheckoutSellingTimesSection } from '../../components/checkout/CheckoutSellingTimesSection'
 import { DeliveryTimeSlotGrid } from '../../components/checkout/DeliveryTimeSlotGrid'
+import type { LiquorTimePreset } from '../../lib/checkoutLiquorTimePresets'
 import type { YangoDemoSchedulePayload } from '../../components/checkout/checkoutScheduleTypes'
 import {
   zoneCenter,
@@ -119,7 +140,7 @@ const checkoutPaymentMarkSx = {
   display: 'block',
 }
 
-type CheckoutPaymentMethod = 'paytoday' | 'instant_pay' | 'demo_wallet'
+type CheckoutPaymentMethod = 'paytoday' | 'instant_pay' | 'demo_wallet' | 'payment_plan'
 
 type CheckoutDeliveryMethod = 'home' | 'yango_delivery' | 'store_pickup' | 'deposit_box'
 
@@ -129,6 +150,14 @@ function isCheckoutHomeLike(d: CheckoutDeliveryMethod): boolean {
 
 function isCheckoutPickupLike(d: CheckoutDeliveryMethod): boolean {
   return d === 'store_pickup' || d === 'deposit_box'
+}
+
+function isCheckoutStorePickup(d: CheckoutDeliveryMethod): boolean {
+  return d === 'store_pickup'
+}
+
+function isCheckoutDepositBox(d: CheckoutDeliveryMethod): boolean {
+  return d === 'deposit_box'
 }
 
 function checkoutUsesYangoScheduleGrid(d: CheckoutDeliveryMethod, yangoEnabled: boolean | undefined): boolean {
@@ -174,24 +203,36 @@ export function CheckoutPage() {
   const [storefrontConfigReady, setStorefrontConfigReady] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<CheckoutPaymentMethod>('paytoday')
+  const [recurringTermMonths, setRecurringTermMonths] = useState<RecurringTermMonths>(6)
   const [walletBalanceCents, setWalletBalanceCents] = useState<number | null>(null)
   const [walletDemoAvailable, setWalletDemoAvailable] = useState(true)
+  const [walletSettings, setWalletSettings] = useState<{
+    roundUpEnabled: boolean
+    roundUpIncrementCents: number
+    savingsBalanceCents: number
+    walletExtrasAvailable: boolean
+  } | null>(null)
+  const [applyRoundUp, setApplyRoundUp] = useState(true)
+  const [splitBillId, setSplitBillId] = useState<string | null>(null)
+  const [payerShareCents, setPayerShareCents] = useState<number | null>(null)
   const [deliveryScheduledFor, setDeliveryScheduledFor] = useState('')
   const [homeWinStart, setHomeWinStart] = useState('')
   const [homeWinEnd, setHomeWinEnd] = useState('')
   const [homeWinLabel, setHomeWinLabel] = useState('')
   const [totalsPreview, setTotalsPreview] = useState<CartTotalsPreview | null>(null)
+  const [paymentPlanPreview, setPaymentPlanPreview] = useState<CartPaymentPlanPreview | null>(null)
   const [totalsError, setTotalsError] = useState<string | null>(null)
   const [yangoDemoCourierCents, setYangoDemoCourierCents] = useState<number | null>(null)
-  const [promoCode, setPromoCode] = useState('')
-  const [promoApplied, setPromoApplied] = useState<{ code: string; discountCents: number } | null>(null)
-  const [promoErr, setPromoErr] = useState<string | null>(null)
-  const [promoLoading, setPromoLoading] = useState(false)
   const [cartContainsAlcohol, setCartContainsAlcohol] = useState(false)
   const [checkoutCartLines, setCheckoutCartLines] = useState<CheckoutCartLine[]>([])
   const [liquorCheckout, setLiquorCheckout] = useState<LiquorCheckoutPreview | null>(null)
   const [storeCheckout, setStoreCheckout] = useState<StoreCheckoutPreview | null>(null)
-  const { status: storeHoursStatus } = useStoreHours()
+  const [storePickupStores, setStorePickupStores] = useState<StorePickupStoreDto[]>([])
+  const sellingHoursMerchantId = useMemo(
+    () => resolveCheckoutSellingHoursMerchantId(storePickupStores, cartContainsAlcohol),
+    [storePickupStores, cartContainsAlcohol],
+  )
+  const { status: storeHoursStatus } = useStoreHours(sellingHoursMerchantId)
   const [deliveryPreferences, setDeliveryPreferences] = useState('')
   const [homeDeliveryZones, setHomeDeliveryZones] = useState<YangoDemoZone[]>(YANGO_DEMO_ZONES)
   const [cartMutateNonce, setCartMutateNonce] = useState(0)
@@ -365,6 +406,51 @@ export function CheckoutPage() {
   }, [user?.sub])
 
   useEffect(() => {
+    if (!user?.sub) {
+      setWalletSettings(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/wallet/settings')
+        if (cancelled || !res.ok) return
+        setWalletSettings((await res.json()) as NonNullable<typeof walletSettings>)
+      } catch {
+        /* optional */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [user?.sub])
+
+  useEffect(() => {
+    if (paymentMethod !== 'demo_wallet') {
+      setSplitBillId(null)
+      setPayerShareCents(null)
+    }
+  }, [paymentMethod])
+
+  useEffect(() => {
+    const onWalletUpdated = () => {
+      if (!user?.sub) return
+      void (async () => {
+        try {
+          const res = await apiFetch('/api/wallet/balance')
+          if (!res.ok) return
+          const data = (await res.json()) as { balanceCents?: number }
+          if (typeof data.balanceCents === 'number') setWalletBalanceCents(data.balanceCents)
+        } catch {
+          /* ignore */
+        }
+      })()
+    }
+    window.addEventListener('pt-wallet-updated', onWalletUpdated)
+    return () => window.removeEventListener('pt-wallet-updated', onWalletUpdated)
+  }, [user?.sub])
+
+  useEffect(() => {
     let cancelled = false
     void (async () => {
       setTotalsError(null)
@@ -374,21 +460,26 @@ export function CheckoutPage() {
         const res = await fetch(apiUrl(`/api/cart?${params.toString()}`), { credentials: 'include' })
         const data = await readResponseJson<{
           totalsPreview?: CartTotalsPreview
+          paymentPlanPreview?: CartPaymentPlanPreview
           items?: CheckoutCartLine[]
           lines?: Array<{ flags?: { alcohol?: boolean } }>
           liquorCheckout?: LiquorCheckoutPreview
           storeCheckout?: StoreCheckoutPreview
+          storePickupStores?: StorePickupStoreDto[]
         }>(res)
         if (cancelled) return
         if (!res.ok) {
           setTotalsPreview(null)
+          setPaymentPlanPreview(null)
           setLiquorCheckout(null)
           setStoreCheckout(null)
+          setStorePickupStores([])
           setCheckoutCartLines([])
           setTotalsError('Could not load cart totals.')
           return
         }
         setTotalsPreview(data.totalsPreview ?? null)
+        setPaymentPlanPreview(data.paymentPlanPreview ?? null)
         const items = data.items ?? []
         setCheckoutCartLines(items)
         const legacyLines = data.lines ?? []
@@ -398,11 +489,14 @@ export function CheckoutPage() {
         )
         setLiquorCheckout(data.liquorCheckout ?? null)
         setStoreCheckout(data.storeCheckout ?? null)
+        setStorePickupStores(Array.isArray(data.storePickupStores) ? data.storePickupStores : [])
       } catch {
         if (!cancelled) {
           setTotalsPreview(null)
+          setPaymentPlanPreview(null)
           setLiquorCheckout(null)
           setStoreCheckout(null)
+          setStorePickupStores([])
           setCheckoutCartLines([])
           setTotalsError('Could not load cart totals.')
         }
@@ -443,7 +537,11 @@ export function CheckoutPage() {
     return Boolean(newLine1.trim() && newSuburb.trim() && newCity.trim())
   }, [delivery, signedIn, addressMode, shippingAddressId, newLine1, newSuburb, newCity])
 
-  const pickupStepComplete = useMemo(() => Boolean(locationId), [locationId])
+  const pickupStepComplete = useMemo(() => {
+    if (isCheckoutStorePickup(delivery)) return storePickupStores.length > 0
+    if (isCheckoutDepositBox(delivery)) return Boolean(locationId)
+    return true
+  }, [delivery, locationId, storePickupStores])
 
   const focusSavedAddressLatLng = useMemo(() => {
     if (addressMode !== 'saved' || !shippingAddressId) return null
@@ -535,7 +633,18 @@ export function CheckoutPage() {
 
   const scheduleRequired = liquorScheduleRequired || storeScheduleRequired
 
+  const liquorHourRows = storeHoursStatus.liquorItems ?? []
+  const liquorGatingOn = Boolean(storefront?.liquorGatingEnabled)
+  const alcoholCartNeedsLiquorWindows =
+    cartContainsAlcohol && liquorGatingOn && liquorHourRows.length > 0 && scheduleRequired
+
   const liquorPresets = useMemo(() => {
+    if (alcoholCartNeedsLiquorWindows) {
+      return buildLiquorSchedulePresetsFromLiquorHours(liquorHourRows)
+    }
+    if (liquorScheduleRequired && liquorHourRows.length > 0) {
+      return buildLiquorSchedulePresetsFromLiquorHours(liquorHourRows)
+    }
     if (storeScheduleRequired && storeHoursStatus.items.length > 0) {
       return buildStoreSchedulePresets(storeHoursStatus.items).map((p) => ({
         id: `${p.startLocal}|${p.endLocal}`,
@@ -546,18 +655,57 @@ export function CheckoutPage() {
     }
     if (isCheckoutHomeLike(delivery)) {
       const slots = selectedDeliveryZone?.slots
-      if (slots?.length) return buildLiquorSchedulePresetsFromAreaSlots(slots)
+      if (slots?.length) {
+        return buildLiquorSchedulePresetsFromAreaSlots(
+          slots,
+          cartContainsAlcohol && liquorGatingOn && liquorHourRows.length > 0 ? liquorHourRows : undefined,
+        )
+      }
       return []
     }
-    return buildLiquorSchedulePresets()
-  }, [delivery, selectedDeliveryZone, storeScheduleRequired, storeHoursStatus.items])
+    if (liquorScheduleRequired && liquorHourRows.length > 0) {
+      return buildLiquorSchedulePresetsFromLiquorHours(liquorHourRows)
+    }
+    return []
+  }, [
+    delivery,
+    selectedDeliveryZone,
+    storeScheduleRequired,
+    liquorScheduleRequired,
+    alcoholCartNeedsLiquorWindows,
+    storeHoursStatus.items,
+    liquorHourRows,
+    cartContainsAlcohol,
+    liquorGatingOn,
+    scheduleRequired,
+  ])
 
   const selectedLiquorPresetId = useMemo(() => {
     const a = homeWinStart.trim()
     const b = homeWinEnd.trim()
     if (!a || !b) return ''
-    return liquorPresets.find((p) => p.startLocal === a && p.endLocal === b)?.id ?? ''
+    return (
+      liquorPresets.find(
+        (p) =>
+          (p.startLocal === a && p.endLocal === b) ||
+          (windhoekLocalInputToIso(p.startLocal) === windhoekLocalInputToIso(a) &&
+            windhoekLocalInputToIso(p.endLocal) === windhoekLocalInputToIso(b)),
+      )?.id ?? ''
+    )
   }, [homeWinStart, homeWinEnd, liquorPresets])
+
+  const applyLiquorPreset = useCallback(
+    (p: LiquorTimePreset, labelFallback: string) => {
+      setHomeWinStart(p.startLocal)
+      setHomeWinEnd(p.endLocal)
+      setHomeWinLabel((prev) => (prev.trim() ? prev : labelFallback))
+    },
+    [],
+  )
+
+  const alcoholScheduleOutsideHours = Boolean(
+    liquorScheduleRequired && cartContainsAlcohol && liquorCheckout?.outsideLiquorSellingWindow,
+  )
 
   const minorDepositLockerAlcoholBlocked = useMemo(
     () =>
@@ -590,8 +738,10 @@ export function CheckoutPage() {
       }
       if (step === 1) {
         if (minorDepositLockerAlcoholBlocked) return MINOR_LOCKER_ALCOHOL_MSG
-        if (isCheckoutPickupLike(delivery) && !pickupStepComplete)
-          return 'Choose a store or locker location in step 1 (How we deliver), then continue.'
+        if (isCheckoutDepositBox(delivery) && !pickupStepComplete)
+          return 'Choose a deposit locker in step 1 (How we deliver), then continue.'
+        if (isCheckoutStorePickup(delivery) && !pickupStepComplete)
+          return 'Your cart has no pickup stores yet. Add items or refresh the page.'
         if (isCheckoutHomeLike(delivery) && signedIn && !addressStepComplete) {
           return 'Choose a saved address or enter street, suburb, and city.'
         }
@@ -732,6 +882,17 @@ export function CheckoutPage() {
         )
         return
       }
+      if (
+        cartContainsAlcohol &&
+        liquorGatingOn &&
+        liquorHourRows.length > 0 &&
+        !isWindowInsideLiquorHours(liquorHourRows, homeWinStart, homeWinEnd)
+      ) {
+        setMsg(
+          'The selected time is outside permitted alcohol sale hours. On the Time window step, check Alcohol selling times and pick a suggested time from the list.',
+        )
+        return
+      }
     }
     setSubmitting(true)
     try {
@@ -745,7 +906,7 @@ export function CheckoutPage() {
         },
         body: JSON.stringify({
           deliveryMethod: delivery,
-          depositLocationId: isCheckoutPickupLike(delivery) ? locationId : null,
+          depositLocationId: isCheckoutDepositBox(delivery) ? locationId : null,
           shippingAddressId: isCheckoutHomeLike(delivery) && user?.sub ? resolvedShippingId || null : null,
           guestEmail: !user?.sub ? guestEmail.trim() || null : null,
           guestFirstName: guestParts.first || null,
@@ -753,17 +914,16 @@ export function CheckoutPage() {
           guestPhone: guestPhone.trim() || null,
           paymentMethod: user?.sub ? paymentMethod : 'paytoday',
           ...(deliveryPreferences.trim() ? { deliveryPreferences: deliveryPreferences.trim() } : {}),
-          ...(promoApplied ? { discountCode: promoApplied.code } : {}),
           ...(deliveryScheduledFor.trim() || (homeWinStart.trim() && homeWinEnd.trim())
             ? {
                 ...(deliveryScheduledFor.trim()
-                  ? { deliveryScheduledFor: new Date(deliveryScheduledFor).toISOString() }
+                  ? { deliveryScheduledFor: windhoekLocalInputToIso(deliveryScheduledFor.trim()) }
                   : {}),
                 ...(homeWinStart.trim() && homeWinEnd.trim()
                   ? {
                       homeDeliveryWindow: {
-                        start: new Date(homeWinStart).toISOString(),
-                        end: new Date(homeWinEnd).toISOString(),
+                        start: windhoekLocalInputToIso(homeWinStart.trim()),
+                        end: windhoekLocalInputToIso(homeWinEnd.trim()),
                         label: homeWinLabel.trim() || null,
                       },
                     }
@@ -771,6 +931,9 @@ export function CheckoutPage() {
               }
             : {}),
           ...(isCheckoutHomeLike(delivery) && homeDeliveryAreaId ? { homeDeliveryAreaId } : {}),
+          ...(paymentMethod === 'demo_wallet' && splitBillId ? { splitBillId } : {}),
+          ...(paymentMethod === 'demo_wallet' && applyRoundUp ? { applyRoundUp: true } : {}),
+          ...(paymentMethod === 'payment_plan' ? { recurringTermMonths } : {}),
         }),
       })
       const data = (await res.json()) as {
@@ -783,6 +946,8 @@ export function CheckoutPage() {
         taxCents?: number
         paidWithDemoWallet?: boolean
         alreadyPaid?: boolean
+        paymentPlan?: boolean
+        walletBalanceAfterCents?: number
         code?: string
       }
       if (!res.ok) {
@@ -794,12 +959,18 @@ export function CheckoutPage() {
       clearCheckoutIdempotencyKey()
       window.dispatchEvent(new Event('pt-cart-updated'))
       notifyCatalogInventoryMaybeChanged()
+      if (typeof data.walletBalanceAfterCents === 'number') {
+        setWalletBalanceCents(data.walletBalanceAfterCents)
+        window.dispatchEvent(new Event('pt-wallet-updated'))
+      }
       if (data.redirectUrl) {
         window.location.href = data.redirectUrl
         return
       }
-      if (data.orderId && (data.paidWithDemoWallet || data.alreadyPaid)) {
-        navigate(`${pathPrefix}/checkout/success?orderId=${encodeURIComponent(data.orderId)}`)
+      if (data.orderId && (data.paidWithDemoWallet || data.alreadyPaid || data.paymentPlan)) {
+        const q = new URLSearchParams({ orderId: data.orderId })
+        if (data.paymentPlan) q.set('paymentPlan', '1')
+        navigate(`${pathPrefix}/checkout/success?${q.toString()}`)
         return
       }
       setMsg(`Order ${data.orderId ?? ''} created.`)
@@ -816,6 +987,25 @@ export function CheckoutPage() {
       : isCheckoutHomeLike(delivery)
         ? totalsPreview.totalHomeCents
         : totalsPreview.totalPickupCents
+
+  const showRecurringPlanPreview = Boolean(paymentPlanPreview?.eligible)
+
+  useEffect(() => {
+    if (!showRecurringPlanPreview && paymentMethod === 'payment_plan') {
+      setPaymentMethod('paytoday')
+    }
+  }, [showRecurringPlanPreview, paymentMethod])
+
+  const paymentPlanSchedule = useMemo(() => {
+    if (!showRecurringPlanPreview || totalCents == null || totalCents < 1) return null
+    const amounts = splitTotalIntoInstalmentAmounts(totalCents, recurringTermMonths)
+    return {
+      term: recurringTermMonths,
+      amounts,
+      perInst: amounts[0] ?? 0,
+      allSame: amounts.every((a) => a === amounts[0]),
+    }
+  }, [showRecurringPlanPreview, totalCents, recurringTermMonths])
 
   const showFreeShippingProgress =
     isCheckoutHomeLike(delivery) &&
@@ -982,7 +1172,7 @@ export function CheckoutPage() {
                 Store pickup or a deposit locker near you.
               </Typography>
               <Collapse in={collectSelected} timeout="auto">
-                <Stack spacing={2} sx={{ mt: 2, width: 1, minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
+                <Stack spacing={1.25} sx={{ mt: 1.25, width: 1, minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
                   <ToggleButtonGroup
                     exclusive
                     fullWidth
@@ -1005,29 +1195,34 @@ export function CheckoutPage() {
                       <RouterLink to={`${pathPrefix}/profile`}>My account</RouterLink>.
                     </Alert>
                   ) : null}
-                  <TextField
-                    select
-                    label={delivery === 'deposit_box' ? 'Locker location' : 'Store location'}
-                    value={locationId}
-                    onChange={(e) => setLocationId(e.target.value)}
-                    fullWidth
-                    sx={fieldRadiusSx}
-                    error={!pickupStepComplete}
-                    helperText={
-                      !pickupStepComplete
-                        ? delivery === 'deposit_box'
-                          ? 'Select a deposit location to continue.'
-                          : 'Select a store to continue.'
-                        : ' '
-                    }
-                  >
-                    {locations.map((l) => (
-                      <MenuItem key={l.id} value={l.id}>
-                        {l.name}
-                        {l.addressSummary ? ` — ${l.addressSummary}` : ''}
-                      </MenuItem>
-                    ))}
-                  </TextField>
+                  {isCheckoutStorePickup(delivery) ? (
+                    <Box
+                      sx={{
+                        pt: 0.5,
+                        ...(pickupStepComplete ? {} : { outline: 1, outlineColor: 'warning.main', borderRadius: 1.5, px: 0.5 }),
+                      }}
+                    >
+                      <StorePickupStoresPanel stores={storePickupStores} variant="minimal" />
+                    </Box>
+                  ) : (
+                    <TextField
+                      select
+                      label="Locker location"
+                      value={locationId}
+                      onChange={(e) => setLocationId(e.target.value)}
+                      fullWidth
+                      sx={fieldRadiusSx}
+                      error={!pickupStepComplete}
+                      helperText={!pickupStepComplete ? 'Select a deposit location to continue.' : ' '}
+                    >
+                      {locations.map((l) => (
+                        <MenuItem key={l.id} value={l.id}>
+                          {l.name}
+                          {l.addressSummary ? ` — ${l.addressSummary}` : ''}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  )}
                 </Stack>
               </Collapse>
             </Box>
@@ -1212,7 +1407,25 @@ export function CheckoutPage() {
   )
 
   const renderStep1 = () => {
-    if (isCheckoutPickupLike(delivery)) {
+    if (isCheckoutStorePickup(delivery)) {
+      return (
+        <Card variant="outlined" sx={cardSx}>
+          <CardContent sx={{ py: 1.5, px: 2 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 1 }}>
+              <Typography variant="body2" fontWeight={800}>
+                Store pickup
+                {storePickupStores.length > 1 ? ` · ${storePickupStores.length} locations` : ''}
+              </Typography>
+              <Button variant="text" size="small" onClick={() => setActiveStep(0)} sx={{ flexShrink: 0, fontWeight: 700, minWidth: 0 }}>
+                Change
+              </Button>
+            </Stack>
+            <StorePickupStoresPanel stores={storePickupStores} variant="minimal" />
+          </CardContent>
+        </Card>
+      )
+    }
+    if (isCheckoutDepositBox(delivery)) {
       const picked = locations.find((l) => l.id === locationId)
       return (
         <Card variant="outlined" sx={cardSx}>
@@ -1221,10 +1434,10 @@ export function CheckoutPage() {
               <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="overline" color="text.secondary" fontWeight={700} sx={{ letterSpacing: 0.08 }}>
-                    {delivery === 'deposit_box' ? 'Collection locker' : 'Pickup store'}
+                    Collection locker
                   </Typography>
                   <Typography variant="h6" fontWeight={800} sx={{ mt: 0.5 }}>
-                    {picked?.name ?? 'Choose a location'}
+                    {picked?.name ?? 'Choose a locker'}
                   </Typography>
                   {picked?.addressSummary ? (
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -1233,7 +1446,7 @@ export function CheckoutPage() {
                   ) : null}
                   {!pickupStepComplete ? (
                     <Alert severity="info" sx={{ mt: 1.5, borderRadius: 2 }}>
-                      Go back to delivery and select a {delivery === 'deposit_box' ? 'locker' : 'store'} location.
+                      Go back to delivery and select a locker location.
                     </Alert>
                   ) : null}
                 </Box>
@@ -1283,100 +1496,69 @@ export function CheckoutPage() {
     )
   }
 
+  const showLiquorSellingTimesContext =
+    cartContainsAlcohol &&
+    liquorGatingOn &&
+    (liquorHourRows.length > 0 || storeHoursStatus.liquorConfigured)
+
+  const showStoreSellingTimesContext =
+    storeHoursStatus.configured &&
+    storeHoursStatus.items.length > 0 &&
+    (storeScheduleRequired || (showLiquorSellingTimesContext && storeHoursStatus.liquorConfigured))
+
+  const sellingTimesBlock =
+    showLiquorSellingTimesContext || showStoreSellingTimesContext ? (
+      <CheckoutSellingTimesSection
+        storeHours={storeHoursStatus}
+        liquorRows={liquorHourRows}
+        showLiquorContext={showLiquorSellingTimesContext}
+        showStoreContext={showStoreSellingTimesContext}
+      />
+    ) : null
+
   const renderStep2 = () => {
     if (isCheckoutPickupLike(delivery)) {
       if (!scheduleRequired) {
         return (
           <Card variant="outlined" sx={cardSx}>
-            <CardContent sx={{ py: 1.5, px: 2 }}>
-              <Typography variant="body1" fontWeight={700}>
-                No time slot needed for pickup
+            <CardContent sx={{ py: 1.25, px: 2 }}>
+              <Typography variant="body2" fontWeight={700}>
+                No time slot needed
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Continue to enter contact details and pay. You&apos;ll collect your order at the chosen location.
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.35 }}>
+                Continue to pay, then collect at your pickup store{storePickupStores.length > 1 ? 's' : ''}.
               </Typography>
             </CardContent>
           </Card>
         )
       }
       return (
-        <Card variant="outlined" sx={cardSx}>
-          <CardContent sx={{ py: 1.5, px: 2 }}>
-            <Stack spacing={2}>
-              <Typography variant="subtitle1" fontWeight={900}>
-                Preferred pickup time
-              </Typography>
-              <Alert severity="warning" sx={{ borderRadius: 2 }}>
-                Your cart includes alcohol. This order is being placed outside store hours, so please choose a preferred pickup
-                time below. The store will use this window to prepare your order; it must fall within permitted alcohol sale times.
-              </Alert>
-              <FormControl fullWidth size="small" sx={fieldRadiusSx}>
-                <InputLabel id="pickup-liquor-preset">Suggested times</InputLabel>
-                <Select
-                  labelId="pickup-liquor-preset"
-                  label="Suggested times"
-                  value={selectedLiquorPresetId}
-                  onChange={(e) => {
-                    const v = String(e.target.value)
-                    const p = liquorPresets.find((x) => x.id === v)
-                    if (p) {
-                      setHomeWinStart(p.startLocal)
-                      setHomeWinEnd(p.endLocal)
-                      if (!homeWinLabel.trim()) setHomeWinLabel('Preferred pickup window')
-                    }
-                  }}
-                >
-                  <MenuItem value="">
-                    <em>Choose a suggested window…</em>
-                  </MenuItem>
-                  {liquorPresets.map((p) => (
-                    <MenuItem key={p.id} value={p.id}>
-                      {p.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <Typography variant="caption" color="text.secondary">
-                Or set the start and end yourself (your device&apos;s local time). The server checks that the window falls within
-                permitted alcohol sale times for the store.
-              </Typography>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                <TextField
-                  label="Pickup window start"
-                  type="datetime-local"
-                  value={homeWinStart}
-                  onChange={(e) => setHomeWinStart(e.target.value)}
-                  fullWidth
-                  required
-                  error={!homeWinStart.trim()}
-                  helperText={!homeWinStart.trim() ? 'Required when ordering outside store hours.' : ' '}
-                  InputLabelProps={{ shrink: true }}
-                  sx={fieldRadiusSx}
-                />
-                <TextField
-                  label="Pickup window end"
-                  type="datetime-local"
-                  value={homeWinEnd}
-                  onChange={(e) => setHomeWinEnd(e.target.value)}
-                  fullWidth
-                  required
-                  error={!homeWinEnd.trim()}
-                  helperText={!homeWinEnd.trim() ? 'Required when ordering outside store hours.' : ' '}
-                  InputLabelProps={{ shrink: true }}
-                  sx={fieldRadiusSx}
-                />
-              </Stack>
-              <TextField
-                label="Note for the store (optional)"
-                value={homeWinLabel}
-                onChange={(e) => setHomeWinLabel(e.target.value)}
-                fullWidth
-                placeholder="e.g. After work"
-                sx={fieldRadiusSx}
+        <Stack spacing={2}>
+          {sellingTimesBlock}
+          <Card variant="outlined" sx={cardSx}>
+            <CardContent sx={{ py: 1.5, px: 2 }}>
+              <AvailableTimeWindowPicker
+                mode="pickup"
+                presets={liquorPresets}
+                selectedPresetId={selectedLiquorPresetId}
+                onSelectPreset={(p) => applyLiquorPreset(p, 'Preferred pickup window')}
+                homeWinStart={homeWinStart}
+                homeWinEnd={homeWinEnd}
+                homeWinLabel={homeWinLabel}
+                onHomeWinStartChange={setHomeWinStart}
+                onHomeWinEndChange={setHomeWinEnd}
+                onHomeWinLabelChange={setHomeWinLabel}
+                showAlcoholOutsideHoursMessage={alcoholScheduleOutsideHours}
+                storeClosedMessage={
+                  storeScheduleRequired && !alcoholScheduleOutsideHours
+                    ? 'The store is closed right now. Choose a pickup time from the suggested list below.'
+                    : null
+                }
+                fieldRadiusSx={fieldRadiusSx}
               />
-            </Stack>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </Stack>
       )
     }
     if (!signedIn) {
@@ -1393,86 +1575,76 @@ export function CheckoutPage() {
     if (storefrontConfigReady && checkoutUsesYangoScheduleGrid(delivery, storefront?.yangoEnabled)) {
       return (
         <Stack spacing={2}>
-          {scheduleRequired ? (
-            <Alert severity="warning" sx={{ borderRadius: 3 }}>
-              Your cart includes alcohol. This order is being placed outside store hours, so please choose a delivery slot that
-              falls within permitted hours so we can fulfil your order.
-            </Alert>
-          ) : null}
+          {sellingTimesBlock}
           <DeliveryTimeSlotGrid
             zone={selectedDeliveryZone}
             onScheduleChange={applyYangoDemoSchedule}
             cartContainsAlcohol={cartContainsAlcohol && Boolean(storefront?.liquorGatingEnabled)}
             outsideLiquorSellingWindow={Boolean(liquorCheckout?.outsideLiquorSellingWindow)}
+            liquorHourRows={
+              cartContainsAlcohol && liquorGatingOn && liquorHourRows.length > 0 ? liquorHourRows : undefined
+            }
           />
         </Stack>
       )
     }
+    if (scheduleRequired) {
+      return (
+        <Stack spacing={2}>
+          {sellingTimesBlock}
+          <Card variant="outlined" sx={cardSx}>
+            <CardContent sx={{ py: 1.5, px: 2 }}>
+              {!selectedDeliveryZone ? (
+                <Alert severity="info" sx={{ borderRadius: 2, mb: 2 }}>
+                  Place your delivery address and map pin inside a shaded delivery area (step 1) so we can show available delivery
+                  times for your address.
+                </Alert>
+              ) : null}
+              <AvailableTimeWindowPicker
+                mode="delivery"
+                presets={liquorPresets}
+                selectedPresetId={selectedLiquorPresetId}
+                onSelectPreset={(p) => applyLiquorPreset(p, 'Preferred delivery window')}
+                homeWinStart={homeWinStart}
+                homeWinEnd={homeWinEnd}
+                homeWinLabel={homeWinLabel}
+                onHomeWinStartChange={setHomeWinStart}
+                onHomeWinEndChange={setHomeWinEnd}
+                onHomeWinLabelChange={setHomeWinLabel}
+                showAlcoholOutsideHoursMessage={alcoholScheduleOutsideHours}
+                storeClosedMessage={
+                  storeScheduleRequired && !alcoholScheduleOutsideHours
+                    ? 'The store is closed right now. Choose a delivery time from the suggested list below.'
+                    : null
+                }
+                zoneHint={
+                  selectedDeliveryZone && liquorPresets.length > 0
+                    ? `Suggested times match ${selectedDeliveryZone.name} delivery windows (${selectedDeliveryZone.serviceDaysLabel || 'see area on map'}).`
+                    : selectedDeliveryZone
+                      ? `Enter a delivery window for ${selectedDeliveryZone.name}, or move your pin to an area with scheduled slots.`
+                      : null
+                }
+                presetSelectLabel={
+                  selectedDeliveryZone ? 'Suggested times for your area' : 'Suggested times'
+                }
+                fieldRadiusSx={fieldRadiusSx}
+              />
+            </CardContent>
+          </Card>
+        </Stack>
+      )
+    }
+
     return (
       <Card variant="outlined" sx={cardSx}>
         <CardContent sx={{ py: 1.5, px: 2 }}>
           <Stack spacing={2}>
             <Typography variant="subtitle1" fontWeight={900}>
-              {scheduleRequired ? 'Delivery time (required)' : 'Delivery scheduling (optional)'}
+              Delivery scheduling (optional)
             </Typography>
-            {scheduleRequired ? (
-              <Alert severity="warning" sx={{ borderRadius: 2 }}>
-                Your cart includes alcohol. This order is being placed outside store hours, so please choose a preferred delivery
-                window below (local time). It must fall within the store&apos;s permitted hours.
-              </Alert>
-            ) : null}
-            {!scheduleRequired ? (
-              <Typography variant="caption" color="text.secondary">
-                For scheduled home delivery, set a preferred time. Values use your device&apos;s local timezone.
-              </Typography>
-            ) : null}
-            {scheduleRequired && !selectedDeliveryZone ? (
-              <Alert severity="info" sx={{ borderRadius: 2 }}>
-                Place your delivery address and map pin inside a shaded delivery area (step 1) so we can show suggested times
-                that match that zone&apos;s hours.
-              </Alert>
-            ) : null}
-            {scheduleRequired && selectedDeliveryZone && liquorPresets.length === 0 ? (
-              <Alert severity="info" sx={{ borderRadius: 2 }}>
-                No quick-pick windows are available for this address yet. Enter your preferred window using the fields below, or
-                move the pin into a delivery area that has scheduled slots.
-              </Alert>
-            ) : null}
-            {scheduleRequired && selectedDeliveryZone && liquorPresets.length > 0 ? (
-              <Typography variant="caption" color="text.secondary">
-                Suggested times use {selectedDeliveryZone.name}&apos;s delivery windows for your address ({selectedDeliveryZone.serviceDaysLabel || 'see area on map'}).
-              </Typography>
-            ) : null}
-            {scheduleRequired ? (
-              <FormControl fullWidth size="small" sx={fieldRadiusSx} disabled={liquorPresets.length === 0}>
-                <InputLabel id="home-liquor-preset">
-                  {selectedDeliveryZone ? 'Suggested times for your area' : 'Suggested times'}
-                </InputLabel>
-                <Select
-                  labelId="home-liquor-preset"
-                  label={selectedDeliveryZone ? 'Suggested times for your area' : 'Suggested times'}
-                  value={liquorPresets.length === 0 ? '' : selectedLiquorPresetId}
-                  onChange={(e) => {
-                    const v = String(e.target.value)
-                    const p = liquorPresets.find((x) => x.id === v)
-                    if (p) {
-                      setHomeWinStart(p.startLocal)
-                      setHomeWinEnd(p.endLocal)
-                      if (!homeWinLabel.trim()) setHomeWinLabel('Preferred delivery window')
-                    }
-                  }}
-                >
-                  <MenuItem value="">
-                    <em>{liquorPresets.length === 0 ? 'No area presets — use fields below' : 'Choose a suggested window…'}</em>
-                  </MenuItem>
-                  {liquorPresets.map((p) => (
-                    <MenuItem key={p.id} value={p.id}>
-                      {p.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            ) : null}
+            <Typography variant="caption" color="text.secondary">
+              For scheduled home delivery, set a preferred time. Values use your device&apos;s local timezone.
+            </Typography>
             <TextField
               label="Prefer delivery on / after"
               type="datetime-local"
@@ -1489,13 +1661,6 @@ export function CheckoutPage() {
                 value={homeWinStart}
                 onChange={(e) => setHomeWinStart(e.target.value)}
                 fullWidth
-                required={scheduleRequired}
-                error={scheduleRequired && !homeWinStart.trim()}
-                helperText={
-                  scheduleRequired && !homeWinStart.trim()
-                    ? 'Required when ordering outside store hours.'
-                    : ' '
-                }
                 InputLabelProps={{ shrink: true }}
                 sx={fieldRadiusSx}
               />
@@ -1505,13 +1670,6 @@ export function CheckoutPage() {
                 value={homeWinEnd}
                 onChange={(e) => setHomeWinEnd(e.target.value)}
                 fullWidth
-                required={scheduleRequired}
-                error={scheduleRequired && !homeWinEnd.trim()}
-                helperText={
-                  scheduleRequired && !homeWinEnd.trim()
-                    ? 'Required when ordering outside store hours.'
-                    : ' '
-                }
                 InputLabelProps={{ shrink: true }}
                 sx={fieldRadiusSx}
               />
@@ -1603,6 +1761,19 @@ export function CheckoutPage() {
           </Stack>
         </CardContent>
       </Card>
+      {showRecurringPlanPreview ? (
+        <RecurringPaymentCallout
+          embeddedInCheckout={paymentMethod === 'payment_plan'}
+          currency={totalsPreview?.currency}
+          totalCents={totalCents}
+          term={recurringTermMonths}
+          onTermChange={setRecurringTermMonths}
+        />
+      ) : paymentPlanPreview?.reason ? (
+        <Alert severity="info" sx={{ borderRadius: 2 }}>
+          {paymentPlanPreview.reason}
+        </Alert>
+      ) : null}
       {signedIn ? (
         <Card variant="outlined" sx={cardSx}>
           <CardContent sx={{ py: 1.5, px: 2 }}>
@@ -1649,6 +1820,27 @@ export function CheckoutPage() {
                     </Stack>
                   }
                 />
+                {showRecurringPlanPreview ? (
+                  <FormControlLabel
+                    value="payment_plan"
+                    control={<Radio />}
+                    disabled={submitting}
+                    label={
+                      <Stack spacing={0.25}>
+                        <Typography component="span" fontWeight={700}>
+                          Payment plan — {recurringTermMonths} months
+                          {paymentPlanSchedule
+                            ? ` · ${paymentPlanSchedule.allSame ? formatMoney(paymentPlanSchedule.perInst, totalsPreview?.currency ?? 'NAD') : `${recurringTermMonths} instalments`} / mo`
+                            : ''}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" component="span">
+                          Place order only — no payment today. Pay instalments from {APP_WALLET_DISPLAY_NAME} on your order
+                          page.
+                        </Typography>
+                      </Stack>
+                    }
+                  />
+                ) : null}
                 <FormControlLabel
                   value="demo_wallet"
                   control={<Radio />}
@@ -1672,6 +1864,19 @@ export function CheckoutPage() {
                   }
                 />
               </RadioGroup>
+              {paymentMethod === 'demo_wallet' && walletDemoAvailable ? (
+                <CheckoutWalletExtras
+                  orderTotalCents={totalCents}
+                  currency={totalsPreview?.currency ?? 'NAD'}
+                  settings={walletSettings}
+                  applyRoundUp={applyRoundUp}
+                  onApplyRoundUpChange={setApplyRoundUp}
+                  splitBillId={splitBillId}
+                  onSplitBillIdChange={setSplitBillId}
+                  payerShareCents={payerShareCents}
+                  onPayerShareCentsChange={setPayerShareCents}
+                />
+              ) : null}
             </FormControl>
           </CardContent>
         </Card>
@@ -1861,13 +2066,15 @@ export function CheckoutPage() {
                       >
                         {submitting
                           ? 'Processing…'
-                          : totalCents != null && totalsPreview
-                            ? `Confirm payment ${formatMoney(totalCents, totalsPreview.currency)}`
-                            : paymentMethod === 'demo_wallet' && signedIn
-                              ? 'Place order & pay with wallet'
-                              : paymentMethod === 'instant_pay' && signedIn
-                                ? 'Pay with Instant pay'
-                                : `Pay with ${APP_DISPLAY_NAME}`}
+                          : paymentMethod === 'payment_plan' && signedIn
+                            ? 'Place order'
+                            : totalCents != null && totalsPreview
+                              ? `Confirm payment ${formatMoney(totalCents, totalsPreview.currency)}`
+                              : paymentMethod === 'demo_wallet' && signedIn
+                                ? 'Place order & pay with wallet'
+                                : paymentMethod === 'instant_pay' && signedIn
+                                  ? 'Pay with Instant pay'
+                                  : `Pay with ${APP_DISPLAY_NAME}`}
                       </Button>
                     )}
                   </Box>
@@ -1912,9 +2119,15 @@ export function CheckoutPage() {
             </Typography>
 
             {checkoutCartLines.length > 0 ? (
-              <Stack spacing={1.5} sx={{ mb: 2 }}>
+              <Stack spacing={1} sx={{ mb: 2 }}>
                 {checkoutCartLines.map((line) => (
-                  <Stack key={line.lineId} direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
+                  <Stack
+                    key={line.lineId}
+                    direction="row"
+                    spacing={1}
+                    alignItems="flex-start"
+                    justifyContent="space-between"
+                  >
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography variant="body2" fontWeight={700} sx={{ lineHeight: 1.35 }}>
                         {line.name}
@@ -1949,15 +2162,6 @@ export function CheckoutPage() {
                 {MINOR_LOCKER_ALCOHOL_MSG}{' '}
                 <RouterLink to={`${pathPrefix}/cart`}>Edit cart</RouterLink> or{' '}
                 <RouterLink to={`${pathPrefix}/profile`}>My account</RouterLink>.
-              </Alert>
-            ) : null}
-
-            {promoApplied && promoApplied.discountCents > 0 && totalsPreview ? (
-              <Alert severity="success" variant="outlined" sx={{ mb: 2, borderRadius: 2 }}>
-                <Typography fontWeight={800}>Your total saving on this order</Typography>
-                <Typography variant="body1" fontWeight={900} color="success.dark" sx={{ mt: 0.5 }}>
-                  {formatMoney(promoApplied.discountCents, totalsPreview.currency)}
-                </Typography>
               </Alert>
             ) : null}
 
@@ -2021,16 +2225,6 @@ export function CheckoutPage() {
                     {formatMoney(totalsPreview.taxCents, totalsPreview.currency)}
                   </Typography>
                 </Stack>
-                {promoApplied && promoApplied.discountCents > 0 ? (
-                  <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-                    <Typography variant="body2" color="success.main" fontWeight={800}>
-                      Promo ({promoApplied.code})
-                    </Typography>
-                    <Typography variant="body2" color="success.main" fontWeight={800} textAlign="right">
-                      -{formatMoney(promoApplied.discountCents, totalsPreview.currency)}
-                    </Typography>
-                  </Stack>
-                ) : null}
                 <Divider sx={{ my: 0.5 }} />
                 <Stack direction="row" justifyContent="space-between" alignItems="baseline">
                   <Typography variant="body1" fontWeight={900}>
@@ -2040,6 +2234,34 @@ export function CheckoutPage() {
                     {totalCents != null ? formatMoney(totalCents, totalsPreview.currency) : '—'}
                   </Typography>
                 </Stack>
+                {paymentMethod === 'payment_plan' && paymentPlanSchedule && totalCents != null ? (
+                  <>
+                    <Divider sx={{ my: 0.5 }} />
+                    <Stack direction="row" justifyContent="space-between" alignItems="baseline">
+                      <Typography variant="body2" fontWeight={800} color="success.main">
+                        Due today
+                      </Typography>
+                      <Typography variant="body2" fontWeight={800} color="success.main" textAlign="right">
+                        {formatMoney(0, totalsPreview.currency)}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between" alignItems="baseline">
+                      <Typography variant="body2" color="text.secondary">
+                        {paymentPlanSchedule.term} instalments
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" textAlign="right">
+                        {paymentPlanSchedule.allSame
+                          ? `${paymentPlanSchedule.term} × ${formatMoney(paymentPlanSchedule.perInst, totalsPreview.currency)}`
+                          : paymentPlanSchedule.amounts
+                              .map((a, i) => `#${i + 1} ${formatMoney(a, totalsPreview.currency)}`)
+                              .join(' · ')}
+                      </Typography>
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.4 }}>
+                      Pay from {APP_WALLET_DISPLAY_NAME} on your order page after placing the order.
+                    </Typography>
+                  </>
+                ) : null}
               </Stack>
             ) : null}
 
@@ -2057,62 +2279,6 @@ export function CheckoutPage() {
               </Box>
             ) : null}
 
-            <Divider sx={{ my: 2 }} />
-            <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>
-              Promo code
-            </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 2 }}>
-              <TextField
-                size="small"
-                label="Code"
-                value={promoCode}
-                onChange={(e) => {
-                  setPromoCode(e.target.value.toUpperCase())
-                  setPromoErr(null)
-                }}
-                disabled={!!promoApplied}
-                sx={{ flex: 1 }}
-                error={!!promoErr}
-                helperText={promoErr ?? (promoApplied ? `Applied — ${formatMoney(promoApplied.discountCents, totalsPreview?.currency ?? 'NAD')} off` : ' ')}
-              />
-              {promoApplied ? (
-                <Button size="small" variant="outlined" color="error" onClick={() => { setPromoApplied(null); setPromoCode('') }} sx={{ fontWeight: 700 }}>
-                  Remove
-                </Button>
-              ) : (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={!promoCode.trim() || promoLoading}
-                  sx={{ fontWeight: 700, minWidth: 96 }}
-                  onClick={async () => {
-                    if (!promoCode.trim()) return
-                    setPromoLoading(true)
-                    setPromoErr(null)
-                    try {
-                      const params = new URLSearchParams({ preview: '1', discountCode: promoCode.trim() })
-                      if (isCheckoutHomeLike(delivery) && homeDeliveryAreaId) params.set('homeDeliveryAreaId', homeDeliveryAreaId)
-                      const res = await fetch(apiUrl(`/api/cart?${params.toString()}`), { credentials: 'include' })
-                      const body = (await readResponseJson<{
-                        discountCents?: number
-                        error?: string
-                        totalsPreview?: CartTotalsPreview
-                      }>(res))
-                      if (!res.ok) throw new Error(body.error ?? 'Invalid code')
-                      if (body.totalsPreview) setTotalsPreview(body.totalsPreview)
-                      setPromoApplied({ code: promoCode.trim(), discountCents: body.discountCents ?? body.totalsPreview?.discountCents ?? 0 })
-                    } catch (e) {
-                      setPromoErr(e instanceof Error ? e.message : 'Invalid code')
-                    } finally {
-                      setPromoLoading(false)
-                    }
-                  }}
-                >
-                  {promoLoading ? <CircularProgress size={18} /> : 'Apply'}
-                </Button>
-              )}
-            </Stack>
-
             <Button
               variant="contained"
               size="large"
@@ -2124,11 +2290,13 @@ export function CheckoutPage() {
             >
               {submitting
                 ? 'Processing…'
-                : paymentMethod === 'demo_wallet' && signedIn
-                  ? 'Place order & pay with wallet'
-                  : paymentMethod === 'instant_pay' && signedIn
-                    ? 'Pay with Instant pay'
-                    : `Pay with ${APP_DISPLAY_NAME}`}
+                : paymentMethod === 'payment_plan' && signedIn
+                  ? 'Place order'
+                  : paymentMethod === 'demo_wallet' && signedIn
+                    ? 'Place order & pay with wallet'
+                    : paymentMethod === 'instant_pay' && signedIn
+                      ? 'Pay with Instant pay'
+                      : `Pay with ${APP_DISPLAY_NAME}`}
             </Button>
           </Paper>
         </Grid>

@@ -6,6 +6,17 @@ import {
   restrictedCategorySubtreeCte,
 } from './ageRestrictedCategoryService.js'
 import { isHomeDeliveryMethod } from '../lib/checkoutDelivery.js'
+import {
+  getLiquorSellingHoursFromWide,
+  getStoreSellingHoursFromWide,
+  minutesToHmLabel,
+  upsertLiquorSellingHoursFromGranular,
+  upsertStoreSellingHoursFromGranular,
+  type LiquorSellingHoursRow,
+} from './sellingHoursWide.js'
+
+export type { LiquorSellingHoursRow } from './sellingHoursWide.js'
+export { minutesToHmLabel } from './sellingHoursWide.js'
 
 export type MerchantHoursKind = 'general' | 'liquor'
 
@@ -130,15 +141,6 @@ export function windhoekIsoDowAndMinutes(d: Date): { dowIso: number; minutes: nu
   return { dowIso, minutes: Math.min(1439, Math.max(0, minutes)) }
 }
 
-export interface LiquorSellingHoursRow {
-  id: string
-  pay_today_merchant_id: number
-  day_of_week: number
-  start_minute: number
-  end_minute: number
-  is_active: boolean
-}
-
 export type GranularSellingHoursRow = Pick<
   LiquorSellingHoursRow,
   'day_of_week' | 'start_minute' | 'end_minute' | 'is_active'
@@ -154,14 +156,6 @@ const ISO_DAY_LABELS: Record<number, string> = {
   7: 'Sunday',
 }
 
-export function minutesToHmLabel(minutes: number): string {
-  const h = Math.floor(minutes / 60)
-    .toString()
-    .padStart(2, '0')
-  const m = (minutes % 60).toString().padStart(2, '0')
-  return `${h}:${m}`
-}
-
 export function formatGranularHoursSummary(rows: GranularSellingHoursRow[]): string {
   const active = rows
     .filter((r) => r.is_active)
@@ -175,26 +169,12 @@ export function formatGranularHoursSummary(rows: GranularSellingHoursRow[]): str
     .join(' · ')
 }
 
+/** One wide DB row per merchant; expanded to per-day rows for checkout/admin APIs. */
 export async function getLiquorSellingHours(
   pool: ConnectionPool,
   merchantId: number,
 ): Promise<LiquorSellingHoursRow[]> {
-  const r = await pool.request().input('mid', merchantId).query<LiquorSellingHoursRow>(`
-    SELECT CAST(id AS NVARCHAR(36)) AS id, pay_today_merchant_id, day_of_week,
-      start_minutes AS start_minute, end_minutes AS end_minute,
-      CAST(is_active AS BIT) AS is_active
-    FROM dbo.liquor_selling_hours
-    WHERE pay_today_merchant_id = @mid
-    ORDER BY day_of_week
-  `)
-  return r.recordset
-}
-
-/** Admin + checkout use ISO: 1 = Mon … 7 = Sun. Coerce JS Sunday (0) to 7. */
-function normalizeLiquorIsoDayOfWeek(raw: number): number {
-  let dow = Math.trunc(Number(raw))
-  if (dow === 0) dow = 7
-  return dow
+  return getLiquorSellingHoursFromWide(pool, merchantId)
 }
 
 export async function upsertLiquorSellingHours(
@@ -202,57 +182,14 @@ export async function upsertLiquorSellingHours(
   merchantId: number,
   rows: { dayOfWeek: number; startMinute: number; endMinute: number; isActive: boolean }[],
 ): Promise<void> {
-  for (const row of rows) {
-    const dow = normalizeLiquorIsoDayOfWeek(row.dayOfWeek)
-    if (!Number.isInteger(dow) || dow < 1 || dow > 7) {
-      throw new Error(`Invalid dayOfWeek: ${String(row.dayOfWeek)} (use 1–7 Monday–Sunday, ISO)`)
-    }
-    const start = Math.trunc(Number(row.startMinute))
-    const end = Math.trunc(Number(row.endMinute))
-    if (!Number.isInteger(start) || start < 0 || start >= 1440) {
-      throw new Error(`Invalid startMinute: ${String(row.startMinute)}`)
-    }
-    if (!Number.isInteger(end) || end <= 0 || end > 1440) {
-      throw new Error(`Invalid endMinute: ${String(row.endMinute)}`)
-    }
-    if (end <= start) {
-      throw new Error('endMinute must be greater than startMinute')
-    }
-    await pool
-      .request()
-      .input('mid', merchantId)
-      .input('dow', dow)
-      .input('start', start)
-      .input('end', end)
-      .input('active', row.isActive ? 1 : 0)
-      .query(`
-        MERGE dbo.liquor_selling_hours AS t
-        USING (SELECT @mid AS pay_today_merchant_id, @dow AS day_of_week) AS s
-          ON t.pay_today_merchant_id = s.pay_today_merchant_id AND t.day_of_week = s.day_of_week
-        WHEN MATCHED THEN
-          UPDATE SET start_minutes = @start, end_minutes = @end, is_active = @active
-        WHEN NOT MATCHED THEN
-          INSERT (pay_today_merchant_id, day_of_week, start_minutes, end_minutes, is_active)
-          VALUES (@mid, @dow, @start, @end, @active);
-      `)
-  }
+  await upsertLiquorSellingHoursFromGranular(pool, merchantId, rows)
 }
-
-/* ── Store opening hours (granular, Africa/Windhoek — same shape as liquor_selling_hours) ─────────── */
 
 export async function getStoreSellingHours(
   pool: ConnectionPool,
   merchantId: number,
 ): Promise<LiquorSellingHoursRow[]> {
-  const r = await pool.request().input('mid', merchantId).query<LiquorSellingHoursRow>(`
-    SELECT CAST(id AS NVARCHAR(36)) AS id, pay_today_merchant_id, day_of_week,
-      start_minutes AS start_minute, end_minutes AS end_minute,
-      CAST(is_active AS BIT) AS is_active
-    FROM dbo.store_selling_hours
-    WHERE pay_today_merchant_id = @mid
-    ORDER BY day_of_week
-  `)
-  return r.recordset
+  return getStoreSellingHoursFromWide(pool, merchantId)
 }
 
 export async function upsertStoreSellingHours(
@@ -260,40 +197,7 @@ export async function upsertStoreSellingHours(
   merchantId: number,
   rows: { dayOfWeek: number; startMinute: number; endMinute: number; isActive: boolean }[],
 ): Promise<void> {
-  for (const row of rows) {
-    const dow = normalizeLiquorIsoDayOfWeek(row.dayOfWeek)
-    if (!Number.isInteger(dow) || dow < 1 || dow > 7) {
-      throw new Error(`Invalid dayOfWeek: ${String(row.dayOfWeek)} (use 1–7 Monday–Sunday, ISO)`)
-    }
-    const start = Math.trunc(Number(row.startMinute))
-    const end = Math.trunc(Number(row.endMinute))
-    if (!Number.isInteger(start) || start < 0 || start >= 1440) {
-      throw new Error(`Invalid startMinute: ${String(row.startMinute)}`)
-    }
-    if (!Number.isInteger(end) || end <= 0 || end > 1440) {
-      throw new Error(`Invalid endMinute: ${String(row.endMinute)}`)
-    }
-    if (end <= start) {
-      throw new Error('endMinute must be greater than startMinute')
-    }
-    await pool
-      .request()
-      .input('mid', merchantId)
-      .input('dow', dow)
-      .input('start', start)
-      .input('end', end)
-      .input('active', row.isActive ? 1 : 0)
-      .query(`
-        MERGE dbo.store_selling_hours AS t
-        USING (SELECT @mid AS pay_today_merchant_id, @dow AS day_of_week) AS s
-          ON t.pay_today_merchant_id = s.pay_today_merchant_id AND t.day_of_week = s.day_of_week
-        WHEN MATCHED THEN
-          UPDATE SET start_minutes = @start, end_minutes = @end, is_active = @active
-        WHEN NOT MATCHED THEN
-          INSERT (pay_today_merchant_id, day_of_week, start_minutes, end_minutes, is_active)
-          VALUES (@mid, @dow, @start, @end, @active);
-      `)
-  }
+  await upsertStoreSellingHoursFromGranular(pool, merchantId, rows)
 }
 
 export type StoreHoursStatus = {
@@ -303,6 +207,11 @@ export type StoreHoursStatus = {
   hoursSummary: string
   items: LiquorSellingHoursRow[]
   nextOpenLabel: string | null
+  /** Permitted alcohol sale windows (Africa/Windhoek), for checkout scheduling. */
+  liquorItems: LiquorSellingHoursRow[]
+  liquorConfigured: boolean
+  liquorOpenNow: boolean
+  liquorHoursSummary: string
 }
 
 export function computeNextStoreOpenLabel(rows: GranularSellingHoursRow[], now: Date): string | null {
@@ -347,6 +256,16 @@ export async function getStoreHoursStatus(pool: ConnectionPool, merchantId: numb
   const hoursSummary =
     granular.length > 0 ? formatGranularHoursSummary(granular) : generalRaw ? 'See weekly schedule' : ''
   const nextOpenLabel = openNow ? null : computeNextStoreOpenLabel(granular, now)
+  let liquorGranular: LiquorSellingHoursRow[] = []
+  try {
+    liquorGranular = await getLiquorSellingHours(pool, merchantId)
+  } catch {
+    liquorGranular = []
+  }
+  const liquorActive = liquorGranular.filter((r) => r.is_active)
+  const liquorConfigured = liquorActive.length > 0
+  const liquorOpenNow =
+    liquorConfigured && isMomentInsideGranularLiquorHours(liquorGranular, now)
   return {
     payTodayMerchantId: merchantId,
     configured,
@@ -354,6 +273,10 @@ export async function getStoreHoursStatus(pool: ConnectionPool, merchantId: numb
     hoursSummary,
     items: granular,
     nextOpenLabel,
+    liquorItems: liquorActive,
+    liquorConfigured,
+    liquorOpenNow,
+    liquorHoursSummary: liquorConfigured ? formatGranularHoursSummary(liquorGranular) : '',
   }
 }
 
@@ -380,18 +303,34 @@ export async function listCartMerchantsWithAlcohol(pool: ConnectionPool, cartId:
   const cte = restrictedCategorySubtreeCte(slugs)
   const req = pool.request().input('cid', cartId)
   bindRestrictedCategorySlugParams(req, slugs)
-  const withClause = cte ? `;WITH ${cte} ` : ''
   const pred = productMatchesLiquorGateSql(slugs)
+  /*
+   * Avoid MAX(CASE WHEN … IN (SELECT …)) — SQL Server rejects nested aggregate/subquery
+   * in that shape (checkout calls this via assertCheckoutAllowedByMerchantHours).
+   */
+  const ctePrefix = cte ? `${cte},` : ''
+  const withClause = `;WITH ${ctePrefix}`
   try {
     const r = await req.query<{ mid: number | null; has_alcohol: number }>(`
       ${withClause}
-      SELECT p.pay_today_merchant_id AS mid,
-        MAX(CASE WHEN ${pred} THEN 1 ELSE 0 END) AS has_alcohol
-      FROM dbo.cart_lines cl
-      INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
-      INNER JOIN dbo.products p ON p.id = v.product_id
-      WHERE cl.cart_id = @cid
-      GROUP BY p.pay_today_merchant_id
+      merchants AS (
+        SELECT DISTINCT p.pay_today_merchant_id AS mid
+        FROM dbo.cart_lines cl
+        INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
+        INNER JOIN dbo.products p ON p.id = v.product_id
+        WHERE cl.cart_id = @cid AND p.pay_today_merchant_id IS NOT NULL
+      ),
+      alcohol_merchants AS (
+        SELECT DISTINCT p.pay_today_merchant_id AS mid
+        FROM dbo.cart_lines cl
+        INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
+        INNER JOIN dbo.products p ON p.id = v.product_id
+        WHERE cl.cart_id = @cid AND p.pay_today_merchant_id IS NOT NULL AND (${pred})
+      )
+      SELECT m.mid,
+        CAST(CASE WHEN a.mid IS NOT NULL THEN 1 ELSE 0 END AS INT) AS has_alcohol
+      FROM merchants m
+      LEFT JOIN alcohol_merchants a ON a.mid = m.mid
     `)
     const out: CartMerchantAgg[] = []
     for (const row of r.recordset) {
@@ -403,13 +342,25 @@ export async function listCartMerchantsWithAlcohol(pool: ConnectionPool, cartId:
     const msg = e instanceof Error ? e.message : String(e)
     if (/contains_alcohol/i.test(msg)) {
       const r2 = await pool.request().input('cid', cartId).query<{ mid: number | null; has_alcohol: number }>(`
-        SELECT p.pay_today_merchant_id AS mid,
-          MAX(CASE WHEN ISNULL(p.contains_alcohol, 0) = 1 THEN 1 ELSE 0 END) AS has_alcohol
-        FROM dbo.cart_lines cl
-        INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
-        INNER JOIN dbo.products p ON p.id = v.product_id
-        WHERE cl.cart_id = @cid
-        GROUP BY p.pay_today_merchant_id
+        ;WITH merchants AS (
+          SELECT DISTINCT p.pay_today_merchant_id AS mid
+          FROM dbo.cart_lines cl
+          INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
+          INNER JOIN dbo.products p ON p.id = v.product_id
+          WHERE cl.cart_id = @cid AND p.pay_today_merchant_id IS NOT NULL
+        ),
+        alcohol_merchants AS (
+          SELECT DISTINCT p.pay_today_merchant_id AS mid
+          FROM dbo.cart_lines cl
+          INNER JOIN dbo.product_variants v ON v.id = cl.variant_id
+          INNER JOIN dbo.products p ON p.id = v.product_id
+          WHERE cl.cart_id = @cid AND p.pay_today_merchant_id IS NOT NULL
+            AND ISNULL(p.contains_alcohol, 0) = 1
+        )
+        SELECT m.mid,
+          CAST(CASE WHEN a.mid IS NOT NULL THEN 1 ELSE 0 END AS INT) AS has_alcohol
+        FROM merchants m
+        LEFT JOIN alcohol_merchants a ON a.mid = m.mid
       `)
       const out: CartMerchantAgg[] = []
       for (const row of r2.recordset) {
@@ -515,6 +466,21 @@ export async function assertCheckoutAllowedByMerchantHours(
         const general = parseWeeklyHoursJson(generalRaw)
         if (generalRaw && general) {
           storeScheduledOk = scheduledWeeklyLiquorOk(general, ctx.scheduling)
+        }
+      }
+      if (!storeScheduledOk && g.hasAlcohol) {
+        let liquorGranular: LiquorSellingHoursRow[] = []
+        try {
+          liquorGranular = await getLiquorSellingHours(pool, g.merchantId)
+        } catch {
+          liquorGranular = []
+        }
+        if (liquorGranular.length > 0) {
+          storeScheduledOk = isWindowInsideGranularLiquorHours(
+            liquorGranular,
+            ctx.scheduling.homeDeliveryWindowStart,
+            ctx.scheduling.homeDeliveryWindowEnd,
+          )
         }
       }
       if (!storeScheduledOk) {

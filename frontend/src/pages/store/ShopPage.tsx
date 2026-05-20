@@ -39,17 +39,6 @@ import { SHOP_V2 } from '../../theme/storeV2'
 
 type SortKey = 'name' | 'price_asc' | 'price_desc'
 
-function categoryDepth(c: StoreCategoryDto, all: StoreCategoryDto[]): number {
-  let d = 0
-  let cur: string | null | undefined = c.parentId
-  const byId = new Map(all.map((x) => [x.id, x]))
-  while (cur && d < 32) {
-    d += 1
-    cur = byId.get(cur)?.parentId ?? undefined
-  }
-  return d
-}
-
 function resolvePromoHref(linkPath: string | null, pathPrefix: string, shop: string): string {
   if (!linkPath?.trim()) return shop
   const p = linkPath.startsWith('/') ? linkPath : `/${linkPath}`
@@ -219,12 +208,7 @@ export function ShopPage() {
   }, [categories])
 
   const categoryChips = useMemo(
-    () =>
-      sortedCategories.map((c) => {
-        const depth = categoryDepth(c, sortedCategories)
-        const label = `${depth > 0 ? `${'\u203A '.repeat(Math.min(depth, 6))}` : ''}${c.name}`
-        return { slug: c.slug, label }
-      }),
+    () => sortedCategories.map((c) => ({ slug: c.slug, label: c.name })),
     [sortedCategories],
   )
 

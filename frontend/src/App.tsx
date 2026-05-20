@@ -5,6 +5,7 @@ import { StoreLayout } from './layouts/StoreLayout'
 import { AdminDepositPage } from './pages/admin/AdminDepositPage'
 import { AdminDisputesPage } from './pages/admin/AdminDisputesPage'
 import { AdminStoreHoursPage } from './pages/admin/AdminStoreHoursPage'
+import { AdminStoresPage } from './pages/admin/AdminStoresPage'
 import { AdminFulfillmentPage } from './pages/admin/AdminFulfillmentPage'
 import { AdminHomePage } from './pages/admin/AdminHomePage'
 import { AdminInventoryPage } from './pages/admin/AdminInventoryPage'
@@ -13,6 +14,7 @@ import { AdminReturnsPage } from './pages/admin/AdminReturnsPage'
 import { AdminOrderReviewsPage } from './pages/admin/AdminOrderReviewsPage'
 import { AdminProductsPage } from './pages/admin/AdminProductsPage'
 import { AdminCategoriesPage } from './pages/admin/AdminCategoriesPage'
+import { AdminPaymentPlansPage } from './pages/admin/AdminPaymentPlansPage'
 import { AdminLoginPage } from './pages/admin/AdminLoginPage'
 import { RequireAdminStaff } from './pages/admin/RequireAdminStaff'
 import { AccountPage } from './pages/store/AccountPage'
@@ -41,7 +43,10 @@ import { APP_DISPLAY_NAME } from './theme/branding'
 import { HubPaymentDemoFlowPage } from './pages/demo/HubPaymentDemoFlowPage'
 import { servicesEssentialsHref } from './lib/servicesHubTabs'
 import { ServicesPage } from './pages/services/ServicesPage'
+import { BankingProductsPage } from './pages/services/BankingProductsPage'
+import { FinanceHubPage } from './pages/services/FinanceHubPage'
 import { InsuranceFlowPage } from './pages/services/InsuranceFlowPage'
+import { AccountLayout } from './components/profile/AccountLayout'
 import { ProfileHubPage } from './pages/profile/ProfileHubPage'
 import { ProfilePersonalPage } from './pages/profile/ProfilePersonalPage'
 import { ProfileConfirmEmailPage } from './pages/profile/ProfileConfirmEmailPage'
@@ -59,6 +64,8 @@ import { ClassifiedsHomePage } from './pages/classifieds/ClassifiedsHomePage'
 import { ClassifiedsAdDetailPage } from './pages/classifieds/ClassifiedsAdDetailPage'
 import { ClassifiedsPostAdPage } from './pages/classifieds/ClassifiedsPostAdPage'
 import { WalletActionPlaceholderPage } from './pages/wallet/WalletActionPlaceholderPage'
+import { WalletSplitBillPage } from './pages/wallet/WalletSplitBillPage'
+import { WalletSavingsPage } from './pages/wallet/WalletSavingsPage'
 import { WalletBankPage } from './pages/wallet/WalletBankPage'
 import { WalletCardFormPage } from './pages/wallet/WalletCardFormPage'
 import { WalletCardsPage } from './pages/wallet/WalletCardsPage'
@@ -68,7 +75,6 @@ import { WalletPayTodayPage } from './pages/wallet/WalletPayTodayPage'
 import { WalletRewardsPage } from './pages/wallet/WalletRewardsPage'
 import { WalletTransactionDetailPage } from './pages/wallet/WalletTransactionDetailPage'
 import { WalletTransactionsPage } from './pages/wallet/WalletTransactionsPage'
-import { WalletVouchersFlowPage } from './pages/wallet/WalletVouchersFlowPage'
 import { IntroCarouselPage } from './pages/onboarding/IntroCarouselPage'
 import { OnboardingLoadingPage } from './pages/onboarding/OnboardingLoadingPage'
 import { OnboardingLoginPage } from './pages/onboarding/OnboardingLoginPage'
@@ -137,19 +143,23 @@ function storeRouteElements(withHome: boolean) {
       <Route path="services" element={<ServicesHubRootRedirect />} />
       <Route path="services/essentials" element={<ServicesPage />} />
       <Route path="services/more" element={<ServicesHubRootRedirect />} />
-      <Route path="services/insurance" element={<InsuranceFlowPage />} />
+      <Route path="services/insurance" element={<BankingProductsPage />} />
+      <Route path="services/insurance/nedlife" element={<InsuranceFlowPage />} />
+      <Route path="services/finance" element={<FinanceHubPage />} />
       <Route path="services/:slug" element={<HubPaymentDemoFlowPage variant="services" />} />
-      <Route path="profile" element={<ProfileHubPage />} />
-      <Route path="profile/personal" element={<ProfilePersonalPage />} />
-      <Route path="profile/addresses" element={<ProfileAddressesPage />} />
+      <Route path="profile" element={<AccountLayout />}>
+        <Route index element={<ProfileHubPage />} />
+        <Route path="personal" element={<ProfilePersonalPage />} />
+        <Route path="addresses" element={<ProfileAddressesPage />} />
+        <Route path="support" element={<ProfileSupportPage />} />
+        <Route path="feedback" element={<ProfileFeedbackPage />} />
+        <Route path="settings" element={<ProfileSettingsPage />} />
+        <Route path="legal" element={<ProfileLegalPage />} />
+        <Route path="delete-account" element={<ProfileDeleteAccountPage />} />
+      </Route>
       <Route path="profile/confirm-email" element={<ProfileConfirmEmailPage />} />
-      <Route path="profile/support" element={<ProfileSupportPage />} />
       <Route path="profile/faq" element={<ProfileFaqPage />} />
-      <Route path="profile/feedback" element={<ProfileFeedbackPage />} />
       <Route path="profile/feedback/sent" element={<ProfileFeedbackSentPage />} />
-      <Route path="profile/settings" element={<ProfileSettingsPage />} />
-      <Route path="profile/legal" element={<ProfileLegalPage />} />
-      <Route path="profile/delete-account" element={<ProfileDeleteAccountPage />} />
       <Route path="notifications" element={<NotificationsPage />} />
       <Route path="notifications/:id" element={<NotificationDetailPage />} />
       <Route path="classifieds" element={<ClassifiedsHomePage />} />
@@ -193,28 +203,8 @@ function storeRouteElements(withHome: boolean) {
           />
         }
       />
-      <Route
-        path="wallet/split-bill"
-        element={
-          <WalletFeaturePlaceholderPage
-            title="Split your bill"
-            body={`Split expenses with friends and collect your share. This feature will use ${APP_DISPLAY_NAME} split payments when connected.`}
-          />
-        }
-      />
-      <Route
-        path="wallet/vouchers"
-        element={<WalletVouchersFlowPage />}
-      />
-      <Route
-        path="wallet/cashout"
-        element={
-          <WalletFeaturePlaceholderPage
-            title="Cashout"
-            body={`Cash out wallet balance to cash agents or linked accounts per ${APP_DISPLAY_NAME} rules.`}
-          />
-        }
-      />
+      <Route path="wallet/split-bill" element={<WalletSplitBillPage />} />
+      <Route path="wallet/savings" element={<WalletSavingsPage />} />
     </Fragment>
   )
 }
@@ -235,7 +225,9 @@ export default function App() {
           <Route index element={<AdminHomePage />} />
           <Route path="products" element={<AdminProductsPage />} />
           <Route path="categories" element={<AdminCategoriesPage />} />
+          <Route path="stores" element={<AdminStoresPage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
+          <Route path="payment-plans" element={<AdminPaymentPlansPage />} />
           <Route path="returns" element={<AdminReturnsPage />} />
           <Route path="disputes" element={<AdminDisputesPage />} />
           <Route path="reviews" element={<AdminOrderReviewsPage />} />

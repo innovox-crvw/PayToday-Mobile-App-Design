@@ -2,6 +2,12 @@ import { Router } from 'express'
 import { columnExists } from '../../db/columnExists.js'
 import { getSqlPool } from '../../db/pool.js'
 import { optionalAuth, requireAuth, requireRole } from '../../middleware/auth.js'
+import {
+  assertPaymentPlanSchema,
+  createPaymentPlanInTransaction,
+  fetchPaymentPlanForOrder,
+  payInstalmentWithDemoWallet,
+} from '../../services/paymentPlanService.js'
 
 /* Customer-facing: view payment plan on their own order */
 export const instalmentsRouter = Router()
@@ -24,33 +30,45 @@ instalmentsRouter.get('/:orderId/payment-plan', async (req, res) => {
     if (!orderCheck.recordset.length) {
       res.status(404).json({ error: 'Order not found' }); return
     }
-    const hasInstalmentCents = await columnExists(pool, 'order_payment_plans.instalment_cents')
-    const hasPlanCreated = await columnExists(pool, 'order_payment_plans.created_at')
-    const instalmentCentsSql = hasInstalmentCents
-      ? 'p.instalment_cents'
-      : `(SELECT TOP 1 i.amount_cents FROM dbo.order_payment_plan_instalments i WHERE i.plan_id = p.id ORDER BY i.instalment_number)`
-    const planCreatedSql = hasPlanCreated
-      ? 'CONVERT(NVARCHAR(30), p.created_at, 127) AS created_at'
-      : 'CAST(NULL AS NVARCHAR(30)) AS created_at'
-    const plan = await pool.request().input('oid', orderId).query<{
-      id: string; plan_type: string; total_instalments: number; instalment_cents: number; currency: string; status: string; created_at: string
-    }>(`
-      SELECT CAST(p.id AS NVARCHAR(36)) AS id, p.plan_type, p.total_instalments,
-        ${instalmentCentsSql} AS instalment_cents, p.currency, p.status,
-        ${planCreatedSql}
-      FROM dbo.order_payment_plans p WHERE p.order_id = @oid
-    `)
-    if (!plan.recordset.length) { res.json({ plan: null }); return }
-    const planRow = plan.recordset[0]!
-    const instalments = await pool.request().input('pid', planRow.id).query(`
-      SELECT CAST(id AS NVARCHAR(36)) AS id, instalment_number, amount_cents, status,
-        CONVERT(NVARCHAR(10), due_date, 23) AS due_date,
-        CONVERT(NVARCHAR(30), paid_at, 127) AS paid_at,
-        payment_ref
-      FROM dbo.order_payment_plan_instalments WHERE plan_id = @pid
-      ORDER BY instalment_number
-    `)
-    res.json({ plan: { ...planRow, instalments: instalments.recordset } })
+    const plan = await fetchPaymentPlanForOrder(pool, orderId)
+    res.json({ plan })
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'Failed' })
+  }
+})
+
+instalmentsRouter.post('/:orderId/payment-plan-instalments/:instalmentId/pay-with-wallet', requireAuth, async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) {
+    noPool(res)
+    return
+  }
+  const userId = req.user!.sub
+  const orderId = String(req.params.orderId)
+  const instalmentId = String(req.params.instalmentId)
+  try {
+    const result = await payInstalmentWithDemoWallet(pool, userId, orderId, instalmentId)
+    if (!result.ok) {
+      const status =
+        result.code === 'insufficient_funds'
+          ? 400
+          : result.code === 'not_found'
+            ? 404
+            : result.code === 'already_paid' || result.code === 'out_of_sequence'
+              ? 400
+              : 400
+      res.status(status).json({ error: result.error, code: result.code })
+      return
+    }
+    res.json({
+      ok: true,
+      walletBalanceAfterCents: result.balanceAfter,
+      instalmentNumber: result.instalmentNumber,
+      amountCents: result.amountCents,
+      currency: result.currency,
+      planCompleted: result.planCompleted,
+      orderPaid: result.orderPaid,
+    })
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'Failed' })
   }
@@ -102,50 +120,43 @@ adminInstalmentsRouter.post('/orders/:orderId/payment-plan', async (req, res) =>
     res.status(400).json({ error: 'total_instalments, instalment_cents, first_due_date required' }); return
   }
   const orderId = req.params.orderId
-  const hasInstalmentCents = await columnExists(pool, 'order_payment_plans.instalment_cents')
-  if (!hasInstalmentCents) {
-    res.status(503).json({
-      error:
-        'Database is missing order_payment_plans.instalment_cents. Run `npm run db:migrate` from the backend folder (migration 059_compat_missing_api_columns.sql) or apply that script in SSMS.',
-    })
+  try {
+    await assertPaymentPlanSchema(pool)
+  } catch (e) {
+    res.status(503).json({ error: e instanceof Error ? e.message : 'Payment plan schema missing' })
     return
   }
   const tx = pool.transaction()
   await tx.begin()
   try {
-    const planR = await tx.request()
-      .input('oid', orderId)
-      .input('type', plan_type ?? 'monthly')
-      .input('total', Number(total_instalments))
-      .input('cents', Number(instalment_cents))
-      .input('ccy', currency ?? 'NAD')
-      .query<{ id: string }>(`
-        INSERT INTO dbo.order_payment_plans (order_id, plan_type, total_instalments, instalment_cents, currency)
-        OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-        VALUES (@oid, @type, @total, @cents, @ccy)
-      `)
-    const planId = planR.recordset[0].id
-    const firstDue = new Date(String(first_due_date))
-    for (let i = 0; i < Number(total_instalments); i++) {
-      const due = new Date(firstDue)
-      if ((plan_type ?? 'monthly') === 'weekly') due.setDate(due.getDate() + i * 7)
-      else if (plan_type === 'biweekly') due.setDate(due.getDate() + i * 14)
-      else due.setMonth(due.getMonth() + i)
-      await tx.request()
-        .input('pid', planId)
-        .input('num', i + 1)
-        .input('cents', Number(instalment_cents))
-        .input('due', due)
-        .query(`
-          INSERT INTO dbo.order_payment_plan_instalments (plan_id, instalment_number, amount_cents, due_date)
-          VALUES (@pid, @num, @cents, @due)
-        `)
-    }
+    const totalInst = Number(total_instalments)
+    const perInst = Number(instalment_cents)
+    const planType =
+      plan_type === 'weekly' || plan_type === 'biweekly' || plan_type === 'monthly' ? plan_type : 'monthly'
+    const { planId } = await createPaymentPlanInTransaction(tx, {
+      orderId,
+      planType,
+      totalInstalments: totalInst,
+      totalCents: perInst * totalInst,
+      currency: typeof currency === 'string' ? currency : 'NAD',
+      firstDueDate: new Date(String(first_due_date)),
+    })
     await tx.commit()
     res.status(201).json({ planId })
   } catch (e) {
     await tx.rollback()
     res.status(400).json({ error: e instanceof Error ? e.message : 'Failed' })
+  }
+})
+
+adminInstalmentsRouter.get('/orders/:orderId/payment-plan', async (req, res) => {
+  const pool = await getSqlPool()
+  if (!pool) { noPool(res); return }
+  try {
+    const plan = await fetchPaymentPlanForOrder(pool, req.params.orderId)
+    res.json({ plan })
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'Failed' })
   }
 })
 

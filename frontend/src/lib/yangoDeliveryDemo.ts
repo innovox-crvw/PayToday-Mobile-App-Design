@@ -1,3 +1,5 @@
+import { windhoekLocalInputToIso, windhoekMinutesToDatetimeLocal } from './windhoekTime'
+
 /**
  * Demo-only Yango-style zones for checkout (Windhoek–centric).
  * Zone `id` values match `home_delivery_areas.code` / `shipping_zones.code` for API merge.
@@ -231,22 +233,21 @@ export function nextLocalDates(count: number): string[] {
   return out
 }
 
-/** Build ISO strings for checkout `deliveryScheduledFor` / `homeDeliveryWindow` from local date + slot hours. */
+/** Build checkout scheduling fields from Windhoek calendar date + slot hours. */
 export function buildCheckoutWindowFromSlot(
   dateYmd: string,
   slot: YangoDemoSlot,
   zoneName: string,
 ): { deliveryScheduledFor: string; homeWinStart: string; homeWinEnd: string; homeWinLabel: string } {
-  const [y, mo, d] = dateYmd.split('-').map(Number) as [number, number, number]
   const sm = slot.startMinute ?? 0
   const em = slot.endMinute ?? 0
-  const start = new Date(y, mo - 1, d, slot.startHour, sm, 0, 0)
-  const end = new Date(y, mo - 1, d, slot.endHour, em, 0, 0)
+  const homeWinStart = windhoekMinutesToDatetimeLocal(dateYmd, slot.startHour * 60 + sm)
+  const homeWinEnd = windhoekMinutesToDatetimeLocal(dateYmd, slot.endHour * 60 + em)
   const label = `Yango (demo) · ${zoneName} · ${slot.label}`
   return {
-    deliveryScheduledFor: start.toISOString(),
-    homeWinStart: start.toISOString(),
-    homeWinEnd: end.toISOString(),
+    deliveryScheduledFor: windhoekLocalInputToIso(homeWinStart) ?? '',
+    homeWinStart,
+    homeWinEnd,
     homeWinLabel: label,
   }
 }
