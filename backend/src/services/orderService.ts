@@ -1,7 +1,9 @@
 import type { ConnectionPool, Transaction } from 'mssql'
 import type { InventoryPolicy } from '../types/catalogue.js'
+import { columnExists } from '../db/columnExists.js'
 import { normalizeInventoryPolicy } from '../repos/productsRepo.js'
 import { validateCartAndReturnLines } from './checkoutValidation.js'
+import { cartContainsAlcohol } from './liquorAgeService.js'
 
 async function readInventoryPolicy(tx: Transaction, variantId: string): Promise<InventoryPolicy> {
   try {
@@ -20,13 +22,22 @@ export async function createOrderFromCart(
   input: {
     userId: string | undefined
     guestEmail: string | null
-    deliveryMethod: 'home' | 'deposit_box'
+    deliveryMethod: string
     shippingAddressId: string | null
     depositLocationId: string | null
     subtotalCents: number
     shippingCents: number
     taxCents: number
+    discountCents?: number
+    discountCodeId?: string | null
     checkoutIdempotencyKey: string | null
+    /** Optional alcohol / home delivery scheduling (migration 055). */
+    scheduling?: {
+      deliveryScheduledFor: Date | null
+      homeDeliveryWindowStart: Date | null
+      homeDeliveryWindowEnd: Date | null
+      homeDeliveryWindowLabel: string | null
+    }
   },
 ): Promise<{ orderId: string; totalCents: number; currency: string }> {
   const transaction = pool.transaction()
@@ -45,14 +56,72 @@ export async function createOrderFromCart(
       throw new Error('Cart total changed — refresh and try again')
     }
 
+    const hasAlcohol = await cartContainsAlcohol(transaction as unknown as ConnectionPool, cartId)
+    const deliveryScheduledFor = input.scheduling?.deliveryScheduledFor ?? null
+    const homeDeliveryWindowStart = input.scheduling?.homeDeliveryWindowStart ?? null
+    const homeDeliveryWindowEnd = input.scheduling?.homeDeliveryWindowEnd ?? null
+    const rawLabel = input.scheduling?.homeDeliveryWindowLabel
+    const homeDeliveryWindowLabel = rawLabel?.trim() ? rawLabel.trim().slice(0, 200) : null
+
     const wh = await transaction
       .request()
       .query<{ id: string }>(`SELECT TOP 1 CAST(id AS NVARCHAR(36)) AS id FROM dbo.warehouses ORDER BY code`)
     const warehouseId = wh.recordset[0]?.id
 
-    const totalCents = input.subtotalCents + input.shippingCents + input.taxCents
+    const discountCents = input.discountCents ?? 0
+    const totalCents = Math.max(0, input.subtotalCents + input.shippingCents + input.taxCents - discountCents)
 
-    const o = await transaction
+    const hasOrderDiscountCents = await columnExists(pool, 'orders.discount_cents')
+    const hasOrderDiscountCodeId = await columnExists(pool, 'orders.discount_code_id')
+
+    const orderCols = [
+      'user_id',
+      'guest_email',
+      'status',
+      'delivery_method',
+      'shipping_address_id',
+      'deposit_location_id',
+      'subtotal_cents',
+      'shipping_cents',
+      'tax_cents',
+    ]
+    const orderVals = [
+      '@userId',
+      '@guestEmail',
+      "N'pending_payment'",
+      '@deliveryMethod',
+      '@shippingAddressId',
+      '@depositLocationId',
+      '@subtotal',
+      '@shipping',
+      '@tax',
+    ]
+    if (hasOrderDiscountCents) {
+      orderCols.push('discount_cents')
+      orderVals.push('@discountCents')
+    }
+    if (hasOrderDiscountCodeId) {
+      orderCols.push('discount_code_id')
+      orderVals.push('@discountCodeId')
+    }
+    orderCols.push('total_cents', 'currency', 'checkout_idempotency_key')
+    orderVals.push('@total', '@currency', '@idem')
+    orderCols.push(
+      'contains_alcohol',
+      'delivery_scheduled_for',
+      'home_delivery_window_start',
+      'home_delivery_window_end',
+      'home_delivery_window_label',
+    )
+    orderVals.push(
+      '@containsAlcohol',
+      '@deliveryScheduledFor',
+      '@homeWinStart',
+      '@homeWinEnd',
+      '@homeWinLabel',
+    )
+
+    const orderReq = transaction
       .request()
       .input('userId', input.userId ?? null)
       .input('guestEmail', input.guestEmail)
@@ -65,16 +134,18 @@ export async function createOrderFromCart(
       .input('total', totalCents)
       .input('currency', currency)
       .input('idem', input.checkoutIdempotencyKey)
-      .query<{ id: string }>(`
-      INSERT INTO dbo.orders (
-        user_id, guest_email, status, delivery_method, shipping_address_id, deposit_location_id,
-        subtotal_cents, shipping_cents, tax_cents, total_cents, currency, checkout_idempotency_key
-      )
+      .input('containsAlcohol', hasAlcohol ? 1 : 0)
+      .input('deliveryScheduledFor', deliveryScheduledFor)
+      .input('homeWinStart', homeDeliveryWindowStart)
+      .input('homeWinEnd', homeDeliveryWindowEnd)
+      .input('homeWinLabel', homeDeliveryWindowLabel)
+    if (hasOrderDiscountCents) orderReq.input('discountCents', discountCents)
+    if (hasOrderDiscountCodeId) orderReq.input('discountCodeId', input.discountCodeId ?? null)
+
+    const o = await orderReq.query<{ id: string }>(`
+      INSERT INTO dbo.orders (${orderCols.join(', ')})
       OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-      VALUES (
-        @userId, @guestEmail, N'pending_payment', @deliveryMethod, @shippingAddressId, @depositLocationId,
-        @subtotal, @shipping, @tax, @total, @currency, @idem
-      )
+      VALUES (${orderVals.join(', ')})
     `)
     const orderId = o.recordset[0].id
 

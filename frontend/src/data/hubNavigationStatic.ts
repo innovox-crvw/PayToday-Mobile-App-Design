@@ -67,14 +67,6 @@ export const PAYMENTS_HUB_TILES: readonly HubNavigationTileDto[] = [
     paymentMethodsCaption: 'Wallet · Plate / bay ref',
   },
   {
-    slug: 'vouchers',
-    label: 'Vouchers',
-    iconKey: 'vouchers',
-    listStyle: 'business',
-    linkPath: 'payments/vouchers',
-    paymentMethodsCaption: 'Card · Wallet · Gift code',
-  },
-  {
     slug: 'stay',
     label: 'Stay',
     iconKey: 'stay',
@@ -127,19 +119,11 @@ export const SERVICES_HUB_TILES: readonly HubNavigationTileDto[] = [
     paymentMethodsCaption: 'Wallet · Tap to pay',
   },
   {
-    slug: 'vouchers',
-    label: 'Vouchers',
-    iconKey: 'vouchers',
-    listStyle: null,
-    linkPath: 'services/vouchers',
-    paymentMethodsCaption: 'Card · Wallet · Voucher code',
-  },
-  {
     slug: 'insurance',
     label: 'Insurance',
     iconKey: 'insurance',
     listStyle: null,
-    linkPath: 'services/insurance',
+    linkPath: 'services/insurance/nedlife',
     paymentMethodsCaption: 'Card · Debit order',
   },
   {

@@ -23,6 +23,7 @@ import {
 import { apiFetch, fetchCsrfToken } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
 import { formatMoney } from '../../lib/money'
+import { DEPOSIT_BOX_SIZE_PRESETS, formatBoxDimensionsMm } from '../../lib/depositBoxPresets'
 
 type BoxRow = {
   id: string
@@ -31,6 +32,9 @@ type BoxRow = {
   capacity: number
   currentLoad: number
   available: number
+  widthMm?: number | null
+  depthMm?: number | null
+  heightMm?: number | null
 }
 
 type LocRow = {
@@ -51,6 +55,29 @@ type PickupOrderRow = {
   activePickupCodes: number
 }
 
+function tryParseInteriorDimsMm(w: string, d: string, h: string): { widthMm: number; depthMm: number; heightMm: number } | undefined {
+  const wt = w.trim()
+  const dt = d.trim()
+  const ht = h.trim()
+  if (!wt && !dt && !ht) return undefined
+  if (!wt || !dt || !ht) {
+    throw new Error('Enter all three interior sizes in mm (width, depth, height) or leave all empty.')
+  }
+  const widthMm = Number(wt)
+  const depthMm = Number(dt)
+  const heightMm = Number(ht)
+  if (![widthMm, depthMm, heightMm].every((n) => Number.isInteger(n) && n > 0)) {
+    throw new Error('Interior dimensions must be positive whole numbers (mm).')
+  }
+  return { widthMm, depthMm, heightMm }
+}
+
+function presetIdForDims(widthMm: number | null | undefined, depthMm: number | null | undefined, heightMm: number | null | undefined): string {
+  if (widthMm == null || depthMm == null || heightMm == null) return ''
+  const hit = DEPOSIT_BOX_SIZE_PRESETS.find((p) => p.widthMm === widthMm && p.depthMm === depthMm && p.heightMm === heightMm)
+  return hit?.id ?? 'custom'
+}
+
 export function AdminDepositPage() {
   const [locations, setLocations] = useState<LocRow[]>([])
   const [pickupOrders, setPickupOrders] = useState<PickupOrderRow[]>([])
@@ -68,10 +95,18 @@ export function AdminDepositPage() {
   const [boxOpen, setBoxOpen] = useState<string | null>(null)
   const [boxCode, setBoxCode] = useState('')
   const [boxCap, setBoxCap] = useState('20')
+  const [boxPresetId, setBoxPresetId] = useState('')
+  const [boxW, setBoxW] = useState('')
+  const [boxD, setBoxD] = useState('')
+  const [boxH, setBoxH] = useState('')
 
   const [editBox, setEditBox] = useState<BoxRow | null>(null)
   const [editBoxCode, setEditBoxCode] = useState('')
   const [editBoxCap, setEditBoxCap] = useState('')
+  const [editBoxPresetId, setEditBoxPresetId] = useState('')
+  const [editW, setEditW] = useState('')
+  const [editD, setEditD] = useState('')
+  const [editH, setEditH] = useState('')
 
   const [genLocationId, setGenLocationId] = useState('')
   const [genByOrder, setGenByOrder] = useState<Record<string, string>>({})
@@ -147,16 +182,27 @@ export function AdminDepositPage() {
   async function saveBox(locationId: string) {
     setOkMsg(null)
     try {
+      const dims = tryParseInteriorDimsMm(boxW, boxD, boxH)
+      const body: Record<string, unknown> = { code: boxCode, capacity: Number(boxCap) }
+      if (dims) {
+        body.widthMm = dims.widthMm
+        body.depthMm = dims.depthMm
+        body.heightMm = dims.heightMm
+      }
       await fetchCsrfToken()
       const res = await apiFetch(`/api/admin/deposit/locations/${locationId}/boxes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: boxCode, capacity: Number(boxCap) }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(await res.text())
       setBoxOpen(null)
       setBoxCode('')
       setBoxCap('20')
+      setBoxPresetId('')
+      setBoxW('')
+      setBoxD('')
+      setBoxH('')
       setOkMsg('Deposit box created.')
       await load()
     } catch (e) {
@@ -168,14 +214,30 @@ export function AdminDepositPage() {
     if (!editBox) return
     setOkMsg(null)
     try {
+      const dims = tryParseInteriorDimsMm(editW, editD, editH)
+      const body: Record<string, unknown> = {
+        code: editBoxCode.trim(),
+        capacity: Number(editBoxCap),
+      }
+      if (dims) {
+        body.widthMm = dims.widthMm
+        body.depthMm = dims.depthMm
+        body.heightMm = dims.heightMm
+      } else {
+        const allEmpty = !editW.trim() && !editD.trim() && !editH.trim()
+        const hadStored =
+          editBox.widthMm != null && editBox.depthMm != null && editBox.heightMm != null
+        if (allEmpty && hadStored) {
+          body.widthMm = null
+          body.depthMm = null
+          body.heightMm = null
+        }
+      }
       await fetchCsrfToken()
       const res = await apiFetch(`/api/admin/deposit/boxes/${editBox.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code: editBoxCode.trim(),
-          capacity: Number(editBoxCap),
-        }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(await res.text())
       setEditBox(null)
@@ -291,12 +353,51 @@ export function AdminDepositPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={!!boxOpen} onClose={() => setBoxOpen(null)} fullWidth maxWidth="xs">
+      <Dialog open={!!boxOpen} onClose={() => setBoxOpen(null)} fullWidth maxWidth="sm">
         <DialogTitle>New box at location</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              select
+              label="Locker size preset"
+              value={boxPresetId}
+              onChange={(e) => {
+                const v = e.target.value
+                setBoxPresetId(v)
+                const p = DEPOSIT_BOX_SIZE_PRESETS.find((x) => x.id === v)
+                if (p) {
+                  setBoxCap(String(p.suggestedCapacity))
+                  setBoxW(String(p.widthMm))
+                  setBoxD(String(p.depthMm))
+                  setBoxH(String(p.heightMm))
+                }
+                if (v === '') {
+                  setBoxW('')
+                  setBoxD('')
+                  setBoxH('')
+                }
+              }}
+              fullWidth
+              helperText="Pick a preset to fill interior mm and suggested capacity, or choose Custom / None."
+            >
+              <MenuItem value="">None (capacity only)</MenuItem>
+              <MenuItem value="custom">Custom (manual mm)</MenuItem>
+              {DEPOSIT_BOX_SIZE_PRESETS.map((p) => (
+                <MenuItem key={p.id} value={p.id}>
+                  {p.label} — {p.widthMm}×{p.depthMm}×{p.heightMm} mm, ~{p.suggestedCapacity} slots
+                </MenuItem>
+              ))}
+            </TextField>
             <TextField label="Box code (label on locker)" value={boxCode} onChange={(e) => setBoxCode(e.target.value)} fullWidth />
             <TextField label="Capacity (slots)" value={boxCap} onChange={(e) => setBoxCap(e.target.value)} type="number" />
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              Interior W × D × H (mm)
+            </Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField label="Width" value={boxW} onChange={(e) => setBoxW(e.target.value)} type="number" fullWidth size="small" />
+              <TextField label="Depth" value={boxD} onChange={(e) => setBoxD(e.target.value)} type="number" fullWidth size="small" />
+              <TextField label="Height" value={boxH} onChange={(e) => setBoxH(e.target.value)} type="number" fullWidth size="small" />
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -307,12 +408,51 @@ export function AdminDepositPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={!!editBox} onClose={() => setEditBox(null)} fullWidth maxWidth="xs">
+      <Dialog open={!!editBox} onClose={() => setEditBox(null)} fullWidth maxWidth="sm">
         <DialogTitle>Edit box</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              select
+              label="Locker size preset"
+              value={editBoxPresetId}
+              onChange={(e) => {
+                const v = e.target.value
+                setEditBoxPresetId(v)
+                const p = DEPOSIT_BOX_SIZE_PRESETS.find((x) => x.id === v)
+                if (p) {
+                  setEditBoxCap(String(p.suggestedCapacity))
+                  setEditW(String(p.widthMm))
+                  setEditD(String(p.depthMm))
+                  setEditH(String(p.heightMm))
+                }
+                if (v === '') {
+                  setEditW('')
+                  setEditD('')
+                  setEditH('')
+                }
+              }}
+              fullWidth
+              helperText="Presets refill mm and suggested capacity. Clear all three mm fields and save to remove stored size."
+            >
+              <MenuItem value="">None (clear mm on save if box had a size)</MenuItem>
+              <MenuItem value="custom">Custom (manual mm)</MenuItem>
+              {DEPOSIT_BOX_SIZE_PRESETS.map((p) => (
+                <MenuItem key={p.id} value={p.id}>
+                  {p.label} — {p.widthMm}×{p.depthMm}×{p.heightMm} mm, ~{p.suggestedCapacity} slots
+                </MenuItem>
+              ))}
+            </TextField>
             <TextField label="Box code" value={editBoxCode} onChange={(e) => setEditBoxCode(e.target.value)} fullWidth />
             <TextField label="Capacity" value={editBoxCap} onChange={(e) => setEditBoxCap(e.target.value)} type="number" />
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              Interior W × D × H (mm)
+            </Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField label="Width" value={editW} onChange={(e) => setEditW(e.target.value)} type="number" fullWidth size="small" />
+              <TextField label="Depth" value={editD} onChange={(e) => setEditD(e.target.value)} type="number" fullWidth size="small" />
+              <TextField label="Height" value={editH} onChange={(e) => setEditH(e.target.value)} type="number" fullWidth size="small" />
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -351,7 +491,15 @@ export function AdminDepositPage() {
                 >
                   Edit location
                 </Button>
-                <Button size="small" variant="contained" onClick={() => setBoxOpen(loc.id)}>
+                <Button size="small" variant="contained" onClick={() => {
+                  setBoxCode('')
+                  setBoxCap('20')
+                  setBoxPresetId('')
+                  setBoxW('')
+                  setBoxD('')
+                  setBoxH('')
+                  setBoxOpen(loc.id)
+                }}>
                   Add box
                 </Button>
               </Stack>
@@ -361,6 +509,7 @@ export function AdminDepositPage() {
                 <TableHead>
                   <TableRow>
                     <TableCell>Box code</TableCell>
+                    <TableCell>Dimensions (W×D×H)</TableCell>
                     <TableCell align="right">Load</TableCell>
                     <TableCell align="right">Capacity</TableCell>
                     <TableCell align="right">Free</TableCell>
@@ -370,7 +519,7 @@ export function AdminDepositPage() {
                 <TableBody>
                   {loc.boxes.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5}>
+                      <TableCell colSpan={6}>
                         <Typography variant="body2" color="text.secondary">
                           No boxes — add at least one to allocate pickup codes here.
                         </Typography>
@@ -380,6 +529,7 @@ export function AdminDepositPage() {
                   {loc.boxes.map((b) => (
                     <TableRow key={b.id}>
                       <TableCell>{b.code}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatBoxDimensionsMm(b.widthMm ?? null, b.depthMm ?? null, b.heightMm ?? null)}</TableCell>
                       <TableCell align="right">{b.currentLoad}</TableCell>
                       <TableCell align="right">{b.capacity}</TableCell>
                       <TableCell align="right">{b.available}</TableCell>
@@ -390,6 +540,10 @@ export function AdminDepositPage() {
                             setEditBox(b)
                             setEditBoxCode(b.code)
                             setEditBoxCap(String(b.capacity))
+                            setEditW(b.widthMm != null ? String(b.widthMm) : '')
+                            setEditD(b.depthMm != null ? String(b.depthMm) : '')
+                            setEditH(b.heightMm != null ? String(b.heightMm) : '')
+                            setEditBoxPresetId(presetIdForDims(b.widthMm, b.depthMm, b.heightMm))
                           }}
                         >
                           Edit

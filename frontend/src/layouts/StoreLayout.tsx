@@ -30,6 +30,7 @@ import {
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 import { HEADER_APP_GRADIENT, STORE_DESKTOP_CANVAS_GREY } from '../theme/branding'
+import { WALLET_PAGE_BACKGROUND } from '../theme/walletTheme'
 import { StoreAppBarBrand } from '../components/layout/StoreAppBarBrand'
 import { StoreDesktopNav } from '../components/layout/StoreDesktopNav'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
@@ -100,6 +101,7 @@ export function StoreLayout() {
   const isHome = base === '/'
   const isServicesFlow = base === '/services' || base.startsWith('/services/')
   const isOnboardingLoginFullScreen = base === '/onboarding/login'
+  const isWalletRoute = base.startsWith('/wallet')
   const hideChromeAppBar = isCompactShell && (isHome || isServicesFlow || isOnboardingLoginFullScreen)
 
   const profilePath = `${pathPrefix}/profile`
@@ -650,7 +652,7 @@ export function StoreLayout() {
           ...(isCompactShell && !isOnboardingLoginFullScreen
             ? {
                 pb: 0,
-                bgcolor: 'background.default',
+                bgcolor: isWalletRoute ? WALLET_PAGE_BACKGROUND : 'background.default',
               }
             : { pb: 0 }),
         }}

@@ -8,12 +8,11 @@ import {
   ListItem,
   ListItemAvatar,
   ListItemText,
-  Stack,
-  Typography,
 } from '@mui/material'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import { WalletSubheader } from './WalletSubheader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
 import { MOCK_CARDS } from '../../data/walletMock'
+import { walletCardSx } from '../../theme/walletTheme'
 
 function CardBrand({ brand }: { brand: 'visa' | 'mastercard' }) {
   return (
@@ -41,12 +40,8 @@ export function WalletCardsPage() {
   const prefix = pathname.startsWith('/embed') ? '/embed/wallet' : '/wallet'
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 560, mx: 'auto' }}>
-      <WalletSubheader title="My Cards" />
-      <Typography variant="body2" color="text.secondary">
-        Saved Cards
-      </Typography>
-      <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider' }}>
+    <WalletPageShell title="My Cards" showBack subtitle="Saved payment cards for checkout and top-ups.">
+      <Card elevation={0} sx={walletCardSx}>
         <List disablePadding>
           {MOCK_CARDS.map((c, i) => (
             <ListItem
@@ -74,9 +69,9 @@ export function WalletCardsPage() {
           ))}
         </List>
       </Card>
-      <Button component={RouterLink} to={`${prefix}/cards/new`} variant="contained" size="large" fullWidth sx={{ borderRadius: 2 }}>
+      <Button component={RouterLink} to={`${prefix}/cards/new`} variant="contained" size="large" fullWidth sx={{ borderRadius: 2, fontWeight: 800 }}>
         + Add Card
       </Button>
-    </Stack>
+    </WalletPageShell>
   )
 }

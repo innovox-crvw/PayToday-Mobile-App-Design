@@ -34,6 +34,10 @@ export interface ProductDto {
   slug: string
   name: string
   description: string
+  deliveryInformation: string
+  returnPolicy: string
+  warrantyInfo: string
+  whatsInTheBox: string
   categoryId: string
   categorySlug: string
   categoryName: string
@@ -43,6 +47,7 @@ export interface ProductDto {
   images?: ProductImageDto[]
   variants: ProductVariantDto[]
   isActive?: boolean
+  containsAlcohol?: boolean
 }
 
 export interface ProductListResponse {
@@ -50,4 +55,6 @@ export interface ProductListResponse {
   items: ProductDto[]
   catalogFallbackReason?: 'sql_unreachable'
   sqlConnectHint?: string
+  /** When true, `category` filter refers to a subtree with only alcohol products and the viewer is not age-verified. */
+  ageRestrictedCategoryHidden?: boolean
 }

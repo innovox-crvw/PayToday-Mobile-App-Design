@@ -112,8 +112,29 @@ adminDepositRouter.post('/locations/:locationId/boxes', async (req, res) => {
   }
   const code = typeof req.body?.code === 'string' ? req.body.code : ''
   const capacity = Number(req.body?.capacity ?? NaN)
+  const body = req.body as Record<string, unknown>
+  let dimIn: { widthMm?: number | null; depthMm?: number | null; heightMm?: number | null } = {}
+  if (Object.prototype.hasOwnProperty.call(body, 'widthMm') || Object.prototype.hasOwnProperty.call(body, 'depthMm') || Object.prototype.hasOwnProperty.call(body, 'heightMm')) {
+    if (
+      !Object.prototype.hasOwnProperty.call(body, 'widthMm') ||
+      !Object.prototype.hasOwnProperty.call(body, 'depthMm') ||
+      !Object.prototype.hasOwnProperty.call(body, 'heightMm')
+    ) {
+      res.status(400).json({ error: 'When setting dimensions, send widthMm, depthMm, and heightMm together' })
+      return
+    }
+    dimIn = {
+      widthMm: body.widthMm as number | null,
+      depthMm: body.depthMm as number | null,
+      heightMm: body.heightMm as number | null,
+    }
+  }
   try {
-    const ids = await createDepositBox(pool, locationId, { code, capacity })
+    const ids = await createDepositBox(pool, locationId, {
+      code,
+      capacity,
+      ...dimIn,
+    })
     res.status(201).json(ids)
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'Create failed' })
@@ -132,15 +153,34 @@ adminDepositRouter.patch('/boxes/:boxId', async (req, res) => {
     return
   }
   const body = req.body as Record<string, unknown>
-  const patch: { code?: string; capacity?: number } = {}
+  const patch: {
+    code?: string
+    capacity?: number
+    widthMm?: number | null
+    depthMm?: number | null
+    heightMm?: number | null
+  } = {}
   if (Object.prototype.hasOwnProperty.call(body, 'code') && typeof body.code === 'string') {
     patch.code = body.code
   }
   if (Object.prototype.hasOwnProperty.call(body, 'capacity')) {
     patch.capacity = Number(body.capacity)
   }
+  if (Object.prototype.hasOwnProperty.call(body, 'widthMm') || Object.prototype.hasOwnProperty.call(body, 'depthMm') || Object.prototype.hasOwnProperty.call(body, 'heightMm')) {
+    if (
+      !Object.prototype.hasOwnProperty.call(body, 'widthMm') ||
+      !Object.prototype.hasOwnProperty.call(body, 'depthMm') ||
+      !Object.prototype.hasOwnProperty.call(body, 'heightMm')
+    ) {
+      res.status(400).json({ error: 'When updating dimensions, send widthMm, depthMm, and heightMm together (null clears all)' })
+      return
+    }
+    patch.widthMm = body.widthMm as number | null
+    patch.depthMm = body.depthMm as number | null
+    patch.heightMm = body.heightMm as number | null
+  }
   if (Object.keys(patch).length === 0) {
-    res.status(400).json({ error: 'Provide code and/or capacity' })
+    res.status(400).json({ error: 'Provide code, capacity, and/or widthMm+depthMm+heightMm' })
     return
   }
   try {

@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import { env } from './config/env.js'
 import { apiRouter } from './routes/api/index.js'
 import { paytodayWebhookRouter } from './routes/webhooks/paytoday.js'
+import { yangoWebhookRouter } from './routes/webhooks/yango.js'
 import { gatewaySeparateApiLayer } from './middleware/frontBackendSeparation.js'
 
 export function createApp(): express.Express {
@@ -35,6 +36,8 @@ export function createApp(): express.Express {
     express.raw({ type: '*/*', limit: '2mb' }),
     paytodayWebhookRouter,
   )
+
+  app.use('/api/webhooks/yango', express.json({ limit: '256kb' }), yangoWebhookRouter)
 
   /** Alias: same handler as /api/webhooks/paytoday (raw body + HMAC). */
   app.use(

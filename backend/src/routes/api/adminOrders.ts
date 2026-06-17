@@ -15,8 +15,19 @@ adminOrdersRouter.get('/', async (req, res) => {
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : ''
   const base = `
     SELECT CAST(o.id AS NVARCHAR(36)) AS orderId, o.status, o.total_cents, o.currency, o.created_at, o.delivery_method,
-      o.guest_email, CAST(o.user_id AS NVARCHAR(36)) AS user_id
+      o.guest_email, CAST(o.user_id AS NVARCHAR(36)) AS user_id,
+      LTRIM(RTRIM(u.email)) AS customer_email,
+      ISNULL(dc.dispute_count, 0) AS dispute_count,
+      ISNULL(dc.dispute_active_count, 0) AS dispute_active_count
     FROM dbo.orders o
+    LEFT JOIN dbo.users u ON u.id = o.user_id
+    LEFT JOIN (
+      SELECT order_id,
+        COUNT_BIG(*) AS dispute_count,
+        SUM(CASE WHEN status IN (N'open', N'in_review') THEN 1 ELSE 0 END) AS dispute_active_count
+      FROM dbo.order_disputes
+      GROUP BY order_id
+    ) dc ON dc.order_id = o.id
   `
   const r = status
     ? await pool.request().input('st', status).query<{
@@ -28,6 +39,9 @@ adminOrdersRouter.get('/', async (req, res) => {
         delivery_method: string
         guest_email: string | null
         user_id: string | null
+        customer_email: string | null
+        dispute_count: number
+        dispute_active_count: number
       }>(`${base} WHERE o.status = @st ORDER BY o.created_at DESC`)
     : await pool.request().query<{
         orderId: string
@@ -38,6 +52,9 @@ adminOrdersRouter.get('/', async (req, res) => {
         delivery_method: string
         guest_email: string | null
         user_id: string | null
+        customer_email: string | null
+        dispute_count: number
+        dispute_active_count: number
       }>(`${base} ORDER BY o.created_at DESC`)
   res.json({ items: r.recordset })
 })

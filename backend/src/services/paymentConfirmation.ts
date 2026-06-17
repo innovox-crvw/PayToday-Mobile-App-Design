@@ -3,6 +3,7 @@ import { markOrderPaid } from './orderService.js'
 import { resolveOrderNotificationTarget } from './orderNotificationEmail.js'
 import { enqueueNotification } from './notifications.js'
 import { resolveOutboxChannel } from './notificationRouting.js'
+import { tryYangoDispatchAfterPaid } from './yangoDispatchOnPaid.js'
 
 export async function capturePaymentRow(pool: ConnectionPool, orderId: string): Promise<void> {
   await pool.request().input('oid', orderId).query(`UPDATE dbo.payments SET status = N'captured' WHERE order_id = @oid`)
@@ -23,6 +24,12 @@ export async function confirmOrderPaid(pool: ConnectionPool, orderId: string): P
 
   await markOrderPaid(pool, orderId)
   await capturePaymentRow(pool, orderId)
+
+  try {
+    await tryYangoDispatchAfterPaid(pool, orderId)
+  } catch (e) {
+    console.warn('[paymentConfirmation] Yango dispatch', e)
+  }
 
   const target = await resolveOrderNotificationTarget(pool, orderId)
   const channel = await resolveOutboxChannel(pool, target?.userId ?? null, target?.guestEmail ?? null, 'payment_confirmed')

@@ -37,6 +37,10 @@ export interface ProductDto {
   slug: string
   name: string
   description: string
+  deliveryInformation: string
+  returnPolicy: string
+  warrantyInfo: string
+  whatsInTheBox: string
   categoryId: string
   /** Lowercase slug from `categories.slug` (e.g. electronics, groceries). */
   categorySlug: string
@@ -51,4 +55,6 @@ export interface ProductDto {
   variants: ProductVariantDto[]
   /** Present on admin catalogue responses. */
   isActive?: boolean
+  /** When true, product is age-restricted (liquor). */
+  containsAlcohol?: boolean
 }

@@ -13,6 +13,8 @@ const EMAIL_WORTHY_TEMPLATE_KEYS = new Set([
   'hub_demo_payment_completed',
   /** Post-delivery return workflow status updates. */
   'return_case_status',
+  /** Customer opened an order dispute. */
+  'order_dispute_submitted',
 ])
 
 export function isEmailWorthyTemplate(templateKey: string): boolean {

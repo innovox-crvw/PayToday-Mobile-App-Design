@@ -37,7 +37,7 @@ export function ScanReceiveQrPage() {
     return () => window.clearInterval(id)
   }, [])
 
-  const rawLine = useMemo(() => `${payload}|t=${Date.now()}`, [payload, tick])
+  const rawLine = useMemo(() => `${payload}|t=${tick}`, [payload, tick])
 
   function copyPayload() {
     void navigator.clipboard.writeText(rawLine)

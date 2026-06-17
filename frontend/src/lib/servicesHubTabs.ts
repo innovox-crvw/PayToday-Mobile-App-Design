@@ -53,9 +53,15 @@ export function servicesEssentialsHref(pathPrefix: string): string {
   return p ? `${p}/services/essentials` : '/services/essentials'
 }
 
+/** Banking products hub (insurance + finance tiles). */
 export function servicesInsuranceHref(pathPrefix: string): string {
   const p = pathPrefix.replace(/\/$/, '')
   return p ? `${p}/services/insurance` : '/services/insurance'
+}
+
+export function servicesFinanceHref(pathPrefix: string): string {
+  const p = pathPrefix.replace(/\/$/, '')
+  return p ? `${p}/services/finance` : '/services/finance'
 }
 
 /** Hub payment demo “back” target when returning to the prepaid services hub. */

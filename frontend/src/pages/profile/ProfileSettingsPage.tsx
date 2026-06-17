@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Alert,
   Box,
-  Button,
   Card,
   CardContent,
   FormControl,
@@ -19,13 +18,11 @@ import {
 } from '@mui/material'
 import NotificationsActiveOutlinedIcon from '@mui/icons-material/NotificationsActiveOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
-import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { apiFetch, fetchCsrfToken, readResponseJson } from '../../api/client'
 import { apiUrl } from '../../lib/apiOrigin'
-import { ProfilePageShell } from '../../components/profile/ProfilePageShell'
-import { WalletSubheader } from '../wallet/WalletSubheader'
+import { AccountSectionHeader } from '../../components/profile/AccountSectionHeader'
 import { APP_DISPLAY_NAME } from '../../theme/branding'
 import { useStorePathPrefix } from './profilePaths'
 import { useAuthMe, SESSION_CHANGED_EVENT } from '../../hooks/useAuthMe'
@@ -61,6 +58,8 @@ export function ProfileSettingsPage() {
   const [uiLanguage, setUiLanguage] = useState('en')
   const [reducedMotion, setReducedMotion] = useState(false)
   const [prefsMsg, setPrefsMsg] = useState<string | null>(null)
+  const [uiLocale, setUiLocale] = useState<string>('en-NA')
+  const [localeSaving, setLocaleSaving] = useState(false)
 
   const [publicCfg, setPublicCfg] = useState<{
     publicStoreUrl?: string
@@ -87,6 +86,28 @@ export function ProfileSettingsPage() {
     setUiLanguage(readUiLanguage() || 'en')
     setReducedMotion(readReducedMotion())
   }, [])
+
+  useEffect(() => {
+    if (user && (user as { ui_locale?: string }).ui_locale) {
+      setUiLocale((user as { ui_locale?: string }).ui_locale ?? 'en-NA')
+    }
+  }, [user])
+
+  async function saveUiLocale(locale: string) {
+    setUiLocale(locale)
+    if (!user) return
+    setLocaleSaving(true)
+    try {
+      await fetchCsrfToken()
+      await apiFetch('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uiLocale: locale }),
+      })
+      setPrefsMsg('Language / locale saved to your account.')
+      window.setTimeout(() => setPrefsMsg(null), 2500)
+    } catch { /* ignore */ } finally { setLocaleSaving(false) }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -156,24 +177,12 @@ export function ProfileSettingsPage() {
     window.setTimeout(() => setPrefsMsg(null), 2500)
   }
 
-  async function signOut() {
-    try {
-      await fetchCsrfToken()
-      await apiFetch('/api/auth/logout', { method: 'POST' })
-      window.dispatchEvent(new Event('pt-cart-updated'))
-      window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
-      await refreshAuth()
-    } catch {
-      await refreshAuth()
-    }
-  }
-
   return (
-    <ProfilePageShell>
-      <WalletSubheader title="Settings" />
-      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-        Control how we reach you, how the app feels on this device, and quick links when something looks wrong.
-      </Typography>
+    <Stack spacing={2.5}>
+      <AccountSectionHeader
+        title="Settings"
+        description="Control how we reach you, how the app feels on this device, and quick links when something looks wrong."
+      />
 
       {!authLoading && !user ? (
         <Alert severity="info" sx={{ borderRadius: 2 }}>
@@ -262,15 +271,29 @@ export function ProfileSettingsPage() {
 
             <TextField
               select
-              label="Language"
+              label="Language (device)"
               value={uiLanguage}
               onChange={(e) => persistUiLanguage(e.target.value)}
               fullWidth
-              helperText="Sets page language (labels). Full translations coming later."
+              helperText="Sets page language on this device only. Full translations coming later."
             >
               <MenuItem value="en">English (default)</MenuItem>
               <MenuItem value="en-ZA">English (South Africa)</MenuItem>
               <MenuItem value="af">Afrikaans (label only)</MenuItem>
+            </TextField>
+            <TextField
+              select
+              label="Language / locale (account)"
+              value={uiLocale}
+              onChange={(e) => { void saveUiLocale(e.target.value) }}
+              fullWidth
+              disabled={localeSaving || !user}
+              helperText={user ? 'Saved to your account.' : 'Sign in to save locale to account.'}
+            >
+              <MenuItem value="en-NA">English (Namibia)</MenuItem>
+              <MenuItem value="af-NA">Afrikaans (Namibia)</MenuItem>
+              <MenuItem value="en-ZA">English (South Africa)</MenuItem>
+              <MenuItem value="en-US">English (US)</MenuItem>
             </TextField>
 
             <FormControlLabel
@@ -296,31 +319,6 @@ export function ProfileSettingsPage() {
                 {prefsMsg}
               </Alert>
             ) : null}
-          </Stack>
-        </CardContent>
-      </Card>
-
-      <Card variant="outlined" sx={{ borderRadius: 3 }}>
-        <CardContent>
-          <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <LogoutOutlinedIcon color="primary" />
-              <Typography variant="subtitle1" fontWeight={800}>
-                Session
-              </Typography>
-            </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Sign out here. Device settings stay until you clear site data.
-            </Typography>
-            <Button
-              variant="outlined"
-              color="inherit"
-              disabled={!user}
-              onClick={() => void signOut()}
-              sx={{ alignSelf: 'flex-start', fontWeight: 700 }}
-            >
-              Sign out
-            </Button>
           </Stack>
         </CardContent>
       </Card>
@@ -367,6 +365,6 @@ export function ProfileSettingsPage() {
           </Stack>
         </CardContent>
       </Card>
-    </ProfilePageShell>
+    </Stack>
   )
 }

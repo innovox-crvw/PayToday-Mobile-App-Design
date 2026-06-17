@@ -7,6 +7,7 @@ import {
   parseOptionalCatalogImageUrl,
   parseOptionalCompareAtPriceCents,
   parseProductDescription,
+  parseProductTabText,
   parseProductName,
   parseProductSlug,
   parseSku,
@@ -65,6 +66,10 @@ type PreparedRow = {
   slug: string
   name: string
   description: string
+  deliveryInformation: string
+  returnPolicy: string
+  warrantyInfo: string
+  whatsInTheBox: string
   sku: string
   variantName: string
   priceCents: number
@@ -107,6 +112,10 @@ function prepareRows(headers: string[], rows: string[][]): { rows: PreparedRow[]
     sku: firstCol(headers, ['sku']),
     price: firstCol(headers, ['price_cents', 'price']),
     description: firstCol(headers, ['description']),
+    deliveryInformation: firstCol(headers, ['delivery_information', 'delivery_info']),
+    returnPolicy: firstCol(headers, ['return_policy', 'returns']),
+    warrantyInfo: firstCol(headers, ['warranty_info', 'warranty']),
+    whatsInTheBox: firstCol(headers, ['whats_in_the_box', 'in_the_box', 'box_contents']),
     variantName: firstCol(headers, ['variant_name', 'variant']),
     currency: firstCol(headers, ['currency']),
     stock: firstCol(headers, ['initial_stock', 'stock', 'qty']),
@@ -165,6 +174,20 @@ function prepareRows(headers: string[], rows: string[][]): { rows: PreparedRow[]
       const descP = parseProductDescription(cell(row, ix.description), 'description')
       if (!descP.ok) throw new Error(descP.message)
       const description = descP.value
+
+      const diP = parseProductTabText(cell(row, ix.deliveryInformation), 'delivery_information')
+      if (!diP.ok) throw new Error(diP.message)
+      const deliveryInformation = diP.value
+      const rpP = parseProductTabText(cell(row, ix.returnPolicy), 'return_policy')
+      if (!rpP.ok) throw new Error(rpP.message)
+      const returnPolicy = rpP.value
+      const wiP = parseProductTabText(cell(row, ix.warrantyInfo), 'warranty_info')
+      if (!wiP.ok) throw new Error(wiP.message)
+      const warrantyInfo = wiP.value
+      const boxP = parseProductTabText(cell(row, ix.whatsInTheBox), 'whats_in_the_box')
+      if (!boxP.ok) throw new Error(boxP.message)
+      const whatsInTheBox = boxP.value
+
       const variantP = parseVariantName(cell(row, ix.variantName), 'variant_name')
       if (!variantP.ok) throw new Error(variantP.message)
       const variantName = variantP.value
@@ -234,6 +257,10 @@ function prepareRows(headers: string[], rows: string[][]): { rows: PreparedRow[]
         slug,
         name,
         description,
+        deliveryInformation,
+        returnPolicy,
+        warrantyInfo,
+        whatsInTheBox,
         sku: skuP.value,
         variantName,
         priceCents,
@@ -367,6 +394,10 @@ export async function applyProductBulkCsvImport(
         slug: p.slug,
         name: p.name,
         description: p.description,
+        deliveryInformation: p.deliveryInformation || undefined,
+        returnPolicy: p.returnPolicy || undefined,
+        warrantyInfo: p.warrantyInfo || undefined,
+        whatsInTheBox: p.whatsInTheBox || undefined,
         categoryId: p.categoryId,
         brandSlug: p.brandSlug,
         brandName: p.brandName,

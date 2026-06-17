@@ -19,7 +19,7 @@ export function IntroCarouselPage() {
   const slides = useMemo<Slide[]>(
     () => [
       { title: `Welcome to ${APP_DISPLAY_NAME}`, subtitle: 'Your favourite way to pay.' },
-      { title: 'Store, services and wallet', subtitle: 'Pay bills, buy vouchers, and manage cards in one place.' },
+      { title: 'Store, services and wallet', subtitle: 'Pay bills, shop the store, and manage cards in one place.' },
       { title: 'Safe by design', subtitle: 'Sign in, confirm with PIN, and track every payment.' },
       { title: 'Ready to dive in?', subtitle: 'Sign in to get started.' },
     ],

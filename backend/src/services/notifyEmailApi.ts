@@ -231,6 +231,53 @@ export function buildFallbackEmail(
     ].join('\n')
     return { subject, html, text }
   }
+  if (templateKey === 'order_dispute_submitted') {
+    const orderId = String(payload.orderId ?? '')
+    const disputeId = String(payload.disputeId ?? '')
+    const statusRaw = String(payload.status ?? 'open').toLowerCase()
+    const statusLabel =
+      statusRaw === 'open'
+        ? 'Open'
+        : statusRaw === 'in_review'
+          ? 'In review'
+          : statusRaw === 'resolved'
+            ? 'Resolved'
+            : statusRaw === 'dismissed'
+              ? 'Dismissed'
+              : statusRaw || 'Open'
+    const reasonPreview = String(payload.reasonPreview ?? '').trim()
+    const subject = `Dispute received — reference ${disputeId.slice(0, 8)}… — PayToday Store`
+    const html = wrapStoreTransactionalEmail(
+      {
+        preheader: `Dispute ${disputeId.slice(0, 8)}… · ${statusLabel}`,
+        title: 'We received your dispute',
+        intro:
+          'Thank you for letting us know. Support will review your case. Please quote your dispute reference in any follow-up messages.',
+        details: [
+          { label: 'Dispute reference', value: disputeId || '—' },
+          { label: 'Order reference', value: orderId || '—' },
+          { label: 'Status', value: statusLabel },
+          ...(reasonPreview ? [{ label: 'Reason', value: reasonPreview }] : []),
+        ],
+        cta: { label: 'Open store', href: store },
+        footnote: 'You can track updates from your order page when signed in.',
+      },
+      store,
+    )
+    const text = [
+      'PayToday Store — dispute received',
+      '',
+      `Dispute reference: ${disputeId}`,
+      `Order: ${orderId}`,
+      `Status: ${statusLabel}`,
+      reasonPreview ? `Reason: ${reasonPreview}` : '',
+      '',
+      `Store: ${store}`,
+    ]
+      .filter(Boolean)
+      .join('\n')
+    return { subject, html, text }
+  }
   if (templateKey === 'hub_demo_pending_payment') {
     const ref = String(payload.reference ?? '')
     const payee = String(payload.payeeName ?? '')

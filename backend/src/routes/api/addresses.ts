@@ -14,6 +14,7 @@ function parseAddressBody(body: unknown):
         label: string | null
         line1: string
         line2: string | null
+        suburb: string | null
         city: string
         region: string | null
         postalCode: string | null
@@ -39,6 +40,12 @@ function parseAddressBody(body: unknown):
     if (!l2.ok) return { ok: false, error: l2.message, field: l2.field }
     line2 = l2.value
   }
+  let suburb: string | null = null
+  if (typeof b.suburb === 'string' && b.suburb.trim()) {
+    const sr = parseAddressTextLine(b.suburb, 'suburb', 120, true)
+    if (!sr.ok) return { ok: false, error: sr.message, field: sr.field }
+    suburb = sr.value
+  }
   let region: string | null = null
   if (typeof b.region === 'string' && b.region.trim()) {
     const rr = parseAddressTextLine(b.region, 'region', INPUT_LIMITS.regionMax, true)
@@ -59,6 +66,7 @@ function parseAddressBody(body: unknown):
       label,
       line1: line1.value,
       line2,
+      suburb,
       city: city.value,
       region,
       postalCode,

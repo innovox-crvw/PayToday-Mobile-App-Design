@@ -28,6 +28,8 @@ describe('PayToday Store API', () => {
     const res = await request(app).get('/api/storefront-config')
     expect(res.status).toBe(200)
     expect(typeof res.body.checkoutRequireSignIn).toBe('boolean')
+    expect(typeof res.body.nedbankFinanceUrl).toBe('string')
+    expect(res.body.nedbankFinanceUrl).toMatch(/^https:\/\//u)
   })
 
   it('GET /api/storefront/popular-stores returns items array and days', async () => {

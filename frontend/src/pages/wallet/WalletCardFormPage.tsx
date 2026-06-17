@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Button, IconButton, Stack, TextField, Typography } from '@mui/material'
 import PhotoCameraOutlinedIcon from '@mui/icons-material/PhotoCameraOutlined'
-import { WalletSubheader } from './WalletSubheader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
+import { WalletDetailCard } from '../../components/wallet/WalletDetailCard'
 import { MOCK_CARDS } from '../../data/walletMock'
 
 export function WalletCardFormPage() {
@@ -26,17 +27,18 @@ export function WalletCardFormPage() {
   }
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 480, mx: 'auto' }}>
-      <WalletSubheader
-        title={isNew ? 'Add a Card' : 'Edit Card'}
-        rightSlot={
-          isNew ? (
-            <IconButton color="primary" aria-label="Scan card" size="small">
-              <PhotoCameraOutlinedIcon />
-            </IconButton>
-          ) : undefined
-        }
-      />
+    <WalletPageShell
+      title={isNew ? 'Add a Card' : 'Edit Card'}
+      showBack
+      rightSlot={
+        isNew ? (
+          <IconButton color="primary" aria-label="Scan card" size="small">
+            <PhotoCameraOutlinedIcon />
+          </IconButton>
+        ) : undefined
+      }
+    >
+      <WalletDetailCard>
       <TextField label="Card Nickname" value={nickname} onChange={(e) => setNickname(e.target.value)} fullWidth />
       <TextField
         label="Card Number"
@@ -71,6 +73,7 @@ export function WalletCardFormPage() {
           Delete Card
         </Button>
       )}
-    </Stack>
+      </WalletDetailCard>
+    </WalletPageShell>
   )
 }

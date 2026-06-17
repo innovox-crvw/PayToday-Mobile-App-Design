@@ -47,10 +47,48 @@ import {
   mergeNotifyRuntime,
   notifyInboxBrowserUrl,
 } from '../../services/integrationRuntimeConfig.js'
+import { computeIsAdultFromDob } from '../../services/liquorAgeService.js'
 
 export const authRouter = Router()
 
 const SALT_ROUNDS = 10
+
+function formatDobUtcIso(d: Date | null | undefined): string | null {
+  if (!d || !(d instanceof Date) || Number.isNaN(d.getTime())) return null
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function parseProfileDateOfBirth(raw: unknown): { ok: true; value: Date | null } | { ok: false; message: string } {
+  if (raw === null || raw === '') {
+    return { ok: true, value: null }
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false, message: 'dateOfBirth must be a YYYY-MM-DD string or null' }
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(raw.trim())
+  if (!m) {
+    return { ok: false, message: 'dateOfBirth must be YYYY-MM-DD' }
+  }
+  const y = Number(m[1])
+  const mo = Number(m[2]) - 1
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo, d))
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo || dt.getUTCDate() !== d) {
+    return { ok: false, message: 'Invalid dateOfBirth' }
+  }
+  const now = new Date()
+  if (dt > now) {
+    return { ok: false, message: 'dateOfBirth cannot be in the future' }
+  }
+  const oldest = new Date(Date.UTC(now.getUTCFullYear() - 120, now.getUTCMonth(), now.getUTCDate()))
+  if (dt < oldest) {
+    return { ok: false, message: 'dateOfBirth is too far in the past' }
+  }
+  return { ok: true, value: dt }
+}
 
 /** Static index for developers (no secrets). */
 const KEYCLOAK_HTTP_API_INDEX = [
@@ -550,6 +588,10 @@ authRouter.get('/me', requireAuth, async (req, res) => {
       const row = await findUserById(pool, uid)
       if (row) {
         const merchants = await listMerchantsForUser(pool, uid)
+        const dobRaw = row.date_of_birth
+        const dob = dobRaw ? (dobRaw instanceof Date ? dobRaw : new Date(String(dobRaw))) : null
+        const dateOfBirth = formatDobUtcIso(dob)
+        const isAdult = computeIsAdultFromDob(dob)
         res.json({
           user: {
             ...req.user,
@@ -557,6 +599,8 @@ authRouter.get('/me', requireAuth, async (req, res) => {
             notificationChannel: row.notification_channel,
             emailVerified: Boolean(row.email_verified),
             accountKind: row.password_hash ? 'local' : 'paytoday',
+            dateOfBirth,
+            isAdult,
             merchants: merchants.map((m) => ({
               payTodayMerchantId: m.payTodayMerchantId,
               name: m.name,
@@ -611,6 +655,16 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
       res.status(400).json({ error: 'notificationChannel must be email, in_app, or both' })
       return
     }
+  }
+
+  let dateOfBirth: Date | null | undefined
+  if (Object.prototype.hasOwnProperty.call(body, 'dateOfBirth')) {
+    const dobP = parseProfileDateOfBirth(body.dateOfBirth)
+    if (!dobP.ok) {
+      res.status(400).json({ error: dobP.message, field: 'dateOfBirth', code: 'validation_error' })
+      return
+    }
+    dateOfBirth = dobP.value
   }
 
   const wantsEmail = Object.prototype.hasOwnProperty.call(body, 'email')
@@ -714,12 +768,18 @@ authRouter.patch('/me', requireAuth, async (req, res) => {
     return
   }
 
-  if (fullName === undefined && notificationChannel === undefined) {
+  let uiLocale: string | null | undefined
+  if (Object.prototype.hasOwnProperty.call(body, 'uiLocale')) {
+    const raw = body.uiLocale
+    uiLocale = raw === null || raw === undefined ? null : typeof raw === 'string' ? raw.trim().slice(0, 20) : undefined
+  }
+
+  if (fullName === undefined && notificationChannel === undefined && dateOfBirth === undefined && uiLocale === undefined) {
     res.status(400).json({ error: 'No updates provided' })
     return
   }
 
-  await updateUserProfile(pool, uid, { fullName, notificationChannel })
+  await updateUserProfile(pool, uid, { fullName, notificationChannel, dateOfBirth, uiLocale })
   res.json({ ok: true })
 })
 

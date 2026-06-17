@@ -3,6 +3,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { Box, Card, CardActionArea, CardContent, Chip, Stack, Typography } from '@mui/material'
 import type { ProductDto } from '../../types/catalogue'
 import { totalListedStock, variantDiscountPercent, variantIsPurchasable } from '../../lib/productStock'
+import { formatPackageDimensionsMm } from '../../lib/formatPackageDims'
 import { ProductImage } from './ProductImage'
 import { SHOP_V2 } from '../../theme/storeV2'
 
@@ -28,6 +29,8 @@ export function ShopProductCard(props: {
   const firstVariant = p.variants.find((v) => variantIsPurchasable(v))
   const discountPct = firstVariant ? variantDiscountPercent(firstVariant) : null
   const merchantLine = (demoStore?.name ?? p.brandName ?? p.categoryName ?? '').trim() || null
+  const dimVariant = firstVariant ?? p.variants[0]
+  const packageLine = dimVariant ? formatPackageDimensionsMm(dimVariant) : null
 
   const heroUrl = useMemo(() => {
     const imgs = [...(p.images ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.url.localeCompare(b.url))
@@ -129,6 +132,15 @@ export function ShopProductCard(props: {
           >
             {priceLabel}
           </Typography>
+          {packageLine ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', mt: 0.75, lineHeight: 1.35, fontWeight: 600 }}
+            >
+              {packageLine}
+            </Typography>
+          ) : null}
         </CardContent>
       </CardActionArea>
     </Card>

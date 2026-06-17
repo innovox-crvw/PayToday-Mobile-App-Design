@@ -1,4 +1,4 @@
-import { apiUrl } from '../lib/apiOrigin'
+import { apiUrl, API_BASE_URL } from '../lib/apiOrigin'
 import { CSRF_COOKIE_NAME, CSRF_HEADER } from './constants'
 
 let csrfToken: string | null = null
@@ -40,10 +40,20 @@ export async function readResponseJson<T>(res: Response): Promise<T> {
   }
 }
 
+function csrfReachabilityHint(status: number): string {
+  if (status === 502 || status === 503 || status === 504) {
+    if (API_BASE_URL) {
+      return ` The API at ${API_BASE_URL} returned HTTP ${status} (unreachable or bad gateway). Fix that URL or start the backend there.`
+    }
+    return ` HTTP ${status} usually means the dev proxy could not reach the Express API on port 4000. From the download folder (where the root package.json lives), run \`npm run dev\` — that starts the API and Vite together. Or in a separate terminal: \`cd PayToday-Mobile-App-Design-main/backend && npm run dev\`. If the API uses another port, set \`DEV_API_PROXY\` in \`PayToday-Mobile-App-Design-main/frontend/.env.local\` (see \`.env.example\`) and restart Vite, or set \`VITE_API_BASE_URL\` to the full API origin.`
+  }
+  return ''
+}
+
 export async function fetchCsrfToken(): Promise<string> {
   const res = await fetch(apiUrl('/api/csrf'), { credentials: 'include' })
   if (!res.ok) {
-    throw new Error(`CSRF failed: ${res.status}`)
+    throw new Error(`CSRF token request failed: HTTP ${res.status}.${csrfReachabilityHint(res.status)}`)
   }
   const data = await readResponseJson<{ csrfToken: string }>(res)
   const fromCookie = readCsrfCookie()

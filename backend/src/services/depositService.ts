@@ -12,6 +12,9 @@ export type DepositBoxRow = {
   capacity: number
   currentLoad: number
   available: number
+  widthMm: number | null
+  depthMm: number | null
+  heightMm: number | null
 }
 
 export async function listLocations(pool: ConnectionPool): Promise<DepositLocationRow[]> {
@@ -36,10 +39,14 @@ export async function listLocationsWithBoxes(pool: ConnectionPool): Promise<
     code: string
     capacity: number
     current_load: number
+    width_mm: number | null
+    depth_mm: number | null
+    height_mm: number | null
   }>(`
     SELECT CAST(id AS NVARCHAR(36)) AS id,
            CAST(location_id AS NVARCHAR(36)) AS location_id,
-           code, capacity, current_load
+           code, capacity, current_load,
+           width_mm, depth_mm, height_mm
     FROM dbo.deposit_boxes
     ORDER BY location_id, code
   `)
@@ -52,6 +59,9 @@ export async function listLocationsWithBoxes(pool: ConnectionPool): Promise<
       capacity: row.capacity,
       currentLoad: row.current_load,
       available: Math.max(0, row.capacity - row.current_load),
+      widthMm: row.width_mm != null ? Number(row.width_mm) : null,
+      depthMm: row.depth_mm != null ? Number(row.depth_mm) : null,
+      heightMm: row.height_mm != null ? Number(row.height_mm) : null,
     }
     const arr = byLoc.get(row.location_id) ?? []
     arr.push(b)
@@ -113,10 +123,44 @@ export async function updateDepositLocation(
   }
 }
 
+function parsePositiveMmOrNull(v: unknown): number | null {
+  if (v === null) return null
+  if (v === undefined) {
+    throw new Error('widthMm, depthMm, and heightMm must be positive integers or null')
+  }
+  const n = Number(v)
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new Error('widthMm, depthMm, and heightMm must be positive integers when set')
+  }
+  return n
+}
+
+/** Either omit all three keys, or send all three (each number ≥1, or all null to clear stored dimensions). */
+function normalizeBoxDims3(input: { widthMm?: number | null; depthMm?: number | null; heightMm?: number | null }): {
+  w: number | null
+  d: number | null
+  h: number | null
+} {
+  if (input.widthMm === undefined && input.depthMm === undefined && input.heightMm === undefined) {
+    return { w: null, d: null, h: null }
+  }
+  if (input.widthMm === undefined || input.depthMm === undefined || input.heightMm === undefined) {
+    throw new Error('Provide widthMm, depthMm, and heightMm together, or omit all three')
+  }
+  const w = parsePositiveMmOrNull(input.widthMm)
+  const d = parsePositiveMmOrNull(input.depthMm)
+  const h = parsePositiveMmOrNull(input.heightMm)
+  const nums = [w, d, h].filter((x): x is number => typeof x === 'number')
+  if (nums.length > 0 && nums.length < 3) {
+    throw new Error('Either set all three interior dimensions (mm) or set all three to null')
+  }
+  return { w, d, h }
+}
+
 export async function createDepositBox(
   pool: ConnectionPool,
   locationId: string,
-  input: { code: string; capacity: number },
+  input: { code: string; capacity: number; widthMm?: number | null; depthMm?: number | null; heightMm?: number | null },
 ): Promise<{ id: string }> {
   if (!isUuidString(locationId)) {
     throw new Error('Invalid location id')
@@ -143,15 +187,23 @@ export async function createDepositBox(
   if (Number(dup.recordset[0]?.c ?? 0) > 0) {
     throw new Error('A box with this code already exists at this location')
   }
+  const { w: widthMm, d: depthMm, h: heightMm } = normalizeBoxDims3({
+    widthMm: input.widthMm,
+    depthMm: input.depthMm,
+    heightMm: input.heightMm,
+  })
   const r = await pool
     .request()
     .input('lid', locationId)
     .input('code', code)
     .input('cap', cap)
+    .input('wm', widthMm)
+    .input('dm', depthMm)
+    .input('hm', heightMm)
     .query<{ id: string }>(`
-      INSERT INTO dbo.deposit_boxes (location_id, code, capacity, current_load)
+      INSERT INTO dbo.deposit_boxes (location_id, code, capacity, current_load, width_mm, depth_mm, height_mm)
       OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-      VALUES (@lid, @code, @cap, 0)
+      VALUES (@lid, @code, @cap, 0, @wm, @dm, @hm)
     `)
   const id = r.recordset[0]?.id
   if (!id) {
@@ -160,7 +212,11 @@ export async function createDepositBox(
   return { id }
 }
 
-export async function updateDepositBox(pool: ConnectionPool, boxId: string, input: { code?: string; capacity?: number }): Promise<void> {
+export async function updateDepositBox(
+  pool: ConnectionPool,
+  boxId: string,
+  input: { code?: string; capacity?: number; widthMm?: number | null; depthMm?: number | null; heightMm?: number | null },
+): Promise<void> {
   if (!isUuidString(boxId)) {
     throw new Error('Invalid box id')
   }
@@ -170,8 +226,18 @@ export async function updateDepositBox(pool: ConnectionPool, boxId: string, inpu
     const cur = await tx
       .request()
       .input('id', boxId)
-      .query<{ location_id: string; code: string; capacity: number; current_load: number }>(
-        `SELECT CAST(location_id AS NVARCHAR(36)) AS location_id, code, capacity, current_load FROM dbo.deposit_boxes WHERE id = @id`,
+      .query<{
+        location_id: string
+        code: string
+        capacity: number
+        current_load: number
+        width_mm: number | null
+        depth_mm: number | null
+        height_mm: number | null
+      }>(
+        `SELECT CAST(location_id AS NVARCHAR(36)) AS location_id, code, capacity, current_load,
+                width_mm, depth_mm, height_mm
+         FROM dbo.deposit_boxes WHERE id = @id`,
       )
     const row = cur.recordset[0]
     if (!row) {
@@ -204,6 +270,19 @@ export async function updateDepositBox(pool: ConnectionPool, boxId: string, inpu
         throw new Error('capacity cannot be less than current load')
       }
       await tx.request().input('id', boxId).input('cap', cap).query(`UPDATE dbo.deposit_boxes SET capacity = @cap WHERE id = @id`)
+    }
+    if (input.widthMm !== undefined || input.depthMm !== undefined || input.heightMm !== undefined) {
+      if (input.widthMm === undefined || input.depthMm === undefined || input.heightMm === undefined) {
+        throw new Error('When updating dimensions, send widthMm, depthMm, and heightMm together (use null to clear all)')
+      }
+      const merged = normalizeBoxDims3(input)
+      await tx
+        .request()
+        .input('id', boxId)
+        .input('wm', merged.w)
+        .input('dm', merged.d)
+        .input('hm', merged.h)
+        .query(`UPDATE dbo.deposit_boxes SET width_mm = @wm, depth_mm = @dm, height_mm = @hm WHERE id = @id`)
     }
     await tx.commit()
   } catch (e) {

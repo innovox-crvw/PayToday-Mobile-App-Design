@@ -136,15 +136,11 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
     const catSql = `
         SELECT TOP 12
           ISNULL(c.name, N'Uncategorised') AS categoryName,
-          CAST(SUM(ISNULL(qty.sumQty, 0)) AS INT) AS units
+          CAST(SUM(CAST(ISNULL(iq.quantity, 0) AS BIGINT)) AS INT) AS units
         FROM dbo.products p
         LEFT JOIN dbo.categories c ON c.id = p.category_id
         INNER JOIN dbo.product_variants v ON v.product_id = p.id
-        LEFT JOIN (
-          SELECT variant_id, SUM(quantity) AS sumQty
-          FROM dbo.inventory_quantity
-          GROUP BY variant_id
-        ) qty ON qty.variant_id = v.id
+        LEFT JOIN dbo.inventory_quantity iq ON iq.variant_id = v.id
         WHERE 1 = 1${scoped ? catFilter : ''}
         GROUP BY ISNULL(c.name, N'Uncategorised')
         ORDER BY units DESC
@@ -174,6 +170,8 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
       unitsByCategory,
       topProducts,
       returnCasesByStatus,
+      disputesByStatus,
+      disputesOpenedByDay,
     ] = await Promise.all([
       ordersReq.query<{ status: string; count: number }>(ordersSql),
       salesReq.query<{ day: Date; orderCount: number; revenueCents: number }>(salesSql),
@@ -196,6 +194,31 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
           `)
         } catch {
           return { recordset: [] as { status: string; count: number }[] }
+        }
+      })(),
+      (async () => {
+        try {
+          return await pool.request().query<{ status: string; count: number }>(`
+            SELECT status AS status, COUNT(*) AS [count]
+            FROM dbo.order_disputes
+            GROUP BY status
+            ORDER BY [count] DESC
+          `)
+        } catch {
+          return { recordset: [] as { status: string; count: number }[] }
+        }
+      })(),
+      (async () => {
+        try {
+          return await pool.request().query<{ day: Date; count: number }>(`
+            SELECT CAST(created_at AS DATE) AS day, COUNT(*) AS [count]
+            FROM dbo.order_disputes
+            WHERE created_at >= DATEADD(DAY, -13, CAST(SYSUTCDATETIME() AS DATE))
+            GROUP BY CAST(created_at AS DATE)
+            ORDER BY day ASC
+          `)
+        } catch {
+          return { recordset: [] as { day: Date; count: number }[] }
         }
       })(),
     ])
@@ -229,6 +252,14 @@ adminOverviewRouter.get('/', async (req: Request, res) => {
       returnCasesByStatus: returnCasesByStatus.recordset.map((r) => ({
         status: r.status,
         count: Number(r.count),
+      })),
+      disputesByStatus: disputesByStatus.recordset.map((r) => ({
+        status: r.status,
+        count: Number(r.count),
+      })),
+      disputesOpenedByDay: disputesOpenedByDay.recordset.map((r) => ({
+        day: r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day).slice(0, 10),
+        count: Number(r.count) || 0,
       })),
     })
   } catch (e) {

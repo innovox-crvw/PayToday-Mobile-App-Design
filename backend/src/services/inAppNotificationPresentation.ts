@@ -112,6 +112,22 @@ export function inAppCopyForTemplate(templateKey: string, payloadJson: string): 
     }
   }
 
+  if (templateKey === 'order_dispute_submitted') {
+    const orderId = String(payload.orderId ?? '').trim()
+    const disputeId = String(payload.disputeId ?? '').trim()
+    const status = String(payload.status ?? 'open').trim().toLowerCase()
+    const statusLabel = status === 'open' ? 'Open' : status === 'in_review' ? 'In review' : status || 'Open'
+    return {
+      title: 'Dispute received',
+      body:
+        disputeId && orderId
+          ? `Ref ${disputeId.slice(0, 8)}… · Order ${orderId} · ${statusLabel}`
+          : disputeId
+            ? `Ref ${disputeId.slice(0, 8)}… · ${statusLabel}`
+            : 'Your dispute was submitted.',
+    }
+  }
+
   if (templateKey === 'merchant_paytoday_sync') {
     const name = String(payload.merchantName ?? 'Merchant').trim()
     const mid = payload.payTodayMerchantId

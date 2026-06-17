@@ -1,11 +1,11 @@
-import { Link as RouterLink, useLocation } from 'react-router-dom'
-import { Card, List, ListItemButton, ListItemIcon, ListItemText, Stack, Typography } from '@mui/material'
+import { useLocation } from 'react-router-dom'
 import AddCardIcon from '@mui/icons-material/AddCard'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance'
-import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import SavingsOutlinedIcon from '@mui/icons-material/SavingsOutlined'
 import { APP_DISPLAY_NAME, APP_WALLET_DISPLAY_NAME } from '../../theme/branding'
-import { WalletSubheader } from './WalletSubheader'
+import { WalletPageShell } from '../../components/wallet/WalletPageShell'
+import { WalletNavList } from '../../components/wallet/WalletNavList'
 
 const actions = [
   { key: 'fund', label: 'Fund My Wallet', sub: 'Add money from a card or bank', icon: <AddCardIcon /> },
@@ -18,32 +18,34 @@ export function WalletPayTodayPage() {
   const prefix = pathname.startsWith('/embed') ? '/embed/wallet' : '/wallet'
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 560, mx: 'auto' }}>
-      <WalletSubheader title={APP_WALLET_DISPLAY_NAME} />
-      <Typography variant="body2" color="text.secondary" sx={{ px: 0.5 }}>
-        Manage how you add, move, or withdraw your wallet balance.
-      </Typography>
-      <Card variant="outlined" sx={{ borderRadius: 3, borderColor: 'divider', overflow: 'hidden' }}>
-        <List disablePadding>
-          {actions.map((a, i) => (
-            <ListItemButton
-              key={a.key}
-              component={RouterLink}
-              to={`${prefix}/paytoday/${a.key}`}
-              sx={{
-                py: 2,
-                alignItems: 'flex-start',
-                borderBottom: i < actions.length - 1 ? 1 : 0,
-                borderColor: 'divider',
-              }}
-            >
-              <ListItemIcon sx={{ color: 'primary.main', minWidth: 48, mt: 0.5 }}>{a.icon}</ListItemIcon>
-              <ListItemText primary={a.label} secondary={a.sub} primaryTypographyProps={{ fontWeight: 700 }} />
-              <ChevronRightIcon color="action" sx={{ mt: 1 }} />
-            </ListItemButton>
-          ))}
-        </List>
-      </Card>
-    </Stack>
+    <WalletPageShell
+      variant="sub"
+      title={APP_WALLET_DISPLAY_NAME}
+      subtitle="Manage how you add, move, or withdraw your wallet balance."
+      showBack
+    >
+      <WalletNavList
+        groups={[
+          {
+            items: actions.map((a) => ({
+              to: `${prefix}/paytoday/${a.key}`,
+              label: a.label,
+              secondary: a.sub,
+              icon: a.icon,
+            })),
+          },
+          {
+            items: [
+              {
+                to: `${prefix}/savings`,
+                label: 'Savings pocket',
+                secondary: 'Round-up spare change from PayToday Wallet purchases',
+                icon: <SavingsOutlinedIcon />,
+              },
+            ],
+          },
+        ]}
+      />
+    </WalletPageShell>
   )
 }

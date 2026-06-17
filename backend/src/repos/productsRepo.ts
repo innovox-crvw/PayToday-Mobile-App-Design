@@ -21,6 +21,43 @@ export function isMissingPayTodayMerchantIdColumnError(e: unknown): boolean {
   return /pay_today_merchant_id|Invalid column name/i.test(msg)
 }
 
+function isMissingContainsAlcoholColumnError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /contains_alcohol/i.test(msg)
+}
+
+function isMissingProductTabColumnError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /delivery_information|return_policy|warranty_info|whats_in_the_box|Invalid column name/i.test(msg)
+}
+
+let cachedProductTabColumns: boolean | undefined
+
+export async function hasProductTabColumns(pool: ConnectionPool): Promise<boolean> {
+  if (cachedProductTabColumns !== undefined) return cachedProductTabColumns
+  try {
+    const r = await pool.request().query<{ len: number | null }>(`
+      SELECT COL_LENGTH(N'dbo.products', N'delivery_information') AS len
+    `)
+    cachedProductTabColumns = r.recordset[0]?.len != null
+  } catch {
+    cachedProductTabColumns = false
+  }
+  return cachedProductTabColumns
+}
+
+function productTabSelectSql(includeTabColumns: boolean): string {
+  return includeTabColumns
+    ? `p.delivery_information,
+      p.return_policy,
+      p.warranty_info,
+      p.whats_in_the_box,`
+    : `CAST(NULL AS NVARCHAR(MAX)) AS delivery_information,
+      CAST(NULL AS NVARCHAR(MAX)) AS return_policy,
+      CAST(NULL AS NVARCHAR(MAX)) AS warranty_info,
+      CAST(NULL AS NVARCHAR(MAX)) AS whats_in_the_box,`
+}
+
 export function normalizeInventoryPolicy(raw: string | null | undefined): InventoryPolicy {
   const s = (raw ?? 'track').trim().toLowerCase()
   if (s === 'continue' || s === 'not_tracked') return s
@@ -32,6 +69,10 @@ interface ProductRow {
   slug: string
   name: string
   description: string | null
+  delivery_information?: string | null
+  return_policy?: string | null
+  warranty_info?: string | null
+  whats_in_the_box?: string | null
   categoryId: string | null
   categorySlug: string | null
   categoryName: string | null
@@ -51,6 +92,7 @@ interface ProductRow {
   package_width_mm: number | null
   package_height_mm: number | null
   gross_weight_g: number | null
+  productContainsAlcohol?: number | boolean
 }
 
 function groupProducts(rows: ProductRow[]): ProductDto[] {
@@ -63,6 +105,10 @@ function groupProducts(rows: ProductRow[]): ProductDto[] {
         slug: r.slug,
         name: r.name,
         description: r.description ?? '',
+        deliveryInformation: r.delivery_information ?? '',
+        returnPolicy: r.return_policy ?? '',
+        warrantyInfo: r.warranty_info ?? '',
+        whatsInTheBox: r.whats_in_the_box ?? '',
         categoryId: r.categoryId ?? '',
         categorySlug: r.categorySlug ?? '',
         categoryName: r.categoryName ?? '',
@@ -70,6 +116,7 @@ function groupProducts(rows: ProductRow[]): ProductDto[] {
         brandName: r.brandName?.trim() ? r.brandName.trim() : null,
         imageUrl: r.imageUrl,
         isActive: Boolean(r.productIsActive ?? true),
+        containsAlcohol: Boolean(Number(r.productContainsAlcohol ?? 0)),
         variants: [],
       }
       map.set(r.productId, p)
@@ -106,6 +153,8 @@ export type ListProductsOptions = {
    * Admin catalogue only; storefront `listProducts` ignores this.
    */
   payTodayMerchantIds?: number[]
+  /** Storefront: restrict to these product ids (caller preserves order via sort + client reorder if needed). */
+  productIds?: string[]
 }
 
 function buildListSql(
@@ -114,6 +163,9 @@ function buildListSql(
   adminCatalogue: boolean,
   includeScopeColumns: boolean,
   useCategorySubtree: boolean,
+  includeAlcoholColumn: boolean,
+  productIdWhereSql: string,
+  includeTabColumns: boolean,
 ): string {
   const search = opts?.search
   const categorySlug = opts?.categorySlug?.trim()
@@ -165,11 +217,17 @@ function buildListSql(
       p.slug,
       p.name,
       p.description,
+      ${productTabSelectSql(includeTabColumns)}
       CAST(c.id AS NVARCHAR(36)) AS categoryId,
       c.slug AS categorySlug,
       c.name AS categoryName,
       ${brandSelect}
       p.is_active AS productIsActive,
+      ${
+        includeAlcoholColumn
+          ? 'ISNULL(p.contains_alcohol, 0) AS productContainsAlcohol'
+          : 'CAST(0 AS BIT) AS productContainsAlcohol'
+      },
       CAST(v.id AS NVARCHAR(36)) AS variantId,
       v.sku,
       v.name AS variantName,
@@ -201,6 +259,9 @@ function buildListSql(
     const ph = merchantIds.map((_, i) => `@mid${i}`).join(', ')
     sql += ` AND p.pay_today_merchant_id IN (${ph})`
   }
+  if (productIdWhereSql) {
+    sql += productIdWhereSql
+  }
   if (sort === 'price_asc') {
     sql += ` ORDER BY v.price_cents ASC, p.name, v.sku`
   } else if (sort === 'price_desc') {
@@ -218,13 +279,39 @@ async function listProductsQuery(
   adminCatalogue: boolean,
   includeScopeColumns: boolean,
   useCategorySubtree = true,
+  includeAlcoholColumn = true,
+  includeTabColumns = true,
 ): Promise<ProductDto[]> {
   const req = pool.request()
   const search = opts?.search
   const categorySlug = opts?.categorySlug?.trim()
   const brandSlug = opts?.brandSlug?.trim()
 
-  const sql = buildListSql(opts, includeBrandColumns, adminCatalogue, includeScopeColumns, useCategorySubtree)
+  const productIds =
+    opts?.productIds
+      ?.map((id) => String(id ?? '').trim())
+      .filter((id) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(id),
+      ) ?? []
+  let productIdWhereSql = ''
+  if (productIds.length > 0) {
+    const ph = productIds.map((_, i) => `@spid${i}`).join(', ')
+    productIdWhereSql = ` AND CAST(p.id AS NVARCHAR(36)) IN (${ph})`
+    for (let i = 0; i < productIds.length; i++) {
+      req.input(`spid${i}`, productIds[i]!)
+    }
+  }
+
+  const sql = buildListSql(
+    opts,
+    includeBrandColumns,
+    adminCatalogue,
+    includeScopeColumns,
+    useCategorySubtree,
+    includeAlcoholColumn,
+    productIdWhereSql,
+    includeTabColumns,
+  )
   if (search && search.trim()) {
     req.input('q', `%${search.trim()}%`)
   }
@@ -246,6 +333,7 @@ function listProductAttempts(
   pool: ConnectionPool,
   opts: ListProductsOptions | undefined,
   adminCatalogue: boolean,
+  includeTabColumns: boolean,
 ): Array<() => Promise<ProductDto[]>> {
   const combos: Array<[boolean, boolean, boolean]> = [
     [true, true, true],
@@ -257,10 +345,19 @@ function listProductAttempts(
     [true, false, false],
     [false, false, false],
   ]
-  return combos.map(
+  const withAlcohol = combos.map(
     ([includeBrand, includeScope, subtree]) => () =>
-      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree),
+      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree, true, includeTabColumns),
   )
+  const withoutAlcohol = combos.map(
+    ([includeBrand, includeScope, subtree]) => () =>
+      listProductsQuery(pool, opts, includeBrand, adminCatalogue, includeScope, subtree, false, includeTabColumns),
+  )
+  const attempts = [...withAlcohol, ...withoutAlcohol]
+  if (includeTabColumns) {
+    attempts.push(...listProductAttempts(pool, opts, adminCatalogue, false))
+  }
+  return attempts
 }
 
 async function runFirstSuccessful(attempts: Array<() => Promise<ProductDto[]>>): Promise<ProductDto[]> {
@@ -276,7 +373,18 @@ async function runFirstSuccessful(attempts: Array<() => Promise<ProductDto[]>>):
 }
 
 export async function listProducts(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
-  const list = await runFirstSuccessful(listProductAttempts(pool, opts, false))
+  const tabCols = await hasProductTabColumns(pool)
+  const list = await runFirstSuccessful(listProductAttempts(pool, opts, false, tabCols))
+  const idOrder =
+    opts?.productIds
+      ?.map((id) => String(id ?? '').trim().toLowerCase())
+      .filter((id) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(id),
+      ) ?? []
+  if (idOrder.length > 0) {
+    const order = new Map(idOrder.map((id, i) => [id, i]))
+    list.sort((a, b) => (order.get(a.id.toLowerCase()) ?? 999) - (order.get(b.id.toLowerCase()) ?? 999))
+  }
   if (opts?.includeImages && list.length > 0) {
     await attachProductImagesToList(pool, list)
   }
@@ -286,12 +394,13 @@ export async function listProducts(pool: ConnectionPool, opts?: ListProductsOpti
 export async function listProductsAdmin(pool: ConnectionPool, opts?: ListProductsOptions): Promise<ProductDto[]> {
   const merchantIds = opts?.payTodayMerchantIds?.filter((n) => Number.isInteger(n) && n >= 0) ?? []
   const scopedOpts = merchantIds.length > 0 ? opts : { ...opts, payTodayMerchantIds: undefined }
+  const tabCols = await hasProductTabColumns(pool)
   let list: ProductDto[]
   try {
-    list = await runFirstSuccessful(listProductAttempts(pool, scopedOpts, true))
+    list = await runFirstSuccessful(listProductAttempts(pool, scopedOpts, true, tabCols))
   } catch (e) {
     if (merchantIds.length > 0 && isMissingPayTodayMerchantIdColumnError(e)) {
-      list = await runFirstSuccessful(listProductAttempts(pool, { ...opts, payTodayMerchantIds: undefined }, true))
+      list = await runFirstSuccessful(listProductAttempts(pool, { ...opts, payTodayMerchantIds: undefined }, true, tabCols))
     } else {
       throw e
     }
@@ -359,6 +468,8 @@ async function getProductBySlugQuery(
   slug: string,
   includeBrandColumns: boolean,
   includeScopeColumns: boolean,
+  includeAlcoholColumn: boolean,
+  includeTabColumns: boolean,
 ): Promise<ProductDto | null> {
   const req = pool.request()
   req.input('slug', slug)
@@ -394,11 +505,17 @@ async function getProductBySlugQuery(
       p.slug,
       p.name,
       p.description,
+      ${productTabSelectSql(includeTabColumns)}
       CAST(c.id AS NVARCHAR(36)) AS categoryId,
       c.slug AS categorySlug,
       c.name AS categoryName,
       ${brandSelect}
       p.is_active AS productIsActive,
+      ${
+        includeAlcoholColumn
+          ? 'ISNULL(p.contains_alcohol, 0) AS productContainsAlcohol'
+          : 'CAST(0 AS BIT) AS productContainsAlcohol'
+      },
       CAST(v.id AS NVARCHAR(36)) AS variantId,
       v.sku,
       v.name AS variantName,
@@ -566,36 +683,55 @@ async function enrichProductDetail(pool: ConnectionPool, product: ProductDto, in
   }
 }
 
-export async function getProductBySlug(pool: ConnectionPool, slug: string): Promise<ProductDto | null> {
-  try {
-    const p = await getProductBySlugQuery(pool, slug, true, true)
+async function getProductBySlugWithFlags(
+  pool: ConnectionPool,
+  slug: string,
+  includeAlcoholColumn: boolean,
+): Promise<ProductDto | null> {
+  let includeTabColumns = await hasProductTabColumns(pool)
+  const runQuery = async (brand: boolean, scope: boolean, tabs: boolean) => {
+    const p = await getProductBySlugQuery(pool, slug, brand, scope, includeAlcoholColumn, tabs)
     if (!p) return null
-    await enrichProductDetail(pool, p, true)
+    await enrichProductDetail(pool, p, scope)
     return p
+  }
+  try {
+    return await runQuery(true, true, includeTabColumns)
   } catch (e) {
+    if (isMissingProductTabColumnError(e) && includeTabColumns) {
+      cachedProductTabColumns = false
+      includeTabColumns = false
+      try {
+        return await runQuery(true, true, false)
+      } catch (eTab) {
+        e = eTab
+      }
+    }
     if (!isMissingBrandColumnError(e)) {
       if (isMissingCatalogueScopeColumnError(e)) {
-        const p = await getProductBySlugQuery(pool, slug, true, false)
-        if (!p) return null
-        await enrichProductDetail(pool, p, false)
-        return p
+        return await runQuery(true, false, includeTabColumns)
       }
       throw e
     }
     try {
-      const p = await getProductBySlugQuery(pool, slug, false, true)
-      if (!p) return null
-      await enrichProductDetail(pool, p, true)
-      return p
+      return await runQuery(false, true, includeTabColumns)
     } catch (e2) {
       if (isMissingCatalogueScopeColumnError(e2)) {
-        const p = await getProductBySlugQuery(pool, slug, false, false)
-        if (!p) return null
-        await enrichProductDetail(pool, p, false)
-        return p
+        return await runQuery(false, false, includeTabColumns)
       }
       throw e2
     }
+  }
+}
+
+export async function getProductBySlug(pool: ConnectionPool, slug: string): Promise<ProductDto | null> {
+  try {
+    return await getProductBySlugWithFlags(pool, slug, true)
+  } catch (e) {
+    if (isMissingContainsAlcoholColumnError(e)) {
+      return await getProductBySlugWithFlags(pool, slug, false)
+    }
+    throw e
   }
 }
 
@@ -623,6 +759,41 @@ export async function replaceVariantOptions(
   }
 }
 
+export type ProductTabContentFields = {
+  deliveryInformation?: string | null
+  returnPolicy?: string | null
+  warrantyInfo?: string | null
+  whatsInTheBox?: string | null
+}
+
+async function applyProductTabContentPatch(
+  exec: SqlExecutor,
+  productId: string,
+  tabs: ProductTabContentFields,
+): Promise<void> {
+  const pairs: Array<[keyof ProductTabContentFields, string]> = [
+    ['deliveryInformation', 'delivery_information'],
+    ['returnPolicy', 'return_policy'],
+    ['warrantyInfo', 'warranty_info'],
+    ['whatsInTheBox', 'whats_in_the_box'],
+  ]
+  const hasAny = pairs.some(([k]) => tabs[k] !== undefined)
+  if (!hasAny) return
+  try {
+    for (const [key, col] of pairs) {
+      if (tabs[key] === undefined) continue
+      await exec
+        .request()
+        .input('id', productId)
+        .input('v', tabs[key])
+        .query(`UPDATE dbo.products SET ${col} = @v WHERE id = @id`)
+    }
+  } catch (e) {
+    if (isMissingProductTabColumnError(e)) return
+    throw e
+  }
+}
+
 export async function createProductSimple(
   exec: SqlExecutor,
   input: {
@@ -647,7 +818,7 @@ export async function createProductSimple(
     grossWeightG?: number | null
     /** When set and the column exists, stamps `dbo.products.pay_today_merchant_id` after insert. */
     payTodayMerchantId?: number | null
-  },
+  } & ProductTabContentFields,
 ): Promise<{ productId: string; variantId: string }> {
   const invPol = input.inventoryPolicy ?? 'track'
   const cmp = input.compareAtPriceCents
@@ -705,6 +876,13 @@ export async function createProductSimple(
       /* Column or FK missing on older schemas */
     }
   }
+
+  await applyProductTabContentPatch(exec, productId, {
+    deliveryInformation: input.deliveryInformation,
+    returnPolicy: input.returnPolicy,
+    warrantyInfo: input.warrantyInfo,
+    whatsInTheBox: input.whatsInTheBox,
+  })
 
   const r2 = exec.request()
   r2.input('productId', productId)
@@ -906,10 +1084,22 @@ export async function updateProductAdmin(
     description?: string | null
     isActive?: boolean
     categoryId?: string | null
-  },
+    containsAlcohol?: boolean
+  } & ProductTabContentFields,
 ): Promise<void> {
   const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k)
-  if (!has('name') && !has('slug') && !has('description') && !has('isActive') && !has('categoryId')) {
+  if (
+    !has('name') &&
+    !has('slug') &&
+    !has('description') &&
+    !has('isActive') &&
+    !has('categoryId') &&
+    !has('containsAlcohol') &&
+    !has('deliveryInformation') &&
+    !has('returnPolicy') &&
+    !has('warrantyInfo') &&
+    !has('whatsInTheBox')
+  ) {
     throw new Error('No fields to update')
   }
 
@@ -965,6 +1155,29 @@ export async function updateProductAdmin(
         .input('categoryId', patch.categoryId)
         .query(`UPDATE dbo.products SET category_id = @categoryId WHERE id = @id`)
     }
+    await applyProductTabContentPatch(tx, productId, {
+      deliveryInformation: patch.deliveryInformation,
+      returnPolicy: patch.returnPolicy,
+      warrantyInfo: patch.warrantyInfo,
+      whatsInTheBox: patch.whatsInTheBox,
+    })
+
+    if (patch.containsAlcohol !== undefined) {
+      try {
+        await tx
+          .request()
+          .input('id', productId)
+          .input('alc', patch.containsAlcohol ? 1 : 0)
+          .query(`UPDATE dbo.products SET contains_alcohol = @alc WHERE id = @id`)
+      } catch (e) {
+        if (isMissingContainsAlcoholColumnError(e)) {
+          throw new Error(
+            'Database is missing dbo.products.contains_alcohol. Apply migration 053 (npm run db:migrate from the backend folder) or run backend/migrations/053_merchant_hours_and_alcohol_flag.sql in SSMS.',
+          )
+        }
+        throw e
+      }
+    }
     await tx.commit()
   } catch (e) {
     await tx.rollback()
@@ -978,31 +1191,27 @@ function validateVariantDimensionPatch(patch: {
   packageHeightMm?: number | null
   grossWeightG?: number | null
 }): void {
-  const keys: Array<'packageLengthMm' | 'packageWidthMm' | 'packageHeightMm'> = [
-    'packageLengthMm',
-    'packageWidthMm',
-    'packageHeightMm',
-  ]
-  const present = keys.filter((k) => Object.prototype.hasOwnProperty.call(patch, k) && patch[k] !== undefined)
-  if (present.length > 0 && present.length < 3) {
-    throw new Error('packageLengthMm, packageWidthMm, and packageHeightMm must be sent together (or omit all three)')
-  }
-  if (present.length === 3) {
+  const lKey = Object.prototype.hasOwnProperty.call(patch, 'packageLengthMm')
+  const wKey = Object.prototype.hasOwnProperty.call(patch, 'packageWidthMm')
+  const hKey = Object.prototype.hasOwnProperty.call(patch, 'packageHeightMm')
+  if (lKey || wKey || hKey) {
+    if (!lKey || !wKey || !hKey) {
+      throw new Error('packageLengthMm, packageWidthMm, and packageHeightMm must be sent together')
+    }
     const l = patch.packageLengthMm
     const w = patch.packageWidthMm
     const h = patch.packageHeightMm
+    if (l == null || w == null || h == null) {
+      throw new Error('Package length, width, and height (mm) cannot be cleared; send non-negative integers for all three')
+    }
     for (const [label, v] of [
       ['packageLengthMm', l],
       ['packageWidthMm', w],
       ['packageHeightMm', h],
     ] as const) {
-      if (v != null && (typeof v !== 'number' || !Number.isInteger(v) || v < 0)) {
-        throw new Error(`${label} must be null or a non-negative integer (mm)`)
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        throw new Error(`${label} must be a non-negative integer (mm)`)
       }
-    }
-    const anySet = l != null || w != null || h != null
-    if (anySet && (l == null || w == null || h == null)) {
-      throw new Error('When setting package size, all of packageLengthMm, packageWidthMm, and packageHeightMm are required')
     }
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'grossWeightG') && patch.grossWeightG !== undefined && patch.grossWeightG != null) {
@@ -1246,6 +1455,72 @@ export async function updateVariantAdmin(
     await tx.rollback()
     throw e
   }
+}
+
+const SUPER_DEALS_RAIL_CAP = 72
+
+/**
+ * True when the active category subtree has at least one product and every active product is alcohol.
+ * Used for storefront messaging when liquor gating hides the catalogue for non-adults.
+ */
+export async function isCategorySubtreeAlcoholOnly(pool: ConnectionPool, categorySlug: string): Promise<boolean> {
+  const slug = categorySlug.trim()
+  if (!slug) return false
+  try {
+    const r = await pool.request().input('slug', slug).query<{ v: number }>(`
+      ;WITH cat_subtree AS (
+        SELECT id FROM dbo.categories WHERE slug = @slug AND COALESCE(is_active, 1) = 1
+        UNION ALL
+        SELECT c.id FROM dbo.categories c
+        INNER JOIN cat_subtree t ON c.parent_id = t.id
+        WHERE COALESCE(c.is_active, 1) = 1
+      ),
+      agg AS (
+        SELECT
+          COUNT_BIG(CASE WHEN ISNULL(p.contains_alcohol, 0) = 0 THEN 1 END) AS non_alc,
+          COUNT_BIG(1) AS total
+        FROM dbo.products p
+        WHERE p.is_active = 1 AND p.category_id IN (SELECT id FROM cat_subtree)
+      )
+      SELECT CAST(CASE WHEN total > 0 AND non_alc = 0 THEN 1 ELSE 0 END AS INT) AS v FROM agg
+    `)
+    return Number(r.recordset[0]?.v ?? 0) === 1
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/contains_alcohol/i.test(msg)) return false
+    throw e
+  }
+}
+
+/**
+ * Store home “Super deals”: active products with compare-at above sale price on any variant,
+ * ordered by largest per-product savings (then hydrated via `listProducts`).
+ */
+export async function listSuperDealProducts(pool: ConnectionPool): Promise<ProductDto[]> {
+  const r = await pool.request().query<{ pid: string }>(`
+    WITH per_product AS (
+      SELECT CAST(p.id AS NVARCHAR(36)) AS pid,
+        MAX(
+          CASE
+            WHEN v.compare_at_price_cents IS NOT NULL
+              AND CAST(v.compare_at_price_cents AS BIGINT) > CAST(v.price_cents AS BIGINT)
+            THEN CAST(v.compare_at_price_cents AS BIGINT) - CAST(v.price_cents AS BIGINT)
+            ELSE CAST(0 AS BIGINT)
+          END
+        ) AS best_save
+      FROM dbo.products p
+      INNER JOIN dbo.product_variants v ON v.product_id = p.id
+      WHERE p.is_active = 1
+      GROUP BY p.id
+    )
+    SELECT TOP (${SUPER_DEALS_RAIL_CAP}) CAST(pid AS NVARCHAR(36)) AS pid
+    FROM per_product
+    WHERE best_save > 0
+    ORDER BY best_save DESC, pid
+  `)
+  const ids = r.recordset.map((row) => String(row.pid))
+  if (!ids.length) return []
+  return listProducts(pool, { productIds: ids, sort: 'name', includeImages: true })
 }
 
 export async function getVariantInventoryPolicy(pool: ConnectionPool, variantId: string): Promise<InventoryPolicy> {

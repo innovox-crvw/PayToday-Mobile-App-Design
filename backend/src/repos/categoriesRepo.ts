@@ -1,5 +1,11 @@
 import type { ConnectionPool } from 'mssql'
 import { isValidCategoryIconKey, normalizeCategoryIconKey } from '../lib/categoryIconKeys.js'
+import { env } from '../config/env.js'
+import {
+  bindRestrictedCategorySlugParams,
+  productMatchesLiquorGateSql,
+  restrictedCategorySubtreeCte,
+} from '../services/ageRestrictedCategoryService.js'
 
 
 export type CategoryRow = {
@@ -11,6 +17,10 @@ export type CategoryRow = {
   isActive: boolean
   /** Allowlisted storefront icon key; null = default icon in UI. */
   iconKey: string | null
+  /** Admin: category (or its descendants when parent is flagged) may show NedAccess financing on product pages when price ≥ N$5,000. */
+  financeEligible: boolean
+  /** Admin: category (or descendants) may use in-app payment plans at checkout when cart subtotal ≥ N$5,000. */
+  paymentPlanEligible: boolean
 }
 
 function mapRow(row: {
@@ -21,7 +31,13 @@ function mapRow(row: {
   sort_order: number
   is_active: number | boolean
   icon_key?: string | null
+  finance_eligible?: number | boolean | null
+  payment_plan_eligible?: number | boolean | null
 }): CategoryRow {
+  const fe = row.finance_eligible
+  const financeEligible = fe === true || fe === 1 || Number(fe) === 1
+  const pe = row.payment_plan_eligible
+  const paymentPlanEligible = pe === true || pe === 1 || Number(pe) === 1
   return {
     id: row.id,
     slug: row.slug,
@@ -30,6 +46,8 @@ function mapRow(row: {
     sortOrder: row.sort_order,
     isActive: Boolean(row.is_active),
     iconKey: row.icon_key?.trim() ? normalizeCategoryIconKey(row.icon_key.trim()) : null,
+    financeEligible,
+    paymentPlanEligible,
   }
 }
 
@@ -46,11 +64,15 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       sort_order: number
       is_active: number | boolean
       icon_key: string | null
+      finance_eligible: number | boolean
+      payment_plan_eligible: number | boolean
     }>(`
       SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
              CAST(parent_id AS NVARCHAR(36)) AS parent_id,
              sort_order, is_active,
-             LTRIM(RTRIM(icon_key)) AS icon_key
+             LTRIM(RTRIM(icon_key)) AS icon_key,
+             CONVERT(BIT, ISNULL(finance_eligible, 0)) AS finance_eligible,
+             CONVERT(BIT, ISNULL(payment_plan_eligible, 0)) AS payment_plan_eligible
       FROM dbo.categories
       ${where}
       ORDER BY sort_order, name
@@ -58,6 +80,56 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
     return r.recordset.map((row) => mapRow(row))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    if (/payment_plan_eligible/i.test(msg)) {
+      try {
+        const r = await pool.request().query<{
+          id: string
+          slug: string
+          name: string
+          parent_id: string | null
+          sort_order: number
+          is_active: number | boolean
+          icon_key: string | null
+          finance_eligible: number | boolean
+        }>(`
+          SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
+                 CAST(parent_id AS NVARCHAR(36)) AS parent_id,
+                 sort_order, is_active,
+                 LTRIM(RTRIM(icon_key)) AS icon_key,
+                 CONVERT(BIT, ISNULL(finance_eligible, 0)) AS finance_eligible
+          FROM dbo.categories
+          ${where}
+          ORDER BY sort_order, name
+        `)
+        return r.recordset.map((row) => mapRow({ ...row, payment_plan_eligible: 0 }))
+      } catch {
+        /* fall through */
+      }
+    }
+    if (/finance_eligible/i.test(msg)) {
+      try {
+        const r = await pool.request().query<{
+          id: string
+          slug: string
+          name: string
+          parent_id: string | null
+          sort_order: number
+          is_active: number | boolean
+          icon_key: string | null
+        }>(`
+          SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name,
+                 CAST(parent_id AS NVARCHAR(36)) AS parent_id,
+                 sort_order, is_active,
+                 LTRIM(RTRIM(icon_key)) AS icon_key
+          FROM dbo.categories
+          ${where}
+          ORDER BY sort_order, name
+        `)
+        return r.recordset.map((row) => mapRow({ ...row, finance_eligible: 0, payment_plan_eligible: 0 }))
+      } catch {
+        /* fall through */
+      }
+    }
     if (!/icon_key|Invalid column name/i.test(msg)) {
       /* not missing icon_key — try catalogue-scope shape without icon_key */
     } else {
@@ -77,7 +149,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
           ${where}
           ORDER BY sort_order, name
         `)
-        return r.recordset.map((row) => mapRow({ ...row, icon_key: null }))
+        return r.recordset.map((row) => mapRow({ ...row, icon_key: null, finance_eligible: 0, payment_plan_eligible: 0 }))
       } catch {
         /* fall through */
       }
@@ -100,7 +172,7 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       ${where}
       ORDER BY sort_order, name
     `)
-    return r.recordset.map((row) => mapRow({ ...row, icon_key: null }))
+    return r.recordset.map((row) => mapRow({ ...row, icon_key: null, finance_eligible: 0, payment_plan_eligible: 0 }))
   } catch {
     const r = await pool.request().query<{ id: string; slug: string; name: string }>(`
       SELECT CAST(id AS NVARCHAR(36)) AS id, slug, name
@@ -115,8 +187,113 @@ export async function listCategories(pool: ConnectionPool, opts?: { includeInact
       sortOrder: 0,
       isActive: true,
       iconKey: null,
+      financeEligible: false,
+      paymentPlanEligible: false,
     }))
   }
+}
+
+/**
+ * Storefront nav: active categories that have at least one active product with a variant,
+ * optionally excluding alcohol when the viewer is not adult and liquor gating applies.
+ * Includes ancestor categories so parents remain visible when only children have products.
+ */
+export async function listCategoriesWithVisibleProducts(
+  pool: ConnectionPool,
+  opts: { excludeAlcoholProducts: boolean },
+): Promise<CategoryRow[]> {
+  const all = await listCategories(pool, { includeInactive: false })
+  if (all.length === 0) return []
+
+  const tryDistinct = async (excludeForMinor: boolean): Promise<Set<string>> => {
+    if (!excludeForMinor) {
+      const r = await pool.request().query<{ category_id: string | null }>(`
+        SELECT DISTINCT CAST(p.category_id AS NVARCHAR(36)) AS category_id
+        FROM dbo.products p
+        INNER JOIN dbo.product_variants v ON v.product_id = p.id
+        WHERE p.is_active = 1
+          AND p.category_id IS NOT NULL
+      `)
+      const ids = new Set<string>()
+      for (const row of r.recordset) {
+        const id = row.category_id?.trim()
+        if (id) ids.add(id)
+      }
+      return ids
+    }
+
+    const slugs = env.ageRestrictedCategorySlugs
+    const cte = restrictedCategorySubtreeCte(slugs)
+    const req = pool.request()
+    bindRestrictedCategorySlugParams(req, slugs)
+    const withClause = cte ? `;WITH ${cte} ` : ''
+    const gate = productMatchesLiquorGateSql(slugs)
+    try {
+      const r = await req.query<{ category_id: string | null }>(`
+        ${withClause}
+        SELECT DISTINCT CAST(p.category_id AS NVARCHAR(36)) AS category_id
+        FROM dbo.products p
+        INNER JOIN dbo.product_variants v ON v.product_id = p.id
+        WHERE p.is_active = 1
+          AND p.category_id IS NOT NULL
+          AND NOT (${gate})
+      `)
+      const ids = new Set<string>()
+      for (const row of r.recordset) {
+        const id = row.category_id?.trim()
+        if (id) ids.add(id)
+      }
+      return ids
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/contains_alcohol/i.test(msg)) {
+        const r2 = await pool.request().query<{ category_id: string | null }>(`
+          SELECT DISTINCT CAST(p.category_id AS NVARCHAR(36)) AS category_id
+          FROM dbo.products p
+          INNER JOIN dbo.product_variants v ON v.product_id = p.id
+          WHERE p.is_active = 1
+            AND p.category_id IS NOT NULL
+            AND ISNULL(p.contains_alcohol, 0) = 0
+        `)
+        const ids = new Set<string>()
+        for (const row of r2.recordset) {
+          const id = row.category_id?.trim()
+          if (id) ids.add(id)
+        }
+        return ids
+      }
+      throw e
+    }
+  }
+
+  let leafIds: Set<string>
+  try {
+    leafIds = await tryDistinct(opts.excludeAlcoholProducts)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (opts.excludeAlcoholProducts && /contains_alcohol/i.test(msg)) {
+      leafIds = await tryDistinct(false)
+    } else {
+      throw e
+    }
+  }
+
+  if (leafIds.size === 0) return []
+
+  const byId = new Map(all.map((c) => [c.id, c]))
+  const visible = new Set<string>()
+  for (const leaf of leafIds) {
+    let cur: string | null = leaf
+    let guard = 0
+    while (cur && guard++ < 64) {
+      visible.add(cur)
+      const row = byId.get(cur)
+      if (!row?.parentId?.trim()) break
+      cur = row.parentId.trim()
+    }
+  }
+
+  return all.filter((c) => visible.has(c.id))
 }
 
 async function assertNoCycle(pool: ConnectionPool, categoryId: string, newParentId: string | null): Promise<void> {
@@ -172,14 +349,14 @@ export async function createCategory(
       .input('so', sortOrder)
       .input('ik', iconKey)
       .query<{ id: string }>(`
-        INSERT INTO dbo.categories (slug, name, parent_id, sort_order, is_active, icon_key)
+        INSERT INTO dbo.categories (slug, name, parent_id, sort_order, is_active, icon_key, finance_eligible)
         OUTPUT CAST(INSERTED.id AS NVARCHAR(36)) AS id
-        VALUES (@slug, @name, @pid, @so, 1, @ik)
+        VALUES (@slug, @name, @pid, @so, 1, @ik, 0)
       `)
     return ins.recordset[0]!.id
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    if (/Invalid column name|icon_key/i.test(msg)) {
+    if (/Invalid column name|icon_key|finance_eligible/i.test(msg)) {
       try {
         const ins = await pool
           .request()
@@ -236,10 +413,21 @@ export async function updateCategory(
     sortOrder?: number
     isActive?: boolean
     iconKey?: string | null
+    financeEligible?: boolean
+    paymentPlanEligible?: boolean
   },
 ): Promise<void> {
   const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k)
-  if (!has('slug') && !has('name') && !has('parentId') && !has('sortOrder') && !has('isActive') && !has('iconKey')) {
+  if (
+    !has('slug') &&
+    !has('name') &&
+    !has('parentId') &&
+    !has('sortOrder') &&
+    !has('isActive') &&
+    !has('iconKey') &&
+    !has('financeEligible') &&
+    !has('paymentPlanEligible')
+  ) {
     throw new Error('No fields to update')
   }
   if (patch.iconKey !== undefined && patch.iconKey != null && String(patch.iconKey).trim()) {
@@ -296,6 +484,32 @@ export async function updateCategory(
         const msg = e instanceof Error ? e.message : String(e)
         if (!/icon_key|Invalid column name/i.test(msg)) throw e
         throw new Error('Run database migration 018_categories_icon_key.sql to enable category icons.')
+      }
+    }
+    if (patch.financeEligible !== undefined) {
+      try {
+        await tx
+          .request()
+          .input('id', categoryId)
+          .input('fe', patch.financeEligible ? 1 : 0)
+          .query(`UPDATE dbo.categories SET finance_eligible = @fe WHERE id = @id`)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (!/finance_eligible|Invalid column name/i.test(msg)) throw e
+        throw new Error('Run database migration 066_categories_finance_eligible.sql to enable financing flags on categories.')
+      }
+    }
+    if (patch.paymentPlanEligible !== undefined) {
+      try {
+        await tx
+          .request()
+          .input('id', categoryId)
+          .input('pe', patch.paymentPlanEligible ? 1 : 0)
+          .query(`UPDATE dbo.categories SET payment_plan_eligible = @pe WHERE id = @id`)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (!/payment_plan_eligible|Invalid column name/i.test(msg)) throw e
+        throw new Error('Run database migration 082_categories_payment_plan_eligible.sql to enable payment plan flags on categories.')
       }
     }
     await tx.commit()

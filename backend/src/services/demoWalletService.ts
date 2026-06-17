@@ -84,7 +84,106 @@ export async function creditDemoWalletFund(
   }
 }
 
-type WalletLedgerEntryType = 'hub_demo_spend' | 'store_checkout_spend' | 'store_refund_credit'
+type WalletLedgerEntryType =
+  | 'hub_demo_spend'
+  | 'store_checkout_spend'
+  | 'store_refund_credit'
+  | 'payment_plan_instalment_spend'
+
+function ledgerSchemaMissing(msg: string): boolean {
+  const m = msg.toLowerCase()
+  return (
+    m.includes('correlation_id') ||
+    m.includes('payee_label') ||
+    m.includes('invalid column name') ||
+    m.includes('invalid object name')
+  )
+}
+
+async function insertWalletLedgerRow(
+  tx: Transaction,
+  fields: {
+    userId: string
+    delta: number
+    bal: number
+    ref: string
+    correlationId: string | null
+    payee: string | null
+    entryType: WalletLedgerEntryType
+  },
+): Promise<void> {
+  const attempts: { sql: string; withCorrelation: boolean }[] = [
+    {
+      withCorrelation: true,
+      sql: `INSERT INTO dbo.demo_wallet_ledger (user_id, delta_cents, balance_after_cents, entry_type, reference, correlation_id, payee_label)
+        VALUES (@uid, @delta, @bal, @etype, @ref, @cid, @payee)`,
+    },
+    {
+      withCorrelation: false,
+      sql: `INSERT INTO dbo.demo_wallet_ledger (user_id, delta_cents, balance_after_cents, entry_type, reference)
+        VALUES (@uid, @delta, @bal, @etype, @ref)`,
+    },
+  ]
+
+  let lastErr: unknown
+  for (const attempt of attempts) {
+    try {
+      const req = tx
+        .request()
+        .input('uid', fields.userId)
+        .input('delta', fields.delta)
+        .input('bal', fields.bal)
+        .input('ref', fields.ref)
+        .input('etype', fields.entryType)
+      if (attempt.withCorrelation) {
+        req.input('cid', fields.correlationId)
+        req.input('payee', fields.payee?.slice(0, 200) ?? null)
+      }
+      await req.query(attempt.sql)
+      return
+    } catch (e) {
+      lastErr = e
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!ledgerSchemaMissing(msg)) throw e
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+}
+
+async function findExistingDebitBalance(
+  tx: Transaction,
+  userId: string,
+  correlationId: string,
+  reference: string,
+  entryType: WalletLedgerEntryType,
+): Promise<number | null> {
+  try {
+    const dup = await tx
+      .request()
+      .input('uid', userId)
+      .input('cid', correlationId)
+      .query<{ bal: number }>(
+        `SELECT TOP 1 CAST(balance_after_cents AS BIGINT) AS bal FROM dbo.demo_wallet_ledger WHERE user_id = @uid AND correlation_id = @cid`,
+      )
+    const b = dup.recordset[0]?.bal
+    if (b != null) return b
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (!ledgerSchemaMissing(msg)) throw e
+  }
+  const byRef = await tx
+    .request()
+    .input('uid', userId)
+    .input('ref', reference.slice(0, 120))
+    .input('etype', entryType)
+    .query<{ bal: number }>(
+      `SELECT TOP 1 CAST(balance_after_cents AS BIGINT) AS bal
+       FROM dbo.demo_wallet_ledger
+       WHERE user_id = @uid AND reference = @ref AND entry_type = @etype`,
+    )
+  const refBal = byRef.recordset[0]?.bal
+  return refBal != null ? refBal : null
+}
 
 async function tryDebitWalletWithCorrelation(
   pool: ConnectionPool,
@@ -101,14 +200,7 @@ async function tryDebitWalletWithCorrelation(
   const tx = pool.transaction()
   await tx.begin()
   try {
-    const dup = await tx
-      .request()
-      .input('uid', userId)
-      .input('cid', correlationId)
-      .query<{ bal: number }>(
-        `SELECT TOP 1 CAST(balance_after_cents AS BIGINT) AS bal FROM dbo.demo_wallet_ledger WHERE user_id = @uid AND correlation_id = @cid`,
-      )
-    const dupBal = dup.recordset[0]?.bal
+    const dupBal = await findExistingDebitBalance(tx, userId, correlationId, reference, entryType)
     if (dupBal != null) {
       await tx.commit()
       return { ok: true, balanceAfter: dupBal, duplicate: true }
@@ -148,22 +240,15 @@ async function tryDebitWalletWithCorrelation(
       return { ok: false, code: 'unknown', error: 'Could not debit wallet.' }
     }
 
-    await tx
-      .request()
-      .input('uid', userId)
-      .input('delta', -amountCents)
-      .input('bal', bal)
-      .input('ref', reference.slice(0, 120))
-      .input('cid', correlationId)
-      .input('payee', payeeName.slice(0, 200))
-      .input('etype', entryType)
-      .query(`
-        INSERT INTO dbo.demo_wallet_ledger (
-          user_id, delta_cents, balance_after_cents, entry_type, reference, correlation_id, payee_label
-        ) VALUES (
-          @uid, @delta, @bal, @etype, @ref, @cid, @payee
-        )
-      `)
+    await insertWalletLedgerRow(tx, {
+      userId,
+      delta: -amountCents,
+      bal,
+      ref: reference.slice(0, 120),
+      correlationId,
+      payee: payeeName,
+      entryType,
+    })
     await tx.commit()
     return { ok: true, balanceAfter: bal, duplicate: false }
   } catch (e) {
@@ -200,6 +285,27 @@ export async function tryDebitWalletHubDemo(
   reference: string,
 ): Promise<HubDebitResult> {
   return tryDebitWalletWithCorrelation(pool, userId, amountCents, correlationId, payeeName, reference, 'hub_demo_spend')
+}
+
+/** Idempotent per instalment id — payment plan recurring demo wallet pay. */
+export async function tryDebitWalletPaymentPlanInstalment(
+  pool: ConnectionPool,
+  userId: string,
+  instalmentId: string,
+  orderId: string,
+  instalmentNumber: number,
+  amountCents: number,
+): Promise<HubDebitResult> {
+  const reference = `plan-instalment:${orderId}:${instalmentNumber}`.slice(0, 120)
+  return tryDebitWalletWithCorrelation(
+    pool,
+    userId,
+    amountCents,
+    instalmentId,
+    'Payment plan instalment',
+    reference,
+    'payment_plan_instalment_spend',
+  )
 }
 
 /** Idempotent per (user_id, orderId) correlation — store checkout demo wallet pay. */
